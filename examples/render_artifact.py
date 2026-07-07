@@ -186,7 +186,7 @@ a{color:var(--accent);}
 """
 
 HTML = f"""{CSS}
-<title>Binding assay protocol — gSTEP Kd</title>
+<title>gSTEP variant binding screen — provenance-tagged</title>
 <div class="wrap">
   <p class="eyebrow">Reconstructed protocol · provenance-tagged</p>
   <h1>{e(proto['title'])}</h1>
