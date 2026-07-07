@@ -8,8 +8,51 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.resolvers import ResolvedCitation, classify_identifier  # noqa: E402
+from app.resolvers import ResolvedCitation, classify_identifier, resolve_doi  # noqa: E402
 from app.validation import validate_and_finalize  # noqa: E402
+
+
+class _DoiResp:
+    def __init__(self, status, payload):
+        self.status_code = status
+        self._p = payload
+
+    def json(self):
+        return self._p
+
+    def raise_for_status(self):
+        pass
+
+
+class _DoiClient:
+    """Crossref 404 -> DataCite fallback, keyed by URL host."""
+
+    def __init__(self, crossref_status, crossref_payload, datacite_status, datacite_payload):
+        self.args = (crossref_status, crossref_payload, datacite_status, datacite_payload)
+
+    def get(self, url, params=None):
+        cs, cp, ds, dp = self.args
+        if "crossref" in url:
+            return _DoiResp(cs, cp)
+        return _DoiResp(ds, dp)
+
+
+def test_doi_datacite_fallback_when_crossref_404s():
+    dc = {"data": {"attributes": {"titles": [{"title": "A protocols.io protocol"}], "publicationYear": 2021}}}
+    client = _DoiClient(404, {}, 200, dc)
+    resolved = resolve_doi("10.17504/protocols.io.abc", client)
+    assert resolved is not None
+    assert resolved.source == "datacite"
+    assert resolved.year == 2021
+    assert resolved.title == "A protocols.io protocol"
+
+
+def test_doi_crossref_preferred_when_present():
+    cr = {"message": {"title": ["A journal article"], "issued": {"date-parts": [[2019]]}}}
+    client = _DoiClient(200, cr, 404, {})
+    resolved = resolve_doi("10.1/journal", client)
+    assert resolved.source == "crossref"
+    assert resolved.year == 2019
 
 
 def fake_resolver(db):

@@ -23,7 +23,7 @@ resolve to `default_verify`. Verified citations get a ✓ badge; the rest are fl
 | Phase | What happens |
 |-------|--------------|
 | **1 — read, scope & ask** | Model reconstructs the protocol, classifies each parameter, runs a light scoping search for ambiguous gaps, and calls `request_clarifications` with 0–5 targeted questions (menu options carry their source + citation). |
-| **2 — research & ground** | Your answers come back as the tool result; the model grounds outcome-critical values with two search tools — Anthropic's `web_search` and a `search_pubmed` tool the app runs against NCBI E-utilities (real PMIDs/DOIs) — then calls `emit_protocol`. |
+| **2 — research & ground** | Your answers come back as the tool result; the model grounds outcome-critical values with Anthropic's `web_search` plus app-run search tools — `search_pubmed` (NCBI), `search_preprints` (bioRxiv/medRxiv via Europe PMC), and `search_protocols` (protocols.io, if a token is set) — then calls `emit_protocol`. |
 | **3 — validate** | The host resolves every citation, enforces the provenance/citation invariants, checks the `assumptions_log` against the inline values, then renders the result. |
 
 Forced `tool_choice` is only ever used on a call that is *not* also searching — the
@@ -55,8 +55,10 @@ Open <http://localhost:8000>, paste a Methods section (or click **Load example
 | `GAPFILLER_SEARCH_BUDGET` | `12` | Max Phase-2 `web_search` uses. |
 | `GAPFILLER_PUBMED_BUDGET` | `12` | Max `search_pubmed` calls per phase. |
 | `GAPFILLER_ENABLE_PUBMED` | `1` | Set `0` to disable the PubMed grounding tool. |
+| `GAPFILLER_ENABLE_PREPRINTS` | `1` | Set `0` to disable bioRxiv/medRxiv (Europe PMC) search. |
 | `GAPFILLER_ENABLE_WEB_SEARCH` | `1` | Set `0` to disable Anthropic `web_search`. |
 | `NCBI_API_KEY` | — | Optional; raises the E-utilities rate limit (3→10 req/s). |
+| `PROTOCOLS_IO_TOKEN` | — | protocols.io developer token; when set, enables `search_protocols` (grounds methods/steps in published protocols). |
 | `GAPFILLER_MAX_TOKENS` | `16000` | Output token ceiling. |
 | `GAPFILLER_EFFORT` | `high` | Reasoning effort. |
 
@@ -86,9 +88,11 @@ tests/            # validation unit tests
 
 ## Notes & next steps
 
-- **Bio connectors:** grounding now uses both `web_search` and a `search_pubmed` tool
-  (NCBI E-utilities); validation resolves against PubMed/Crossref. bioRxiv is the next
-  grounding source to add — `literature.py` is the seam (mirror `search_pubmed`).
+- **Grounding sources:** `web_search` (Anthropic), `search_pubmed` (NCBI),
+  `search_preprints` (bioRxiv/medRxiv via Europe PMC), and `search_protocols`
+  (protocols.io, token-gated). Validation resolves DOIs via Crossref then DataCite
+  (so protocols.io/Zenodo/data DOIs verify) and PMIDs via PubMed. Add a new source by
+  mirroring a function in `literature.py` and registering it in `agent._CLIENT_TOOLS`.
 - **Sessions** are in-memory (single process) — fine for a demo, swap for a store to scale.
 - **Latency:** Phase 2 can run for a minute or two while it searches; the UI shows a
   working state. Streaming the emit call is a reasonable enhancement.

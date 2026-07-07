@@ -60,7 +60,7 @@ def test_phase1_dispatches_pubmed_then_returns_clarifications():
     session = agent.analyze("A real methods section describing a CFPS reaction with S30 extract.")
     assert session.phase1 == {"usable": True, "gaps": []}
     assert session.request_tool_use_id == "c1"
-    assert session.grounding_log == ["PANOx-SP incubation time"]
+    assert session.grounding_log == ["search_pubmed: PANOx-SP incubation time"]
     # a tool_result for the search must have been fed back
     user_turns = [m for m in session.messages if m["role"] == "user"]
     assert any(

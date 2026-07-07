@@ -86,27 +86,42 @@ def resolve_pmid(pmid: str, client: httpx.Client) -> Optional[ResolvedCitation]:
 
 
 def resolve_doi(doi: str, client: httpx.Client) -> Optional[ResolvedCitation]:
-    url = f"https://api.crossref.org/works/{doi}"
-    resp = client.get(url)
+    """Resolve a DOI via Crossref, falling back to DataCite. Crossref covers most
+    journal DOIs; DataCite covers protocols.io, Zenodo, figshare, and other
+    data/protocol DOIs that Crossref returns 404 for."""
+    resp = client.get(f"https://api.crossref.org/works/{doi}")
+    if resp.status_code != 404:
+        resp.raise_for_status()
+        message = resp.json().get("message", {})
+        titles = message.get("title") or []
+        if titles:
+            year = None
+            for key in ("published", "published-print", "published-online", "issued"):
+                parts = (message.get(key) or {}).get("date-parts") or []
+                if parts and parts[0] and parts[0][0]:
+                    year = int(parts[0][0])
+                    break
+            return ResolvedCitation(doi, "doi", str(titles[0]).strip(), year, "crossref")
+    return _resolve_doi_datacite(doi, client)
+
+
+def _resolve_doi_datacite(doi: str, client: httpx.Client) -> Optional[ResolvedCitation]:
+    resp = client.get(f"https://api.datacite.org/dois/{doi}")
     if resp.status_code == 404:
         return None
     resp.raise_for_status()
-    message = resp.json().get("message", {})
-    titles = message.get("title") or []
-    if not titles:
+    attrs = (resp.json().get("data") or {}).get("attributes") or {}
+    titles = attrs.get("titles") or []
+    title = (titles[0].get("title") if titles else "") or ""
+    if not title:
         return None
-    year = None
-    for key in ("published", "published-print", "published-online", "issued"):
-        parts = (message.get(key) or {}).get("date-parts") or []
-        if parts and parts[0] and parts[0][0]:
-            year = int(parts[0][0])
-            break
+    year = attrs.get("publicationYear")
     return ResolvedCitation(
         identifier=doi,
         kind="doi",
-        title=str(titles[0]).strip(),
-        year=year,
-        source="crossref",
+        title=str(title).strip(),
+        year=int(year) if year else None,
+        source="datacite",
     )
 
 

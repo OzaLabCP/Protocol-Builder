@@ -88,6 +88,43 @@ SEARCH_PUBMED_TOOL = {
 }
 
 
+SEARCH_PREPRINTS_TOOL = {
+    "name": "search_preprints",
+    "description": (
+        "Search preprints (bioRxiv / medRxiv / Research Square via Europe PMC) for "
+        "recent methods not yet indexed in PubMed. Returns results with a DOI (and "
+        "PMID when present). Cite the DOI for a literature_grounded value. Use when a "
+        "method is new or when PubMed came up empty."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Search terms, e.g. 'cell-free protein synthesis oxidative folding CyDisCo'."},
+            "retmax": {"type": "integer", "description": "Max results (1-8)."},
+        },
+        "required": ["query"],
+    },
+}
+
+SEARCH_PROTOCOLS_TOOL = {
+    "name": "search_protocols",
+    "description": (
+        "Search published protocols.io protocols — step-by-step methods with their "
+        "own DOIs. Best for grounding a METHOD or step (not just a numeric value): if "
+        "a returned protocol matches this technique, cite its DOI for the relevant "
+        "step as literature_grounded. Returns title, authors, year, DOI, and URL."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Search terms, e.g. 'S30 extract preparation cell-free'."},
+            "retmax": {"type": "integer", "description": "Max results (1-8)."},
+        },
+        "required": ["query"],
+    },
+}
+
+
 # ---------------------------------------------------------------------------
 # Schema 1 — request_clarifications (phase 1 output)
 # ---------------------------------------------------------------------------

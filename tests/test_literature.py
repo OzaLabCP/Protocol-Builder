@@ -73,6 +73,60 @@ def test_format_results_shows_pmid_and_doi():
     assert "No PubMed results" in literature.format_results([])
 
 
+class SimpleHttp:
+    """Returns one fixed payload for any GET (single-endpoint backends)."""
+
+    def __init__(self, payload):
+        self.payload = payload
+        self.calls = []
+
+    def get(self, url, params=None):
+        self.calls.append((url, params))
+        return FakeResp(self.payload)
+
+
+def test_preprints_parse_europepmc():
+    payload = {"resultList": {"result": [
+        {"source": "PPR", "title": "A preprint on CFPS.", "authorString": "Smith J, Doe A.", "pubYear": "2023", "doi": "10.1101/2023.01.01.123"},
+        {"source": "PPR", "title": "", "authorString": ""},  # dropped
+    ]}}
+    http = SimpleHttp(payload)
+    hits = literature.search_preprints("cfps", client=http)
+    assert len(hits) == 1
+    assert hits[0]["doi"] == "10.1101/2023.01.01.123"
+    assert hits[0]["authors"] == "Smith J et al."
+    assert hits[0]["year"] == 2023
+    assert hits[0]["url"] == "https://doi.org/10.1101/2023.01.01.123"
+    # query is restricted to preprint sources
+    assert "SRC:PPR" in http.calls[0][1]["query"]
+
+
+def test_protocols_requires_token_then_parses():
+    from app import config
+    old = config.PROTOCOLS_IO_TOKEN
+    config.PROTOCOLS_IO_TOKEN = ""
+    try:
+        raised = False
+        try:
+            literature.search_protocols("x", client=SimpleHttp({}))
+        except RuntimeError:
+            raised = True
+        assert raised, "should require a token"
+
+        config.PROTOCOLS_IO_TOKEN = "tok"
+        payload = {"items": [
+            {"title": "S30 extract prep", "doi": "10.17504/protocols.io.abc", "uri": "s30-extract",
+             "authors": [{"name": "Jewett M"}, {"name": "Karim A"}], "published_on": 1600000000},
+        ]}
+        hits = literature.search_protocols("s30 extract", client=SimpleHttp(payload))
+        assert hits[0]["doi"] == "10.17504/protocols.io.abc"
+        assert hits[0]["authors"] == "Jewett M et al."
+        assert hits[0]["year"] == 2020
+        assert "protocols.io" in literature.format_protocols(hits)
+    finally:
+        config.PROTOCOLS_IO_TOKEN = old
+
+
 if __name__ == "__main__":
     import traceback
 

@@ -24,7 +24,22 @@ import anthropic
 
 from . import config, literature
 from .prompts import SYSTEM_PROMPT
-from .schemas import EMIT_PROTOCOL_TOOL, REQUEST_CLARIFICATIONS_TOOL, SEARCH_PUBMED_TOOL
+from .schemas import (
+    EMIT_PROTOCOL_TOOL,
+    REQUEST_CLARIFICATIONS_TOOL,
+    SEARCH_PREPRINTS_TOOL,
+    SEARCH_PROTOCOLS_TOOL,
+    SEARCH_PUBMED_TOOL,
+)
+
+# name -> (tool schema, search-fn attr on `literature`, formatter attr, config flag)
+# Functions are referenced by attribute name and resolved at call time so tests can
+# monkeypatch app.literature.* and the swap takes effect.
+_CLIENT_TOOLS = {
+    "search_pubmed": (SEARCH_PUBMED_TOOL, "search_pubmed", "format_results", "ENABLE_PUBMED"),
+    "search_preprints": (SEARCH_PREPRINTS_TOOL, "search_preprints", "format_preprints", "ENABLE_PREPRINTS"),
+    "search_protocols": (SEARCH_PROTOCOLS_TOOL, "search_protocols", "format_protocols", "ENABLE_PROTOCOLS_IO"),
+}
 
 
 class AgentError(RuntimeError):
@@ -47,12 +62,23 @@ def _web_search_tool() -> dict:
     }
 
 
+def _enabled_client_tools() -> dict:
+    """{name: (search_fn, formatter)} for every grounding tool switched on.
+    Resolves fns from the literature module at call time (monkeypatch-friendly)."""
+    return {
+        name: (getattr(literature, fn_attr), getattr(literature, fmt_attr))
+        for name, (_schema, fn_attr, fmt_attr, flag) in _CLIENT_TOOLS.items()
+        if getattr(config, flag)
+    }
+
+
 def _grounding_tools() -> list:
     tools = []
     if config.ENABLE_WEB_SEARCH:
         tools.append(_web_search_tool())
-    if config.ENABLE_PUBMED:
-        tools.append(SEARCH_PUBMED_TOOL)
+    for _name, (schema, _fn, _fmt, flag) in _CLIENT_TOOLS.items():
+        if getattr(config, flag):
+            tools.append(schema)
     return tools
 
 
@@ -79,25 +105,27 @@ class GapFillerAgent:
 
     # -- client-tool dispatch ---------------------------------------------------
     def _dispatch(self, name: str, tool_input: dict) -> str:
-        if name == "search_pubmed":
-            if self._searches_left <= 0:
-                return (
-                    "PubMed search budget exhausted. Do not search again; fill any "
-                    "remaining values from best_practice or default_verify and proceed."
-                )
-            self._searches_left -= 1
-            query = str(tool_input.get("query", "")).strip()
-            if self._session is not None:
-                self._session.grounding_log.append(query)
-            try:
-                results = literature.search_pubmed(query, tool_input.get("retmax", 5))
-            except Exception as exc:  # noqa: BLE001
-                return (
-                    f"PubMed search failed ({type(exc).__name__}). Fill from "
-                    f"best_practice or default_verify instead; do not fabricate a citation."
-                )
-            return literature.format_results(results)
-        return f"Unknown tool: {name}"
+        enabled = _enabled_client_tools()
+        if name not in enabled:
+            return f"Unknown or disabled tool: {name}"
+        if self._searches_left <= 0:
+            return (
+                "Search budget exhausted. Do not search again; fill any remaining "
+                "values from best_practice or default_verify and proceed to emit."
+            )
+        self._searches_left -= 1
+        search_fn, formatter = enabled[name]
+        query = str(tool_input.get("query", "")).strip()
+        if self._session is not None:
+            self._session.grounding_log.append(f"{name}: {query}")
+        try:
+            results = search_fn(query, tool_input.get("retmax", 5))
+        except Exception as exc:  # noqa: BLE001
+            return (
+                f"{name} failed ({type(exc).__name__}). Fill from best_practice or "
+                f"default_verify instead; do not fabricate a citation."
+            )
+        return formatter(results)
 
     # -- one terminal-seeking run -----------------------------------------------
     def _run(self, messages: list, tools: list, terminal_name: str) -> Optional[Any]:
@@ -141,10 +169,7 @@ class GapFillerAgent:
             messages.append({"role": "user", "content": results})
 
     def _client_tool_names(self) -> set:
-        names = set()
-        if config.ENABLE_PUBMED:
-            names.add("search_pubmed")
-        return names
+        return set(_enabled_client_tools().keys())
 
     # -- Phase 1 ----------------------------------------------------------------
     def analyze(self, methods_text: str) -> Session:
