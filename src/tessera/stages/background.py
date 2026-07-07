@@ -18,6 +18,7 @@ import numpy as np
 
 from ..io.pdb import Structure
 from ..schemas.common import (
+    BackgroundKind,
     BackgroundNullSpec,
     BurialClass,
     OrientationClass,
@@ -49,6 +50,23 @@ class BackgroundModel:
     def f0(self, a: str, b: str) -> float:
         """Independent product of the standard background (§S4.4 stand-in). >0 always."""
         return STANDARD_AA_BACKGROUND[a] * STANDARD_AA_BACKGROUND[b]
+
+    @property
+    def is_standin(self) -> bool:
+        """True when ``f0`` is an offline stand-in for the *requested* null.
+
+        ``f0`` always returns the independent-marginal product; that IS the correct
+        null when the configured kind is ``independent_marginal``, but is a stand-in
+        for the (unavailable-offline) conditioned null when the configured kind is
+        ``geometry_burial_conditioned``. Keyed on what ``f0`` actually computes, not
+        on mock_mode — so the substitution is disclosed even on a real-clustering run
+        (§14.2)."""
+        return self.spec.kind is BackgroundKind.GEOMETRY_BURIAL_CONDITIONED
+
+    @property
+    def provenance_suffix(self) -> str:
+        """corpus_id suffix that discloses the stand-in in provenance (§S4.4, §14.2)."""
+        return ":offline-marginal-standin" if self.is_standin else ""
 
 
 def _direction(structure: Structure, index: int) -> np.ndarray:

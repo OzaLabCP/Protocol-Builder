@@ -66,10 +66,12 @@ def check_licenses(cfg: TesseraConfig) -> list[str]:
 
 
 def is_mock_mode(cfg: TesseraConfig) -> bool:
+    """True when ANY external tool is faked (§14.2) — including a cross-check oracle."""
     return (
         cfg.search.backend == "mock"
         or cfg.oracle.primary == "mock"
         or cfg.stats.clustering_backend == "mock"
+        or any(x == "mock" for x in cfg.oracle.cross_check)
     )
 
 
@@ -120,6 +122,7 @@ def run_triage(cfg: TesseraConfig) -> RunResult:
 def run(cfg: TesseraConfig, stage_from: str = "S1", stage_to: str = "S7") -> RunResult:
     """Run the reinforcement pipeline (or triage if cfg.triage)."""
     cfg = cfg.apply_preset()
+    check_licenses(cfg)  # §9 — before the triage short-circuit, so triage warns too
     if cfg.triage:
         return run_triage(cfg)
 
@@ -137,7 +140,6 @@ def run(cfg: TesseraConfig, stage_from: str = "S1", stage_to: str = "S7") -> Run
     if cfg.backbone is None:
         raise ValueError("run requires --backbone")
 
-    check_licenses(cfg)
     mock = is_mock_mode(cfg)
     layout = RunLayout(Path(cfg.out)).ensure()
     structure = load_structure(cfg.backbone)

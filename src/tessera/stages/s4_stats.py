@@ -18,7 +18,6 @@ from ..config import StatsConfig
 from ..io.pdb import Structure
 from ..schemas.common import (
     AA20,
-    BackgroundKind,
     ContactStatus,
     FeatureMode,
     Provenance,
@@ -123,20 +122,28 @@ def _stats_for_contact(
     # §10 documented (not silent) cap before the reweighting clustering pass.
     capped = surviving[: cfg.max_hits_to_cluster]
 
-    # §6.3 redundancy correction: each family collapses to total weight 1.
-    clusters = clustering.assign_clusters(capped)
-    weights = compute_weights(capped, clusters)
-    n_clusters = len(set(clusters.values()))
-
-    # §S4.4 weighted pair counts over the 20 canonical AAs (skip 'X').
-    w_counts: dict[tuple[str, str], float] = {}
+    # Keep only hits contributing a canonical (20-AA) pair BEFORE reweighting, so each
+    # family's unit weight is distributed across its *counted* members — otherwise an
+    # 'X'-bearing member would siphon weight that then gets skipped, undercounting N_eff
+    # below the true number of independent clusters (§6.3: each cluster totals weight 1).
+    canonical: list[Hit] = []
+    canonical_pairs: dict[str, tuple[str, str]] = {}
     for h in capped:
         pair = _pair_residues(h, contact.id)
-        if pair is None:
+        if pair is None or pair[0] not in _AA_SET or pair[1] not in _AA_SET:
             continue
-        a, b = pair
-        if a not in _AA_SET or b not in _AA_SET:
-            continue
+        canonical.append(h)
+        canonical_pairs[h.target_id] = pair
+
+    # §6.3 redundancy correction: each family collapses to total weight 1.
+    clusters = clustering.assign_clusters(canonical)
+    weights = compute_weights(canonical, clusters)
+    n_clusters = len(set(clusters.values()))
+
+    # §S4.4 weighted pair counts over the 20 canonical AAs.
+    w_counts: dict[tuple[str, str], float] = {}
+    for h in canonical:
+        a, b = canonical_pairs[h.target_id]
         w_counts[(a, b)] = w_counts.get((a, b), 0.0) + weights[h.target_id]
 
     w_tot = sum(w_counts.values())
@@ -222,12 +229,13 @@ def compute_stats(
         Counter(cs.status for cs in contact_stats)
     )
 
-    # Make the offline stand-in null visible in provenance (§S4.4, §14.2).
+    # Make the offline stand-in null visible in provenance (§S4.4, §14.2). Driven by
+    # what f0 actually computed (background.provenance_suffix), not by mock_mode — so the
+    # substitution is disclosed even when clustering/oracle are real.
     bg_spec = cfg.background
-    if provenance.mock_mode and bg_spec.kind is BackgroundKind.GEOMETRY_BURIAL_CONDITIONED:
-        suffix = ":offline-marginal-standin"
-        if not bg_spec.corpus_id.endswith(suffix):
-            bg_spec = bg_spec.model_copy(update={"corpus_id": bg_spec.corpus_id + suffix})
+    suffix = background.provenance_suffix
+    if suffix and not bg_spec.corpus_id.endswith(suffix):
+        bg_spec = bg_spec.model_copy(update={"corpus_id": bg_spec.corpus_id + suffix})
 
     return StatsSummary(
         backbone=contacts.backbone,
