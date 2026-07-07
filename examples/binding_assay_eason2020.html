@@ -1,0 +1,201 @@
+
+<style>
+:root{
+  --bg:#f6f7f9; --surface:#ffffff; --surface-2:#eef1f5; --line:#dde2ea;
+  --ink:#1a2230; --muted:#5b6675; --accent:#0b6d83;
+  --t-stated:#1f9d57; --t-literature_grounded:#2563c9; --t-best_practice:#8257d6;
+  --t-user_input:#0d9488; --t-default_verify:#c77d16;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#0f141b; --surface:#151b24; --surface-2:#1b232e; --line:#2a3441;
+    --ink:#e6eaf0; --muted:#93a0b1; --accent:#3bbcd6;
+    --t-stated:#43c98a; --t-literature_grounded:#6ea8fe; --t-best_practice:#b48cff;
+    --t-user_input:#2dd4bf; --t-default_verify:#f2b13a;
+  }
+}
+:root[data-theme="light"]{
+  --bg:#f6f7f9; --surface:#ffffff; --surface-2:#eef1f5; --line:#dde2ea;
+  --ink:#1a2230; --muted:#5b6675; --accent:#0b6d83;
+  --t-stated:#1f9d57; --t-literature_grounded:#2563c9; --t-best_practice:#8257d6;
+  --t-user_input:#0d9488; --t-default_verify:#c77d16;
+}
+:root[data-theme="dark"]{
+  --bg:#0f141b; --surface:#151b24; --surface-2:#1b232e; --line:#2a3441;
+  --ink:#e6eaf0; --muted:#93a0b1; --accent:#3bbcd6;
+  --t-stated:#43c98a; --t-literature_grounded:#6ea8fe; --t-best_practice:#b48cff;
+  --t-user_input:#2dd4bf; --t-default_verify:#f2b13a;
+}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:16px/1.6 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  font-variant-numeric:tabular-nums;}
+.wrap{max-width:860px;margin:0 auto;padding:40px 22px 90px;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);margin:0 0 10px;}
+h1{font-size:30px;line-height:1.15;margin:0 0 10px;letter-spacing:-.01em;text-wrap:balance;font-weight:680;}
+h2{font-size:15px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);
+  font-family:ui-monospace,monospace;font-weight:600;margin:40px 0 12px;
+  padding-bottom:8px;border-bottom:1px solid var(--line);}
+h3{font-size:17px;margin:0;font-weight:640;}
+.source{font-family:ui-monospace,monospace;font-size:13px;color:var(--muted);margin:0 0 18px;}
+.source a{color:var(--accent);}
+.summary{max-width:68ch;color:var(--ink);margin:0 0 6px;}
+.dur{color:var(--muted);font-size:14px;margin:0 0 24px;}
+.strip{display:flex;flex-wrap:wrap;gap:10px;margin:22px 0;}
+.stat{display:flex;align-items:center;gap:8px;background:var(--surface);
+  border:1px solid var(--line);border-radius:10px;padding:9px 12px;}
+.stat b{font-size:20px;min-width:18px;text-align:center;}
+.legend{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 6px;}
+.tier{font-family:ui-monospace,monospace;font-size:10.5px;font-weight:700;letter-spacing:.06em;
+  text-transform:uppercase;padding:2px 8px;border-radius:999px;white-space:nowrap;}
+.t-stated{background:color-mix(in srgb,var(--t-stated) 16%,transparent);color:var(--t-stated);}
+.t-literature_grounded{background:color-mix(in srgb,var(--t-literature_grounded) 16%,transparent);color:var(--t-literature_grounded);}
+.t-best_practice{background:color-mix(in srgb,var(--t-best_practice) 16%,transparent);color:var(--t-best_practice);}
+.t-user_input{background:color-mix(in srgb,var(--t-user_input) 16%,transparent);color:var(--t-user_input);}
+.t-default_verify{background:color-mix(in srgb,var(--t-default_verify) 16%,transparent);color:var(--t-default_verify);}
+.callout{background:var(--surface-2);border:1px solid var(--line);border-left:3px solid var(--accent);
+  border-radius:8px;padding:12px 16px;margin:18px 0;font-size:14px;color:var(--muted);max-width:70ch;}
+.callout b{color:var(--ink);}
+.tablewrap{overflow-x:auto;}
+table{width:100%;border-collapse:collapse;font-size:14.5px;}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top;}
+th{font-family:ui-monospace,monospace;font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--muted);font-weight:600;}
+td.num{font-family:ui-monospace,monospace;white-space:nowrap;}
+ol.steps{list-style:none;margin:0;padding:0;}
+.step{padding:18px 0;border-bottom:1px solid var(--line);}
+.step-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+.step-n{font-family:ui-monospace,monospace;font-weight:700;color:var(--accent);
+  border:1.5px solid var(--accent);border-radius:8px;min-width:28px;height:28px;
+  display:inline-flex;align-items:center;justify-content:center;font-size:14px;}
+.instr{margin:10px 0 0;max-width:70ch;}
+.meta{font-family:ui-monospace,monospace;font-size:13px;color:var(--muted);margin-top:8px;}
+.cp{margin-top:10px;padding-left:12px;border-left:2px solid var(--line);}
+.cp-name{color:var(--muted);font-size:14px;}
+.cp-val{font-family:ui-monospace,monospace;font-weight:650;margin:0 8px;}
+.sub{margin-top:8px;padding-left:12px;color:var(--ink);font-size:14.5px;}
+.sub-n{font-family:ui-monospace,monospace;color:var(--muted);margin-right:6px;}
+.pnote{font-family:ui-monospace,monospace;font-size:12.5px;color:var(--muted);
+  margin-top:4px;line-height:1.5;max-width:78ch;}
+.warn{color:var(--t-default_verify);font-size:13.5px;margin-top:8px;}
+.panel{background:var(--surface-2);border:1px solid var(--line);border-radius:12px;padding:6px 16px 14px;}
+.vflag{font-family:ui-monospace,monospace;font-size:11px;color:var(--t-default_verify);
+  border:1px solid color-mix(in srgb,var(--t-default_verify) 45%,transparent);
+  border-radius:999px;padding:0 6px;margin-left:4px;}
+ul.oq{max-width:74ch;padding-left:18px;color:var(--muted);}
+ul.oq li{margin:7px 0;}
+footer{margin-top:40px;font-size:12.5px;color:var(--muted);font-family:ui-monospace,monospace;line-height:1.6;}
+a{color:var(--accent);}
+</style>
+
+<title>Binding assay protocol — gSTEP Kd</title>
+<div class="wrap">
+  <p class="eyebrow">Reconstructed protocol · provenance-tagged</p>
+  <h1>In vitro fluorescence binding assay for gSTEP biosensor Kd determination</h1>
+  <p class="source">Source: <a href="https://doi.org/10.1021/acssynbio.0c00407" target="_blank" rel="noopener">Eason et&nbsp;al., ACS Synth. Biol. 2020 — 10.1021/acssynbio.0c00407</a></p>
+  <p class="summary">Measure the equilibrium dissociation constant (Kd) and fractional fluorescence change (ΔF/F0) between a gSTEP fluorescent-biosensor variant and its binding partner by titrating the partner against a fixed concentration of gSTEP in a 96-well plate and fitting the fluorescence response to a ligand-depletion Hill equation.</p>
+  <p class="dur">Estimated duration: ~3 h assay (excludes upstream protein expression/purification)</p>
+
+  <div class="callout">
+    <b>How to read this.</b> Every value is tagged by how it was obtained. Nothing here is silently invented:
+    values present in the paper are <b>stated</b>; gaps the paper left open are filled from <b>best practice</b>,
+    your own <b>answers</b>, or flagged as a <b>default to verify</b>. This copy was reconstructed offline, so no
+    values are <b>literature-grounded</b> — on a live run, Phase&nbsp;2 web search grounds the best-practice/verify
+    items in real citations, and the host resolves each DOI/PMID before shipping.
+  </div>
+
+  <div class="strip"><div class="stat"><b>17</b><span class="tier t-stated">stated</span></div><div class="stat"><b>0</b><span class="tier t-literature_grounded">literature grounded</span></div><div class="stat"><b>5</b><span class="tier t-best_practice">best practice</span></div><div class="stat"><b>4</b><span class="tier t-user_input">user input</span></div><div class="stat"><b>2</b><span class="tier t-default_verify">default verify</span></div></div>
+  <div class="legend"><span class="tier t-stated">stated</span><span class="tier t-literature_grounded">literature grounded</span><span class="tier t-best_practice">best practice</span><span class="tier t-user_input">user input</span><span class="tier t-default_verify">default verify</span></div>
+
+  <h2>Materials</h2>
+  <div class="tablewrap"><table>
+    <tr><th>Reagent</th><th>Amount</th><th>Grade / vendor</th><th>Provenance</th></tr>
+    <tr><td>Purified gSTEP variant protein (His-tagged, IMAC-purified, buffer-exchanged)</td><td class="num">75 nM</td><td>prepared in-house</td><td><span class="tier t-stated">stated</span><div class="pnote">75 nM final per well is stated in the source.</div></td></tr><tr><td>Binding partner (titrant): STEPtag</td><td class="num">—</td><td>prepared in-house</td><td><span class="tier t-user_input">user input</span><div class="pnote">User selected STEPtag as the target from the paper&#x27;s reported partners (STEPtag / TAX-L10-STEPtag / STEPtag-L10-TAX).</div></td></tr><tr><td>Control protein: bovine serum albumin (BSA)</td><td class="num">—</td><td>Bio-Rad</td><td><span class="tier t-stated">stated</span><div class="pnote">BSA named as a control protein in the source; inactive TAX (E157A/E263A) is the stated alternative.</div></td></tr><tr><td>Assay buffer: sodium phosphate</td><td class="num">20 mM</td><td>—</td><td><span class="tier t-stated">stated</span><div class="pnote">20 mM sodium phosphate, pH 7.4, stated.</div></td></tr><tr><td>Assay buffer: sodium chloride</td><td class="num">50 mM</td><td>—</td><td><span class="tier t-stated">stated</span><div class="pnote">50 mM NaCl stated.</div></td></tr><tr><td>Fluotrac 96-well plate (black, flat-bottom)</td><td class="num">—</td><td>Greiner Bio-One</td><td><span class="tier t-stated">stated</span><div class="pnote">Fluotrac 96-well plate (Greiner Bio-One) stated.</div></td></tr>
+  </table></div>
+
+  <h2>Equipment</h2>
+  <ul><li>Tecan Infinite M1000 plate reader (stated)</li><li>Calibrated single/multichannel pipettes</li><li>Microcentrifuge tubes or a dilution plate for the titrant serial dilution</li></ul>
+
+  <h2>Procedure</h2>
+  <ol class="steps">
+    <li class="step">
+      <div class="step-head"><span class="step-n">1</span>
+        <h3>Prepare assay buffer</h3> <span class="tier t-stated">stated</span></div>
+      <p class="instr">Prepare 20 mM sodium phosphate buffer containing 50 mM NaCl and adjust to pH 7.4. Filter-sterilize. This is both the protein storage buffer and the assay diluent.</p>
+      
+      
+      <div class="cp"><span class="cp-name">Buffer composition</span><span class="cp-val">20 mM sodium phosphate, 50 mM NaCl, pH 7.4</span> <span class="tier t-stated">stated</span><div class="pnote">Stated verbatim in the source.</div></div>
+      
+    </li>
+    <li class="step">
+      <div class="step-head"><span class="step-n">2</span>
+        <h3>Prepare fixed-concentration gSTEP working solution</h3> <span class="tier t-stated">stated</span></div>
+      <p class="instr">Dilute purified gSTEP variant to 75 nM in assay buffer. Prepare enough for every well plus dead volume.</p>
+      
+      
+      <div class="cp"><span class="cp-name">gSTEP concentration</span><span class="cp-val">75 nM</span> <span class="tier t-stated">stated</span><div class="pnote">Stated.</div></div><div class="cp"><span class="cp-name">gSTEP working-solution volume</span><span class="cp-val">~8 mL</span> <span class="tier t-default_verify">default verify</span><div class="pnote">Scaling: 12 titrant points x 3 replicates x 2 (target + control) = 72 wells; 72 wells x 100 uL/well = 7.2 mL, +10% dead volume = ~8 mL. Verify against your plate layout.</div></div>
+      <div class="warn">⚠ Keep gSTEP on ice and protected from light until dispensed to limit photobleaching.</div>
+    </li>
+    <li class="step">
+      <div class="step-head"><span class="step-n">3</span>
+        <h3>Prepare the titrant serial dilution series</h3> <span class="tier t-user_input">user input</span></div>
+      <p class="instr">Prepare a serial dilution series of the binding partner (STEPtag) spanning the expected Kd, plus a matched series of the control protein (BSA). Twelve points is a good default.</p>
+      
+      <div class="sub"><span class="sub-n">3.1</span> Set the top concentration to ~10x the expected Kd; perform 2-fold serial dilutions down to ~0.1x Kd. <span class="tier t-best_practice">best practice</span></div><div class="sub"><span class="sub-n">3.2</span> Prepare an identical dilution series of the control protein (BSA) to define nonspecific/background fluorescence change. <span class="tier t-stated">stated</span></div>
+      <div class="cp"><span class="cp-name">Titrant concentration range</span><span class="cp-val">0.1x to 10x expected Kd</span> <span class="tier t-user_input">user input</span><div class="pnote">User chose a Kd-relative range (recommended default). Requires an estimate of the expected Kd (from a pilot or the paper&#x27;s reported values); flag to verify once Kd is known.</div></div><div class="cp"><span class="cp-name">Number of titration points</span><span class="cp-val">12 points</span> <span class="tier t-best_practice">best practice</span><div class="pnote">12-point, 2-fold serial dilution is standard for a well-resolved binding isotherm.</div></div>
+      <div class="warn">⚠ If the expected Kd is unknown, run a wide pilot range first (e.g., 1 nM to 10 uM) and refine.</div>
+    </li>
+    <li class="step">
+      <div class="step-head"><span class="step-n">4</span>
+        <h3>Assemble the plate</h3> <span class="tier t-stated">stated</span></div>
+      <p class="instr">Into each well of a Fluotrac 96-well plate, combine gSTEP at 75 nM final with one titrant concentration, in assay buffer, to the chosen well volume. Include the control-protein titration and buffer-only blank wells. Run each condition in at least three replicates.</p>
+      
+      
+      <div class="cp"><span class="cp-name">Assay volume per well</span><span class="cp-val">100 uL</span> <span class="tier t-user_input">user input</span><div class="pnote">User selected 100 uL/well (scale choice; not specified in the source).</div></div><div class="cp"><span class="cp-name">Replicates</span><span class="cp-val">&gt;= 3</span> <span class="tier t-stated">stated</span><div class="pnote">‘a minimum of three replicates’ stated.</div></div><div class="cp"><span class="cp-name">Blank wells</span><span class="cp-val">buffer-only + gSTEP-only</span> <span class="tier t-best_practice">best practice</span><div class="pnote">Blank and gSTEP-only wells define F0 and background; standard practice for ΔF/F0.</div></div>
+      <div class="warn">⚠ Mix gently and avoid bubbles, which corrupt fluorescence reads.</div>
+    </li>
+    <li class="step">
+      <div class="step-head"><span class="step-n">5</span>
+        <h3>Equilibrate</h3> <span class="tier t-best_practice">best practice</span></div>
+      <p class="instr">Incubate the assembled plate to allow binding to reach equilibrium before reading.</p>
+      <div class="meta">⏱ 30 min · 🌡 25 C</div>
+      
+      <div class="cp"><span class="cp-name">Equilibration time and temperature</span><span class="cp-val">30 min at 25 C</span> <span class="tier t-best_practice">best practice</span><div class="pnote">Not stated in the source. User accepted the standard-practice default (equilibrium binding at controlled temperature). The ligand-depletion Hill fit assumes equilibrium, so this is outcome-critical — verify equilibrium is reached for your Kd/kinetics.</div></div>
+      <div class="warn">⚠ If on/off kinetics are slow relative to 30 min, extend the equilibration or the fitted Kd will be biased.</div>
+    </li>
+    <li class="step">
+      <div class="step-head"><span class="step-n">6</span>
+        <h3>Read fluorescence</h3> <span class="tier t-stated">stated</span></div>
+      <p class="instr">Read gSTEP fluorescence for every well on the Tecan Infinite M1000 with excitation at 485 nm and emission at 515 nm.</p>
+      <div class="meta">🌡 25 C</div>
+      
+      <div class="cp"><span class="cp-name">Excitation wavelength</span><span class="cp-val">485 nm</span> <span class="tier t-stated">stated</span><div class="pnote">Stated.</div></div><div class="cp"><span class="cp-name">Emission wavelength</span><span class="cp-val">515 nm</span> <span class="tier t-stated">stated</span><div class="pnote">Stated.</div></div><div class="cp"><span class="cp-name">Reader gain / bandwidth</span><span class="cp-val">optimize on a high-signal well; keep fixed across the plate</span> <span class="tier t-default_verify">default verify</span><div class="pnote">Not stated. Set gain once on a bound (high-signal) well and hold it constant; verify no wells saturate.</div></div>
+      
+    </li>
+    <li class="step">
+      <div class="step-head"><span class="step-n">7</span>
+        <h3>Fit Kd and ΔF/F0</h3> <span class="tier t-stated">stated</span></div>
+      <p class="instr">For each titration, subtract the control-protein background, then fit gSTEP fluorescence intensity as a function of titrant concentration to the ligand-depletion form of the Hill equation to extract Kd and ΔF/F0. Report mean +/- s.d. across replicates.</p>
+      
+      
+      <div class="cp"><span class="cp-name">Fitting model</span><span class="cp-val">Hill equation accounting for ligand depletion</span> <span class="tier t-stated">stated</span><div class="pnote">The source specifies this fit (and cites its reference 35). Use total, not free, concentrations because ligand depletion is modeled.</div></div>
+      <div class="warn">⚠ Ligand depletion matters when Kd is comparable to protein concentration (75 nM here) — do not substitute a free-ligand Hill fit.</div>
+    </li>
+  </ol>
+
+  <h2>Assumptions log — everything not stated in the source</h2>
+  <div class="panel tablewrap"><table>
+    <tr><th>Parameter</th><th>Value</th><th>Provenance</th><th>Basis</th></tr>
+    <tr><td>Binding partner (titrant): STEPtag</td><td class="num">STEPtag selected as target</td><td><span class="tier t-user_input">user input</span></td><td>User picked STEPtag from the paper&#x27;s reported partners. </td></tr><tr><td>gSTEP working-solution volume</td><td class="num">~8 mL</td><td><span class="tier t-default_verify">default verify</span></td><td>Scaling from 72 wells x 100 uL + 10% dead volume; depends on your plate layout. <span class="vflag">verify</span></td></tr><tr><td>Titrant concentration range</td><td class="num">0.1x to 10x expected Kd</td><td><span class="tier t-user_input">user input</span></td><td>Kd-relative range chosen by user; needs an expected-Kd estimate. <span class="vflag">verify</span></td></tr><tr><td>Number of titration points</td><td class="num">12</td><td><span class="tier t-best_practice">best practice</span></td><td>12-point 2-fold series is standard for a resolved isotherm. </td></tr><tr><td>Assay volume per well</td><td class="num">100 uL</td><td><span class="tier t-user_input">user input</span></td><td>Scale choice; not specified in the source. </td></tr><tr><td>Blank wells</td><td class="num">buffer-only + gSTEP-only</td><td><span class="tier t-best_practice">best practice</span></td><td>Standard controls to define F0 and background for ΔF/F0. </td></tr><tr><td>Equilibration time and temperature</td><td class="num">30 min at 25 C</td><td><span class="tier t-best_practice">best practice</span></td><td>Standard equilibrium-binding practice; the source omits it and the fit assumes equilibrium. <span class="vflag">verify</span></td></tr><tr><td>Reader gain / bandwidth</td><td class="num">optimize once, hold fixed</td><td><span class="tier t-default_verify">default verify</span></td><td>Not stated; set on a high-signal well and keep constant across the plate. <span class="vflag">verify</span></td></tr>
+  </table></div>
+
+  <h2>Open questions</h2>
+  <ul class="oq"><li>Expected Kd is required to set the titrant range concretely; run a wide pilot (e.g., 1 nM to 10 uM) if unknown.</li><li>Equilibration time (30 min) is a best-practice default, not measured for this system; confirm binding has reached equilibrium given the on/off kinetics.</li><li>Path-length / inner-filter effects at 100 uL in a 96-well plate are not corrected; verify signal is linear with gSTEP concentration.</li><li>On a live run, Phase-2 web_search would attempt to ground equilibration time, titrant spacing, and the ligand-depletion Hill model in specific citations (upgrading these from best_practice/default_verify to verified literature_grounded).</li></ul>
+
+  <footer>
+    Built by Methods Gap-Filler as a hand-run demonstration (no API key in the sandbox).<br>
+    Binding-assay methods reconstructed from Eason et&nbsp;al. 2020. Provenance verification runs live on your machine.
+  </footer>
+</div>
