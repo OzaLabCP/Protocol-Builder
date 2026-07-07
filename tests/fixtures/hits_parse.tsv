@@ -1,0 +1,4 @@
+# Folddisco hits (SYNTHETIC, format-faithful)
+MOCK000_0001	afdb50	0.42	0.15	88.0	c001:i:4:I:92.0;c001:j:23:L:90.5
+PDB1abc_A	pdb	0.30	0.40	NA	c001:i:4:V:NA;c001:j:23:F:NA
+MOCK010_0002	afdb50	0.90	0.05	65.0	c001:i:4:K:61.0;c001:j:23:E:69.0

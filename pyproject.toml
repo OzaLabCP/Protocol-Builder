@@ -1,0 +1,67 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tessera"
+version = "0.2.0"
+description = "Tertiary-contact stabilization by discontinuous structural-motif harvesting"
+readme = "README.tessera.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Oza Lab / Anfinis Bio computational pipeline" }]
+keywords = ["protein-design", "structural-motif", "ddg", "folddisco", "rfdiffusion"]
+dependencies = [
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "pyarrow>=15.0",
+]
+
+[project.optional-dependencies]
+# Heavier / stack-specific parsers. Core pipeline runs without these (spec §14.2,
+# mock-first): a built-in minimal PDB reader (tessera.io.pdb) covers dev + tests.
+structio = ["biotite>=0.40"]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+    "ruff>=0.5",
+    "mypy>=1.9",
+    "types-PyYAML>=6.0",
+]
+
+[project.scripts]
+tessera = "tessera.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tessera"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = [
+    "E501",   # line length handled by formatter; long spec-quoting docstrings allowed
+    "UP042",  # `str, Enum` is intentional (pydantic-friendly string enums)
+    "SIM103", # explicit guard clauses read clearer than an inlined negation here
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "golden: hand-verified expected values for the silent-bug zone (spec §14.6)",
+    "invariant: enforces a spec §14.5 hard rule",
+    "e2e: end-to-end mock-mode pipeline run",
+]
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["tessera"]
+mypy_path = "src"
+warn_unused_ignores = true
+disallow_untyped_defs = false
