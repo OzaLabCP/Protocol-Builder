@@ -23,7 +23,7 @@ resolve to `default_verify`. Verified citations get a ✓ badge; the rest are fl
 | Phase | What happens |
 |-------|--------------|
 | **1 — read, scope & ask** | Model reconstructs the protocol, classifies each parameter, runs a light scoping search for ambiguous gaps, and calls `request_clarifications` with 0–5 targeted questions (menu options carry their source + citation). |
-| **2 — research & ground** | Your answers come back as the tool result; the model grounds outcome-critical values with `web_search` (capped at 12 searches) and calls `emit_protocol`. |
+| **2 — research & ground** | Your answers come back as the tool result; the model grounds outcome-critical values with two search tools — Anthropic's `web_search` and a `search_pubmed` tool the app runs against NCBI E-utilities (real PMIDs/DOIs) — then calls `emit_protocol`. |
 | **3 — validate** | The host resolves every citation, enforces the provenance/citation invariants, checks the `assumptions_log` against the inline values, then renders the result. |
 
 Forced `tool_choice` is only ever used on a call that is *not* also searching — the
@@ -52,7 +52,11 @@ Open <http://localhost:8000>, paste a Methods section (or click **Load example
 |---------|---------|---------|
 | `ANTHROPIC_API_KEY` | — | Required. |
 | `ANTHROPIC_MODEL` | `claude-opus-4-8` | The model that runs the loop. |
-| `GAPFILLER_SEARCH_BUDGET` | `12` | Max Phase-2 web searches. |
+| `GAPFILLER_SEARCH_BUDGET` | `12` | Max Phase-2 `web_search` uses. |
+| `GAPFILLER_PUBMED_BUDGET` | `12` | Max `search_pubmed` calls per phase. |
+| `GAPFILLER_ENABLE_PUBMED` | `1` | Set `0` to disable the PubMed grounding tool. |
+| `GAPFILLER_ENABLE_WEB_SEARCH` | `1` | Set `0` to disable Anthropic `web_search`. |
+| `NCBI_API_KEY` | — | Optional; raises the E-utilities rate limit (3→10 req/s). |
 | `GAPFILLER_MAX_TOKENS` | `16000` | Output token ceiling. |
 | `GAPFILLER_EFFORT` | `high` | Reasoning effort. |
 
@@ -71,7 +75,8 @@ consistency) runs without the network — the bibliographic resolver is injected
 app/
   schemas.py      # the two tool input_schemas (request_clarifications, emit_protocol)
   prompts.py      # the protocol-engineer system prompt
-  agent.py        # the three-phase tool-use loop
+  agent.py        # the three-phase tool-use loop (dispatches client tools)
+  literature.py   # search_pubmed grounding tool (NCBI E-utilities)
   resolvers.py    # DOI/PMID resolution (Crossref / PubMed)
   validation.py   # host-side citation validation + invariants + consistency
   server.py       # FastAPI endpoints + session store
@@ -81,9 +86,9 @@ tests/            # validation unit tests
 
 ## Notes & next steps
 
-- **Bio connectors:** grounding uses the built-in `web_search`; validation uses
-  PubMed/Crossref. Wiring PubMed/bioRxiv as the *grounding* source too (via MCP) is the
-  natural upgrade — `GAPFILLER_WEB_SEARCH_TYPE` and `resolvers.py` are the seams.
+- **Bio connectors:** grounding now uses both `web_search` and a `search_pubmed` tool
+  (NCBI E-utilities); validation resolves against PubMed/Crossref. bioRxiv is the next
+  grounding source to add — `literature.py` is the seam (mirror `search_pubmed`).
 - **Sessions** are in-memory (single process) — fine for a demo, swap for a store to scale.
 - **Latency:** Phase 2 can run for a minute or two while it searches; the UI shows a
   working state. Streaming the emit call is a reasonable enhancement.

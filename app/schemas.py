@@ -57,6 +57,38 @@ _SELECTED_BY_USER = {
 
 
 # ---------------------------------------------------------------------------
+# search_pubmed — client-side grounding tool (available in both phases)
+# ---------------------------------------------------------------------------
+
+SEARCH_PUBMED_TOOL = {
+    "name": "search_pubmed",
+    "description": (
+        "Search PubMed for real biomedical articles to ground a value you intend to "
+        "fill. Returns up to `retmax` results, each with a PMID, title, authors, "
+        "year, and DOI when available. Use a returned PMID or DOI as the citation "
+        "identifier for a literature_grounded value — never invent one. Good for "
+        "outcome-critical parameters (buffer optima, incubation conditions, assay "
+        "conventions); do not burn searches on trivia."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "PubMed query. Supports field tags and boolean "
+                "operators, e.g. 'cell-free protein synthesis Mg2+ optimum PANOx-SP'.",
+            },
+            "retmax": {
+                "type": "integer",
+                "description": "Max results to return (1-8).",
+            },
+        },
+        "required": ["query"],
+    },
+}
+
+
+# ---------------------------------------------------------------------------
 # Schema 1 — request_clarifications (phase 1 output)
 # ---------------------------------------------------------------------------
 

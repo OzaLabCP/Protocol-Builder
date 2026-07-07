@@ -1,16 +1,17 @@
-"""The three-phase tool-use loop.
+"""The three-phase tool-use loop, with literature grounding.
 
-Phase 1 (analyze): system + Methods text, with web_search + request_clarifications
-available under tool_choice=auto. The model scopes ambiguous gaps with a light
-search, then calls request_clarifications — that call is the terminal signal.
+Both phases run under tool_choice=auto with grounding tools + the phase's
+structured tool all available; the structured call is the terminal signal, and
+forcing is never combined with searching.
 
-Phase 2/3 (continue_with_answers): the user's answers come back as the tool_result
-for request_clarifications; the model grounds values with web_search (capped by the
-tool's max_uses) and then calls emit_protocol. If it stops without emitting, we nudge
-once with only emit_protocol available (auto — never a forced tool_choice on a call
-that is also meant to search).
+Grounding sources:
+- web_search: Anthropic-run server tool (results resolved inside the API call).
+- search_pubmed: a client tool the app executes against NCBI E-utilities, so the
+  agent retrieves real PMIDs/DOIs. The loop dispatches it and feeds results back.
 
-Sessions are just the running `messages` list plus the request_clarifications id.
+Phase 1 (analyze): scope ambiguous gaps, then call request_clarifications.
+Phase 2/3 (continue_with_answers): ground values, then call emit_protocol; if the
+model stops without emitting, nudge once with only emit_protocol available.
 """
 
 from __future__ import annotations
@@ -21,9 +22,9 @@ from typing import Any, Optional
 
 import anthropic
 
-from . import config
+from . import config, literature
 from .prompts import SYSTEM_PROMPT
-from .schemas import EMIT_PROTOCOL_TOOL, REQUEST_CLARIFICATIONS_TOOL
+from .schemas import EMIT_PROTOCOL_TOOL, REQUEST_CLARIFICATIONS_TOOL, SEARCH_PUBMED_TOOL
 
 
 class AgentError(RuntimeError):
@@ -35,6 +36,7 @@ class Session:
     messages: list = field(default_factory=list)
     request_tool_use_id: Optional[str] = None
     phase1: Optional[dict] = None
+    grounding_log: list = field(default_factory=list)  # queries the app ran
 
 
 def _web_search_tool() -> dict:
@@ -45,10 +47,23 @@ def _web_search_tool() -> dict:
     }
 
 
+def _grounding_tools() -> list:
+    tools = []
+    if config.ENABLE_WEB_SEARCH:
+        tools.append(_web_search_tool())
+    if config.ENABLE_PUBMED:
+        tools.append(SEARCH_PUBMED_TOOL)
+    return tools
+
+
+def _tool_use_blocks(content: list) -> list:
+    return [b for b in content if getattr(b, "type", None) == "tool_use"]
+
+
 def _find_tool_use(content: list, name: str) -> Optional[Any]:
-    for block in content:
-        if getattr(block, "type", None) == "tool_use" and getattr(block, "name", None) == name:
-            return block
+    for b in _tool_use_blocks(content):
+        if getattr(b, "name", None) == name:
+            return b
     return None
 
 
@@ -59,9 +74,36 @@ class GapFillerAgent:
         self.system = [
             {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
         ]
+        self._searches_left = 0
+        self._session: Optional[Session] = None
 
-    def _call(self, messages: list, tools: list) -> Any:
-        """One model turn, resuming automatically across server-tool pauses."""
+    # -- client-tool dispatch ---------------------------------------------------
+    def _dispatch(self, name: str, tool_input: dict) -> str:
+        if name == "search_pubmed":
+            if self._searches_left <= 0:
+                return (
+                    "PubMed search budget exhausted. Do not search again; fill any "
+                    "remaining values from best_practice or default_verify and proceed."
+                )
+            self._searches_left -= 1
+            query = str(tool_input.get("query", "")).strip()
+            if self._session is not None:
+                self._session.grounding_log.append(query)
+            try:
+                results = literature.search_pubmed(query, tool_input.get("retmax", 5))
+            except Exception as exc:  # noqa: BLE001
+                return (
+                    f"PubMed search failed ({type(exc).__name__}). Fill from "
+                    f"best_practice or default_verify instead; do not fabricate a citation."
+                )
+            return literature.format_results(results)
+        return f"Unknown tool: {name}"
+
+    # -- one terminal-seeking run -----------------------------------------------
+    def _run(self, messages: list, tools: list, terminal_name: str) -> Optional[Any]:
+        """Loop until the model calls `terminal_name`. Resumes across server-tool
+        pauses and executes client tools (search_pubmed) in between. Returns the
+        terminal tool_use block, or None if the model ended without calling it."""
         while True:
             resp = self.client.messages.create(
                 model=self.model,
@@ -73,13 +115,42 @@ class GapFillerAgent:
                 output_config={"effort": config.EFFORT},
             )
             messages.append({"role": "assistant", "content": resp.content})
+
             if resp.stop_reason == "pause_turn":
-                continue  # server tool (web_search) hit its per-call loop cap; resume
-            return resp
+                continue  # server tool (web_search) hit its per-call cap; resume
+            if resp.stop_reason != "tool_use":
+                return None  # ended without a tool call
+
+            terminal = _find_tool_use(resp.content, terminal_name)
+            if terminal is not None:
+                return terminal
+
+            # Execute any client tools and feed results back.
+            results = []
+            for b in _tool_use_blocks(resp.content):
+                if b.name in self._client_tool_names():
+                    results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": b.id,
+                            "content": self._dispatch(b.name, dict(b.input)),
+                        }
+                    )
+            if not results:
+                return None  # tool_use we don't handle and not terminal — bail
+            messages.append({"role": "user", "content": results})
+
+    def _client_tool_names(self) -> set:
+        names = set()
+        if config.ENABLE_PUBMED:
+            names.add("search_pubmed")
+        return names
 
     # -- Phase 1 ----------------------------------------------------------------
     def analyze(self, methods_text: str) -> Session:
         session = Session()
+        self._session = session
+        self._searches_left = config.PUBMED_BUDGET
         session.messages.append(
             {
                 "role": "user",
@@ -91,15 +162,10 @@ class GapFillerAgent:
                 ),
             }
         )
-        resp = self._call(
-            session.messages, tools=[_web_search_tool(), REQUEST_CLARIFICATIONS_TOOL]
-        )
-        block = _find_tool_use(resp.content, "request_clarifications")
+        tools = _grounding_tools() + [REQUEST_CLARIFICATIONS_TOOL]
+        block = self._run(session.messages, tools, "request_clarifications")
         if block is None:
-            raise AgentError(
-                "Phase 1 ended without calling request_clarifications "
-                f"(stop_reason={resp.stop_reason})."
-            )
+            raise AgentError("Phase 1 ended without calling request_clarifications.")
         session.request_tool_use_id = block.id
         session.phase1 = dict(block.input)
         return session
@@ -108,8 +174,9 @@ class GapFillerAgent:
     def continue_with_answers(self, session: Session, answers: list) -> dict:
         if session.request_tool_use_id is None:
             raise AgentError("Session has no pending clarification to answer.")
+        self._session = session
+        self._searches_left = config.PUBMED_BUDGET
 
-        payload = json.dumps({"answers": answers})
         session.messages.append(
             {
                 "role": "user",
@@ -117,22 +184,19 @@ class GapFillerAgent:
                     {
                         "type": "tool_result",
                         "tool_use_id": session.request_tool_use_id,
-                        "content": payload,
+                        "content": json.dumps({"answers": answers}),
                     }
                 ],
             }
         )
-        # Prevent a second answer submission against the same clarification.
-        session.request_tool_use_id = None
+        session.request_tool_use_id = None  # prevent a second answer submission
 
-        resp = self._call(
-            session.messages, tools=[_web_search_tool(), EMIT_PROTOCOL_TOOL]
-        )
-        block = _find_tool_use(resp.content, "emit_protocol")
+        tools = _grounding_tools() + [EMIT_PROTOCOL_TOOL]
+        block = self._run(session.messages, tools, "emit_protocol")
         if block is not None:
             return dict(block.input)
 
-        # Model stopped researching without emitting — nudge once, emit-only.
+        # Model stopped without emitting — nudge once, emit-only (no search tools).
         session.messages.append(
             {
                 "role": "user",
@@ -140,11 +204,7 @@ class GapFillerAgent:
                 "finalized, provenance-tagged protocol.",
             }
         )
-        resp = self._call(session.messages, tools=[EMIT_PROTOCOL_TOOL])
-        block = _find_tool_use(resp.content, "emit_protocol")
+        block = self._run(session.messages, [EMIT_PROTOCOL_TOOL], "emit_protocol")
         if block is None:
-            raise AgentError(
-                "Phase 3 ended without calling emit_protocol "
-                f"(stop_reason={resp.stop_reason})."
-            )
+            raise AgentError("Phase 3 ended without calling emit_protocol.")
         return dict(block.input)
