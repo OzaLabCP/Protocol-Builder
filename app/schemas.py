@@ -1,0 +1,300 @@
+"""Tool `input_schema` definitions for the two forced-tool-choice calls.
+
+The `citation` object is defined once as a Python value and shared by reference
+wherever a value can be literature-grounded, so it is fully inlined on the wire
+(no `$ref`) while staying DRY in code. The five provenance tiers are the same
+everywhere.
+"""
+
+from __future__ import annotations
+
+PROVENANCE_TIERS = [
+    "stated",
+    "literature_grounded",
+    "best_practice",
+    "user_input",
+    "default_verify",
+]
+
+# Provenance enum used inside the emitted protocol (materials/steps/params).
+_PROVENANCE_ENUM = {"type": "string", "enum": PROVENANCE_TIERS}
+
+# assumptions_log never contains "stated" values (it lists only what was filled).
+_ASSUMPTION_PROVENANCE_ENUM = {
+    "type": "string",
+    "enum": [t for t in PROVENANCE_TIERS if t != "stated"],
+}
+
+# The one canonical citation shape. Nullable: present (non-null) only when a
+# value is literature-grounded (or user-selected from a literature option).
+CITATION_SCHEMA = {
+    "type": ["object", "null"],
+    "additionalProperties": False,
+    "properties": {
+        "title": {"type": "string"},
+        "authors": {"type": "string"},
+        "year": {"type": "integer"},
+        "identifier": {
+            "type": "string",
+            "description": "A DOI (starts with '10.') or a PubMed ID (digits only).",
+        },
+        "url": {"type": ["string", "null"]},
+    },
+    "required": ["title", "authors", "year", "identifier"],
+    "description": (
+        "Required (non-null) when provenance is literature_grounded; may also be "
+        "present on a value the user picked from a literature-derived option "
+        "(then provenance is literature_grounded and selected_by_user is true); "
+        "null otherwise. The host resolves this identifier after emit."
+    ),
+}
+
+_SELECTED_BY_USER = {
+    "type": "boolean",
+    "description": "True when the user chose this value from an option menu. "
+    "Independent of the provenance tier.",
+}
+
+
+# ---------------------------------------------------------------------------
+# Schema 1 — request_clarifications (phase 1 output)
+# ---------------------------------------------------------------------------
+
+REQUEST_CLARIFICATIONS_TOOL = {
+    "name": "request_clarifications",
+    "description": (
+        "Return the reconstructed protocol summary and the ranked set of gaps "
+        "that require a human answer. Call this exactly once when you are done "
+        "reading and (if needed) scoping the literature."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "usable": {
+                "type": "boolean",
+                "description": "False if the input is not an experimental "
+                "methods/protocol section.",
+            },
+            "reason": {
+                "type": ["string", "null"],
+                "description": "If usable is false, a brief explanation. Otherwise null.",
+            },
+            "protocol_title": {"type": ["string", "null"]},
+            "source_summary": {
+                "type": ["string", "null"],
+                "description": "One or two sentences on what the protocol accomplishes.",
+            },
+            "reconstructed_step_count": {"type": ["integer", "null"]},
+            "gaps": {
+                "type": "array",
+                "maxItems": 5,
+                "description": "Empty array is valid and means no user input is needed.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "description": "Stable identifier used to map the "
+                            "user's answer back in phase 2.",
+                        },
+                        "parameter": {"type": "string"},
+                        "step_reference": {
+                            "type": "string",
+                            "description": "Which reconstructed step this affects.",
+                        },
+                        "why_it_matters": {
+                            "type": "string",
+                            "description": "The downstream effect of this parameter.",
+                        },
+                        "classification": {
+                            "type": "string",
+                            "enum": ["user_dependent", "ambiguous", "deferred"],
+                        },
+                        "question": {"type": "string"},
+                        "answer_type": {
+                            "type": "string",
+                            "enum": ["single_select", "multi_select", "number", "text"],
+                        },
+                        "option_context": {
+                            "type": ["string", "null"],
+                            "description": "For ambiguous gaps: short phrase "
+                            "explaining why these options were surfaced.",
+                        },
+                        "options": {
+                            "type": "array",
+                            "description": "Present for select answer_types. The UI "
+                            "always adds an 'Other / not sure' escape; do not "
+                            "include it here.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "label": {"type": "string"},
+                                    "value": {"type": "string"},
+                                    "source": {
+                                        "type": "string",
+                                        "enum": [
+                                            "literature",
+                                            "standard_practice",
+                                            "model_suggestion",
+                                        ],
+                                    },
+                                    "note": {
+                                        "type": ["string", "null"],
+                                        "description": "One-line 'pick this if…' guidance.",
+                                    },
+                                    "citation": CITATION_SCHEMA,
+                                },
+                                "required": ["label", "value", "source"],
+                            },
+                        },
+                        "unit": {
+                            "type": ["string", "null"],
+                            "description": "Expected unit for number answers "
+                            "(e.g. 'uL', 'mM').",
+                        },
+                        "suggested_default": {
+                            "type": ["string", "null"],
+                            "description": "Fallback value if the user skips; becomes "
+                            "a default_verify entry.",
+                        },
+                    },
+                    "required": [
+                        "id",
+                        "parameter",
+                        "step_reference",
+                        "why_it_matters",
+                        "classification",
+                        "question",
+                        "answer_type",
+                    ],
+                },
+            },
+        },
+        "required": ["usable", "gaps"],
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# Schema 2 — emit_protocol (phase 3 output)
+# ---------------------------------------------------------------------------
+
+_MATERIAL = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "amount": {"type": ["number", "null"]},
+        "unit": {"type": ["string", "null"]},
+        "vendor_or_grade": {"type": ["string", "null"]},
+        "provenance": _PROVENANCE_ENUM,
+        "selected_by_user": _SELECTED_BY_USER,
+        "provenance_note": {
+            "type": ["string", "null"],
+            "description": "Basis/standard named; scaling math if scaled; verify "
+            "note for defaults.",
+        },
+        "citation": CITATION_SCHEMA,
+    },
+    "required": ["name", "provenance"],
+}
+
+_CRITICAL_PARAMETER = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "value": {"type": "string"},
+        "unit": {"type": ["string", "null"]},
+        "provenance": _PROVENANCE_ENUM,
+        "selected_by_user": _SELECTED_BY_USER,
+        "provenance_note": {"type": ["string", "null"]},
+        "citation": CITATION_SCHEMA,
+    },
+    "required": ["name", "value", "provenance"],
+}
+
+_SUBSTEP = {
+    "type": "object",
+    "properties": {
+        "number": {"type": "string"},
+        "instruction": {"type": "string"},
+        "provenance": _PROVENANCE_ENUM,
+        "provenance_note": {"type": ["string", "null"]},
+    },
+    "required": ["number", "instruction", "provenance"],
+}
+
+_STEP = {
+    "type": "object",
+    "properties": {
+        "number": {"type": "integer"},
+        "title": {"type": "string"},
+        "instruction": {"type": "string"},
+        "duration": {"type": ["string", "null"]},
+        "temperature": {"type": ["string", "null"]},
+        "provenance": _PROVENANCE_ENUM,
+        "critical_parameters": {"type": "array", "items": _CRITICAL_PARAMETER},
+        "substeps": {"type": "array", "items": _SUBSTEP},
+        "warnings": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["number", "title", "instruction", "provenance"],
+}
+
+_ASSUMPTION = {
+    "type": "object",
+    "properties": {
+        "parameter": {"type": "string"},
+        "value": {"type": "string"},
+        "provenance": _ASSUMPTION_PROVENANCE_ENUM,
+        "selected_by_user": _SELECTED_BY_USER,
+        "basis": {
+            "type": "string",
+            "description": "The citation summary, the named standard, or how the "
+            "value was derived.",
+        },
+        "citation": CITATION_SCHEMA,
+        "verify": {
+            "type": "boolean",
+            "description": "True if the user should confirm before running.",
+        },
+    },
+    "required": ["parameter", "value", "provenance", "basis", "verify"],
+}
+
+EMIT_PROTOCOL_TOOL = {
+    "name": "emit_protocol",
+    "description": "Emit the complete, executable, provenance-tagged protocol.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "summary": {"type": "string"},
+            "source_citation": {"type": ["string", "null"]},
+            "estimated_duration": {"type": "string"},
+            "materials": {"type": "array", "items": _MATERIAL},
+            "equipment": {"type": "array", "items": {"type": "string"}},
+            "steps": {"type": "array", "items": _STEP},
+            "assumptions_log": {
+                "type": "array",
+                "description": "Every value NOT stated in the source. A projection "
+                "of the inline provenance: each entry must match an inline value's "
+                "tier, value, and citation exactly. Must be exhaustive.",
+                "items": _ASSUMPTION,
+            },
+            "open_questions": {
+                "type": "array",
+                "description": "Gaps that remain unresolved even after user input, "
+                "plus any user/literature conflicts and any citation that failed "
+                "host validation.",
+                "items": {"type": "string"},
+            },
+        },
+        "required": [
+            "title",
+            "summary",
+            "estimated_duration",
+            "materials",
+            "steps",
+            "assumptions_log",
+        ],
+    },
+}

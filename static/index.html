@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Methods Gap-Filler</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1e222b; --line: #2a2f3a;
+    --text: #e7e9ee; --muted: #9aa3b2; --accent: #6ea8fe;
+    --stated: #4ac07a; --lit: #6ea8fe; --best: #b48cff;
+    --user: #35c2c2; --verify: #f2b13a; --danger: #ef6a6a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header { padding: 22px 28px; border-bottom: 1px solid var(--line); }
+  h1 { margin: 0; font-size: 20px; letter-spacing: .2px; }
+  header p { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+  main { max-width: 920px; margin: 0 auto; padding: 24px 20px 80px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin: 16px 0; }
+  textarea {
+    width: 100%; min-height: 180px; resize: vertical; background: var(--panel2);
+    color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 12px;
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  button {
+    background: var(--accent); color: #0a0d13; border: 0; border-radius: 8px;
+    padding: 10px 16px; font-weight: 600; cursor: pointer; font-size: 14px;
+  }
+  button.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--line); }
+  button:disabled { opacity: .5; cursor: default; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .hidden { display: none; }
+  .gap { border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin: 12px 0; background: var(--panel2); }
+  .gap h4 { margin: 0 0 4px; font-size: 15px; }
+  .gap .why { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
+  .opt { display: flex; gap: 8px; align-items: flex-start; padding: 7px 0; border-top: 1px solid var(--line); }
+  .opt:first-of-type { border-top: 0; }
+  .opt label { cursor: pointer; }
+  .opt .note { color: var(--muted); font-size: 12.5px; }
+  .src-tag { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); vertical-align: middle; }
+  input[type=text], input[type=number] {
+    background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 7px; padding: 8px 10px; width: 100%; font-size: 14px;
+  }
+  .skip { margin-left: auto; }
+  a { color: var(--accent); }
+  .tier { font-size: 11px; padding: 1px 8px; border-radius: 999px; font-weight: 700; letter-spacing: .3px; text-transform: uppercase; }
+  .t-stated { background: rgba(74,192,122,.16); color: var(--stated); }
+  .t-literature_grounded { background: rgba(110,168,254,.16); color: var(--lit); }
+  .t-best_practice { background: rgba(180,140,255,.16); color: var(--best); }
+  .t-user_input { background: rgba(53,194,194,.16); color: var(--user); }
+  .t-default_verify { background: rgba(242,177,58,.16); color: var(--verify); }
+  .legend { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; }
+  .step { border-top: 1px solid var(--line); padding: 12px 0; }
+  .step:first-child { border-top: 0; }
+  .step .num { color: var(--accent); font-weight: 700; }
+  .cite { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+  .badge-ok { color: var(--stated); font-weight: 700; }
+  .badge-warn { color: var(--verify); font-weight: 700; }
+  .cp { font-size: 13px; color: var(--muted); margin-top: 4px; }
+  .warn { color: var(--verify); font-size: 13px; margin-top: 4px; }
+  .pnote { color: var(--muted); font-size: 12.5px; font-family: ui-monospace, monospace; }
+  .summary { display: flex; gap: 18px; flex-wrap: wrap; }
+  .stat { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+  .stat b { font-size: 20px; }
+  .err { color: var(--danger); }
+  li { margin: 4px 0; }
+  h2 { font-size: 17px; margin: 22px 0 8px; }
+  h3 { font-size: 15px; margin: 16px 0 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Methods Gap-Filler</h1>
+  <p>Paste a paper's Methods section. It reconstructs the protocol, asks only about the gaps that matter,
+     grounds filled values in the literature, and emits a protocol where every value is provenance-tagged and every citation is verified.</p>
+</header>
+
+<main>
+  <section class="panel" id="input-panel">
+    <label class="muted" for="methods">Methods section</label>
+    <textarea id="methods" placeholder="Paste the Methods / protocol text here…"></textarea>
+    <div class="row">
+      <button id="analyze">Analyze</button>
+      <button class="secondary" id="example">Load example (CFPS)</button>
+      <span class="muted" id="status"></span>
+    </div>
+  </section>
+
+  <section class="panel hidden" id="questions-panel">
+    <h2>A few questions</h2>
+    <p class="muted" id="q-summary"></p>
+    <div id="gaps"></div>
+    <div class="row">
+      <button id="submit-answers">Build protocol</button>
+      <span class="muted">Skip a question to accept its default (flagged “verify before use”).</span>
+    </div>
+  </section>
+
+  <section class="panel hidden" id="result-panel"></section>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const el = (t, c, h) => { const e = document.createElement(t); if (c) e.className = c; if (h != null) e.innerHTML = h; return e; };
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (m) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]));
+
+let SESSION = null;
+let GAPS = [];
+
+const EXAMPLE = `CFPS reactions were assembled with S30 extract prepared as described previously and a PANOx-SP energy system, and incubated at 30 C. The template plasmid encoded a single-chain antibody fragment. Disulfide-bonded, correctly folded product was obtained. Reactions were quenched and product yield was quantified by radioactive leucine incorporation.`;
+
+$("#example").onclick = () => { $("#methods").value = EXAMPLE; };
+
+$("#analyze").onclick = async () => {
+  const text = $("#methods").value.trim();
+  if (text.length < 40) { setStatus("Paste a Methods section first.", true); return; }
+  lock(true, "Reading the methods and scoping gaps… (this can take a minute)");
+  try {
+    const r = await postJSON("/api/analyze", { methods_text: text });
+    handlePhase(r);
+  } catch (e) { setStatus(e.message, true); }
+  lock(false);
+};
+
+function handlePhase(r) {
+  SESSION = r.session_id;
+  if (r.phase === "rejected") {
+    showResultMessage("Not a protocol", r.phase1.reason || "This input does not look like an experimental methods section.");
+    return;
+  }
+  if (r.phase === "questions") { renderQuestions(r.phase1); return; }
+  if (r.phase === "complete") { renderProtocol(r.protocol); return; }
+}
+
+function renderQuestions(p1) {
+  GAPS = p1.gaps || [];
+  $("#q-summary").textContent = (p1.protocol_title ? p1.protocol_title + " — " : "") + (p1.source_summary || "");
+  const wrap = $("#gaps"); wrap.innerHTML = "";
+  GAPS.forEach((g, i) => wrap.appendChild(renderGap(g, i)));
+  show("#questions-panel");
+  $("#questions-panel").scrollIntoView({ behavior: "smooth" });
+}
+
+function renderGap(g, i) {
+  const box = el("div", "gap");
+  box.appendChild(el("h4", null, `${i + 1}. ${esc(g.question)}`));
+  box.appendChild(el("p", "why", `${esc(g.parameter)} · ${esc(g.why_it_matters)}`));
+  if (g.option_context) box.appendChild(el("p", "muted", esc(g.option_context)));
+
+  const name = "gap_" + g.id;
+  if (g.answer_type === "single_select" || g.answer_type === "multi_select") {
+    const multi = g.answer_type === "multi_select";
+    (g.options || []).forEach((o, j) => {
+      box.appendChild(optionRow(name, o.value, optionLabel(o), multi, `${name}_${j}`));
+    });
+    // Other / not sure escape
+    const otherId = `${name}_other`;
+    const other = optionRow(name, "__other__", "Other / not sure", multi, otherId);
+    box.appendChild(other);
+    const otherText = el("input"); otherText.type = "text"; otherText.placeholder = "Describe (optional)";
+    otherText.id = `${name}_othertext`; otherText.style.marginTop = "6px"; otherText.classList.add("hidden");
+    box.appendChild(otherText);
+    box.addEventListener("change", () => {
+      const checked = document.getElementById(otherId).checked;
+      otherText.classList.toggle("hidden", !checked);
+    });
+  } else if (g.answer_type === "number") {
+    const inp = el("input"); inp.type = "number"; inp.step = "any"; inp.id = name + "_val";
+    inp.placeholder = g.suggested_default != null ? `default: ${g.suggested_default}` : "";
+    const wrap = el("div", "row"); wrap.appendChild(inp);
+    if (g.unit) wrap.appendChild(el("span", "muted", esc(g.unit)));
+    box.appendChild(wrap);
+  } else {
+    const inp = el("input"); inp.type = "text"; inp.id = name + "_val";
+    inp.placeholder = g.suggested_default != null ? `default: ${g.suggested_default}` : "";
+    box.appendChild(inp);
+  }
+
+  const skipRow = el("label", "row skip muted");
+  const skip = el("input"); skip.type = "checkbox"; skip.id = name + "_skip";
+  skipRow.appendChild(skip);
+  skipRow.appendChild(el("span", null, g.suggested_default != null
+    ? `Skip — use default “${esc(g.suggested_default)}” (flag to verify)`
+    : "Skip this question"));
+  box.appendChild(skipRow);
+  return box;
+}
+
+function optionLabel(o) {
+  const tag = `<span class="src-tag">${esc(o.source)}</span>`;
+  let cite = "";
+  if (o.citation) {
+    const c = o.citation;
+    const t = `${esc(c.authors || "")} (${esc(c.year || "")}) — ${esc(c.identifier || "")}`;
+    cite = c.url ? ` <a href="${esc(c.url)}" target="_blank" rel="noopener">${t}</a>` : ` <span class="cite">${t}</span>`;
+  }
+  const note = o.note ? `<div class="note">${esc(o.note)}</div>` : "";
+  return `<b>${esc(o.label)}</b> ${tag}${cite}${note}`;
+}
+
+function optionRow(name, value, labelHtml, multi, id) {
+  const row = el("div", "opt");
+  const inp = el("input"); inp.type = multi ? "checkbox" : "radio"; inp.name = name; inp.value = value; inp.id = id;
+  const lab = el("label", null, labelHtml); lab.setAttribute("for", id);
+  row.appendChild(inp); row.appendChild(lab);
+  return row;
+}
+
+$("#submit-answers").onclick = async () => {
+  const answers = GAPS.map(collectAnswer);
+  lock(true, "Grounding values in the literature and verifying citations… (this can take a minute or two)");
+  try {
+    const r = await postJSON("/api/resolve", { session_id: SESSION, answers });
+    renderProtocol(r.protocol);
+    hide("#questions-panel");
+  } catch (e) { setStatus(e.message, true); }
+  lock(false);
+};
+
+function collectAnswer(g) {
+  const name = "gap_" + g.id;
+  const skip = document.getElementById(name + "_skip");
+  if (skip && skip.checked) return { id: g.id, value: null, skipped: true };
+
+  if (g.answer_type === "multi_select") {
+    const vals = [...document.querySelectorAll(`input[name="${name}"]:checked`)].map((i) => i.value);
+    const idx = vals.indexOf("__other__");
+    if (idx >= 0) { vals.splice(idx, 1); const t = document.getElementById(name + "_othertext"); if (t && t.value.trim()) vals.push(t.value.trim()); }
+    return { id: g.id, value: vals, skipped: vals.length === 0 };
+  }
+  if (g.answer_type === "single_select") {
+    const sel = document.querySelector(`input[name="${name}"]:checked`);
+    if (!sel) return { id: g.id, value: null, skipped: true };
+    if (sel.value === "__other__") {
+      const t = document.getElementById(name + "_othertext");
+      const v = t && t.value.trim();
+      return { id: g.id, value: v || "not sure", skipped: !v };
+    }
+    return { id: g.id, value: sel.value, skipped: false };
+  }
+  const inp = document.getElementById(name + "_val");
+  const v = inp ? inp.value.trim() : "";
+  return { id: g.id, value: v || null, skipped: !v };
+}
+
+/* ---------- protocol render ---------- */
+function renderProtocol(p) {
+  const P = $("#result-panel"); P.innerHTML = "";
+  P.appendChild(el("h2", null, esc(p.title || "Protocol")));
+  if (p.summary) P.appendChild(el("p", "muted", esc(p.summary)));
+  if (p.estimated_duration) P.appendChild(el("p", "muted", "Estimated duration: " + esc(p.estimated_duration)));
+
+  P.appendChild(validationSummary(p.validation_report));
+  P.appendChild(legend());
+
+  // Materials
+  if ((p.materials || []).length) {
+    P.appendChild(el("h3", null, "Materials"));
+    const tbl = el("table");
+    tbl.innerHTML = "<tr><th>Reagent</th><th>Amount</th><th>Grade/vendor</th><th>Provenance</th></tr>";
+    (p.materials).forEach((m) => {
+      const tr = el("tr");
+      const amt = [m.amount, m.unit].filter((x) => x != null && x !== "").join(" ");
+      tr.appendChild(el("td", null, esc(m.name)));
+      tr.appendChild(el("td", null, esc(amt)));
+      tr.appendChild(el("td", null, esc(m.vendor_or_grade || "—")));
+      tr.appendChild(provCell(m));
+      tbl.appendChild(tr);
+    });
+    P.appendChild(tbl);
+  }
+
+  if ((p.equipment || []).length) {
+    P.appendChild(el("h3", null, "Equipment"));
+    const ul = el("ul"); p.equipment.forEach((e) => ul.appendChild(el("li", null, esc(e)))); P.appendChild(ul);
+  }
+
+  // Steps
+  P.appendChild(el("h3", null, "Procedure"));
+  const steps = el("div");
+  (p.steps || []).forEach((s) => {
+    const d = el("div", "step");
+    d.appendChild(el("div", null, `<span class="num">${esc(s.number)}.</span> <b>${esc(s.title)}</b> ${tierPill(s.provenance)}`));
+    d.appendChild(el("div", null, esc(s.instruction)));
+    const meta = [s.duration ? "⏱ " + esc(s.duration) : "", s.temperature ? "🌡 " + esc(s.temperature) : ""].filter(Boolean).join(" · ");
+    if (meta) d.appendChild(el("div", "cp", meta));
+    (s.critical_parameters || []).forEach((cp) => {
+      const line = el("div", "cp", `${esc(cp.name)}: <b>${esc([cp.value, cp.unit].filter(Boolean).join(" "))}</b> ${tierPill(cp.provenance)} ${citeInline(cp)}`);
+      if (cp.provenance_note) line.appendChild(el("div", "pnote", esc(cp.provenance_note)));
+      d.appendChild(line);
+    });
+    (s.substeps || []).forEach((ss) => d.appendChild(el("div", "cp", `${esc(ss.number)} ${esc(ss.instruction)} ${tierPill(ss.provenance)}`)));
+    (s.warnings || []).forEach((w) => d.appendChild(el("div", "warn", "⚠ " + esc(w))));
+    steps.appendChild(d);
+  });
+  P.appendChild(steps);
+
+  // Assumptions log — the payoff panel
+  P.appendChild(el("h3", null, "Assumptions log — everything not stated in the source"));
+  const tbl = el("table");
+  tbl.innerHTML = "<tr><th>Parameter</th><th>Value</th><th>Provenance</th><th>Basis</th></tr>";
+  (p.assumptions_log || []).forEach((a) => {
+    const tr = el("tr");
+    tr.appendChild(el("td", null, esc(a.parameter)));
+    tr.appendChild(el("td", null, esc(a.value)));
+    tr.appendChild(provCell(a));
+    const basis = el("td"); basis.innerHTML = esc(a.basis || "") + (a.verify ? ' <span class="badge-warn">· verify</span>' : "");
+    tr.appendChild(basis);
+    tbl.appendChild(tr);
+  });
+  P.appendChild(tbl);
+
+  if ((p.open_questions || []).length) {
+    P.appendChild(el("h3", null, "Open questions"));
+    const ul = el("ul"); p.open_questions.forEach((q) => ul.appendChild(el("li", "muted", esc(q)))); P.appendChild(ul);
+  }
+
+  show("#result-panel");
+  P.scrollIntoView({ behavior: "smooth" });
+}
+
+function tierPill(t) { return `<span class="tier t-${esc(t)}">${esc((t || "").replace(/_/g, " "))}</span>`; }
+
+function citeInline(entry) {
+  if (!entry.citation) return "";
+  const c = entry.citation;
+  const label = `${esc(c.authors || "")} ${esc(c.year || "")} — ${esc(c.identifier || "")}`;
+  const badge = entry.citation_verified ? ' <span class="badge-ok">✓ verified</span>' : ' <span class="badge-warn">⚠ unverified</span>';
+  const link = c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">${label}</a>` : `<span class="cite">${label}</span>`;
+  return `<div class="cite">${link}${badge}</div>`;
+}
+
+function provCell(entry) {
+  const td = el("td");
+  td.innerHTML = tierPill(entry.provenance);
+  if (entry.provenance_note) td.appendChild(el("div", "pnote", esc(entry.provenance_note)));
+  td.insertAdjacentHTML("beforeend", citeInline(entry));
+  return td;
+}
+
+function validationSummary(r) {
+  const box = el("div", "summary");
+  if (!r) return box;
+  box.appendChild(el("div", "stat", `<b>${r.verified.length}</b><div class="muted">citations verified</div>`));
+  box.appendChild(el("div", "stat", `<b>${r.downgraded.length}</b><div class="muted">downgraded (unverifiable)</div>`));
+  box.appendChild(el("div", "stat", `<b>${r.citations_checked}</b><div class="muted">citations checked</div>`));
+  const cons = (r.consistency.inline_missing_from_log.length + r.consistency.log_missing_from_inline.length);
+  box.appendChild(el("div", "stat", `<b>${cons}</b><div class="muted">log/inline mismatches</div>`));
+  return box;
+}
+
+function legend() {
+  const box = el("div", "legend");
+  ["stated", "literature_grounded", "best_practice", "user_input", "default_verify"].forEach((t) =>
+    box.appendChild(el("span", null, tierPill(t))));
+  return box;
+}
+
+function showResultMessage(title, body) {
+  const P = $("#result-panel"); P.innerHTML = "";
+  P.appendChild(el("h2", null, esc(title)));
+  P.appendChild(el("p", "muted", esc(body)));
+  show("#result-panel");
+}
+
+/* ---------- helpers ---------- */
+async function postJSON(url, body) {
+  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || `Request failed (${res.status})`);
+  return data;
+}
+function setStatus(msg, isErr) { const s = $("#status"); s.textContent = msg || ""; s.className = isErr ? "err" : "muted"; }
+function lock(on, msg) { $("#analyze").disabled = on; $("#submit-answers").disabled = on; setStatus(on ? (msg || "Working…") : ""); }
+function show(sel) { $(sel).classList.remove("hidden"); }
+function hide(sel) { $(sel).classList.add("hidden"); }
+</script>
+</body>
+</html>
