@@ -13,10 +13,12 @@ from __future__ import annotations
 import uuid
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+MAX_PDF_BYTES = 25 * 1024 * 1024  # API hard limit is 32 MB; leave headroom
 
 from pathlib import Path
 
@@ -39,10 +41,6 @@ def get_agent() -> GapFillerAgent:
     return _agent
 
 
-class AnalyzeRequest(BaseModel):
-    methods_text: str
-
-
 class Answer(BaseModel):
     id: str
     value: Any = None
@@ -60,13 +58,32 @@ def index() -> FileResponse:
 
 
 @app.post("/api/analyze")
-def analyze(req: AnalyzeRequest) -> dict:
-    text = (req.methods_text or "").strip()
-    if len(text) < 40:
-        raise HTTPException(400, "Please paste a Methods section (at least a few sentences).")
+def analyze(
+    methods_text: str = Form(default=""),
+    file: Optional[UploadFile] = File(default=None),
+) -> dict:
+    """Accept either a pasted Methods section (form field) or an uploaded PDF.
+    If both are given, the PDF wins."""
     agent = get_agent()
+    pdf_bytes: Optional[bytes] = None
+
+    if file is not None and file.filename:
+        pdf_bytes = file.file.read()
+        if not pdf_bytes.startswith(b"%PDF"):
+            raise HTTPException(400, "That file doesn't look like a PDF.")
+        if len(pdf_bytes) > MAX_PDF_BYTES:
+            raise HTTPException(400, "PDF is too large (max ~25 MB). Paste the Methods section instead.")
+
+    if pdf_bytes is None:
+        text = (methods_text or "").strip()
+        if len(text) < 40:
+            raise HTTPException(400, "Paste a Methods section (a few sentences) or choose a PDF.")
+
     try:
-        session = agent.analyze(text)
+        if pdf_bytes is not None:
+            session = agent.analyze(pdf=pdf_bytes)
+        else:
+            session = agent.analyze(methods_text=methods_text.strip())
     except AgentError as exc:
         raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
     except Exception as exc:  # noqa: BLE001 - surface API/setup errors to the client

@@ -34,7 +34,13 @@
   button.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--line); }
   button:disabled { opacity: .5; cursor: default; }
   .muted { color: var(--muted); font-size: 13px; }
+  .small { font-size: 12px; margin: 8px 0 0; }
   .hidden { display: none; }
+  .or { text-align: center; color: var(--muted); font-size: 12px; margin: 12px 0; letter-spacing: .1em; }
+  .filebtn { display: inline-flex; align-items: center; gap: 10px; border: 1px dashed var(--line);
+    border-radius: 8px; padding: 12px 14px; cursor: pointer; background: var(--panel2); width: 100%; }
+  .filebtn input { flex: 0 0 auto; color: var(--muted); }
+  .filebtn.has-file { border-style: solid; border-color: var(--accent); }
   .gap { border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin: 12px 0; background: var(--panel2); }
   .gap h4 { margin: 0 0 4px; font-size: 15px; }
   .gap .why { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
@@ -86,11 +92,18 @@
 
 <main>
   <section class="panel" id="input-panel">
-    <label class="muted" for="methods">Methods section</label>
+    <label class="muted" for="methods">Paste a Methods section</label>
     <textarea id="methods" placeholder="Paste the Methods / protocol text here…"></textarea>
+    <div class="or">— or —</div>
+    <label class="filebtn" for="pdf">
+      <input type="file" id="pdf" accept="application/pdf,.pdf" />
+      <span id="pdf-label">Upload the paper as a PDF</span>
+    </label>
+    <p class="muted small">If you choose a PDF, it's used instead of the pasted text — the tool finds the Methods section for you.</p>
     <div class="row">
       <button id="analyze">Analyze</button>
       <button class="secondary" id="example">Load example (CFPS)</button>
+      <button class="secondary hidden" id="clear-pdf">Clear PDF</button>
       <span class="muted" id="status"></span>
     </div>
   </section>
@@ -118,14 +131,32 @@ let GAPS = [];
 
 const EXAMPLE = `CFPS reactions were assembled with S30 extract prepared as described previously and a PANOx-SP energy system, and incubated at 30 C. The template plasmid encoded a single-chain antibody fragment. Disulfide-bonded, correctly folded product was obtained. Reactions were quenched and product yield was quantified by radioactive leucine incorporation.`;
 
-$("#example").onclick = () => { $("#methods").value = EXAMPLE; };
+$("#example").onclick = () => { $("#methods").value = EXAMPLE; clearPdf(); };
+
+$("#pdf").onchange = () => {
+  const f = $("#pdf").files[0];
+  $("#pdf-label").textContent = f ? f.name : "Upload the paper as a PDF";
+  $(".filebtn").classList.toggle("has-file", !!f);
+  $("#clear-pdf").classList.toggle("hidden", !f);
+};
+function clearPdf() {
+  $("#pdf").value = "";
+  $("#pdf-label").textContent = "Upload the paper as a PDF";
+  $(".filebtn").classList.remove("has-file");
+  $("#clear-pdf").classList.add("hidden");
+}
+$("#clear-pdf").onclick = clearPdf;
 
 $("#analyze").onclick = async () => {
+  const file = $("#pdf").files[0];
   const text = $("#methods").value.trim();
-  if (text.length < 40) { setStatus("Paste a Methods section first.", true); return; }
-  lock(true, "Reading the methods and scoping gaps… (this can take a minute)");
+  if (!file && text.length < 40) { setStatus("Paste a Methods section or choose a PDF.", true); return; }
+  lock(true, file ? "Reading the PDF and scoping gaps… (this can take a minute or two)"
+                  : "Reading the methods and scoping gaps… (this can take a minute)");
   try {
-    const r = await postJSON("/api/analyze", { methods_text: text });
+    const fd = new FormData();
+    if (file) fd.append("file", file); else fd.append("methods_text", text);
+    const r = await postForm("/api/analyze", fd);
     handlePhase(r);
   } catch (e) { setStatus(e.message, true); }
   lock(false);
@@ -375,6 +406,12 @@ function showResultMessage(title, body) {
 /* ---------- helpers ---------- */
 async function postJSON(url, body) {
   const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || `Request failed (${res.status})`);
+  return data;
+}
+async function postForm(url, formData) {
+  const res = await fetch(url, { method: "POST", body: formData });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.detail || `Request failed (${res.status})`);
   return data;

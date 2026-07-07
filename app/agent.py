@@ -172,21 +172,49 @@ class GapFillerAgent:
         return set(_enabled_client_tools().keys())
 
     # -- Phase 1 ----------------------------------------------------------------
-    def analyze(self, methods_text: str) -> Session:
+    def analyze(
+        self,
+        methods_text: Optional[str] = None,
+        pdf: Optional[bytes] = None,
+    ) -> Session:
+        """Start from pasted Methods text OR a full-paper PDF (read natively by the
+        API). Exactly one of `methods_text` / `pdf` should be provided."""
         session = Session()
         self._session = session
         self._searches_left = config.PUBMED_BUDGET
-        session.messages.append(
-            {
-                "role": "user",
-                "content": (
-                    "Here is a published Methods section. Reconstruct the protocol, "
-                    "classify every parameter, scope any ambiguous gaps with a light "
-                    "literature search, then call request_clarifications.\n\n"
-                    "=== METHODS ===\n" + methods_text.strip()
-                ),
-            }
-        )
+
+        if pdf is not None:
+            import base64
+
+            b64 = base64.standard_b64encode(pdf).decode("ascii")
+            content = [
+                {
+                    "type": "document",
+                    "source": {"type": "base64", "media_type": "application/pdf", "data": b64},
+                },
+                {
+                    "type": "text",
+                    "text": (
+                        "The attached PDF is a full research paper. Locate its experimental "
+                        "Methods / Materials-and-Methods section (ignore abstract, intro, "
+                        "results, and references). Reconstruct the protocol from that section, "
+                        "classify every parameter, scope ambiguous gaps with a light literature "
+                        "search, then call request_clarifications. If the paper has no "
+                        "experimental methods section (e.g. a review), return usable=false."
+                    ),
+                },
+            ]
+        elif methods_text and methods_text.strip():
+            content = (
+                "Here is a published Methods section. Reconstruct the protocol, "
+                "classify every parameter, scope any ambiguous gaps with a light "
+                "literature search, then call request_clarifications.\n\n"
+                "=== METHODS ===\n" + methods_text.strip()
+            )
+        else:
+            raise AgentError("analyze() needs methods_text or pdf.")
+
+        session.messages.append({"role": "user", "content": content})
         tools = _grounding_tools() + [REQUEST_CLARIFICATIONS_TOOL]
         block = self._run(session.messages, tools, "request_clarifications")
         if block is None:

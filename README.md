@@ -22,7 +22,7 @@ resolve to `default_verify`. Verified citations get a ✓ badge; the rest are fl
 
 | Phase | What happens |
 |-------|--------------|
-| **1 — read, scope & ask** | Model reconstructs the protocol, classifies each parameter, runs a light scoping search for ambiguous gaps, and calls `request_clarifications` with 0–5 targeted questions (menu options carry their source + citation). |
+| **1 — read, scope & ask** | Input is pasted Methods text **or an uploaded PDF** (read natively via a `document` block; the model finds the Methods section). It reconstructs the protocol, classifies each parameter, runs a light scoping search for ambiguous gaps, and calls `request_clarifications` with 0–5 targeted questions (menu options carry their source + citation). |
 | **2 — research & ground** | Your answers come back as the tool result; the model grounds outcome-critical values with Anthropic's `web_search` plus app-run search tools — `search_pubmed` (NCBI), `search_preprints` (bioRxiv/medRxiv via Europe PMC), and `search_protocols` (protocols.io, if a token is set) — then calls `emit_protocol`. |
 | **3 — validate** | The host resolves every citation, enforces the provenance/citation invariants, checks the `assumptions_log` against the inline values, then renders the result. |
 
@@ -43,8 +43,10 @@ export ANTHROPIC_API_KEY=sk-ant-...        # or: cp .env.example .env  &&  edit
 uvicorn app.server:app --reload --port 8000
 ```
 
-Open <http://localhost:8000>, paste a Methods section (or click **Load example
-(CFPS)**), answer the questions, and read the protocol.
+Open <http://localhost:8000>, then either **paste a Methods section** (or click
+**Load example (CFPS)**) **or upload the paper as a PDF** — the API reads the PDF
+natively and the tool locates the Methods section itself. Answer the questions, and
+read the protocol.
 
 ### Configuration
 
