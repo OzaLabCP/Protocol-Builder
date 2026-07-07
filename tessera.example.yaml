@@ -1,0 +1,65 @@
+# Tessera configuration (spec §8). CLI flags override these; the resolved config is
+# written into every run directory (config.resolved.yaml) for provenance (§3.6).
+# All thresholds live here so stages never invent a default (§14.7).
+
+backbone: design.pdb          # fixed input backbone (§S1)
+seq: design.fasta             # companion sequence -> "sequenced" feature mode (preferred, §S2)
+out: runs/design_042
+
+retrieve: true                # false => --no-retrieve oracle-only design mode (§3.7)
+preset: null                  # 'strict' sets sep_min=24
+triage: false                 # true => run the 7A weak-region front-end instead of reinforcement
+
+# provenance pins (§8) — two runs with the same config but different DB versions are not comparable
+afdb50_release: null
+pdb_snapshot_date: null
+
+contact:                      # S1
+  d_contact: 8.0              # Å, Cβ–Cβ contact threshold
+  sep_min: 12                 # |i-j| minimum sequence separation (24 under 'strict')
+  support_strategy: reinforce-marginal   # or protect-loadbearing (§S1; validation §11.8)
+  buriedness_radius: 10.0
+  relax: false                # optional light idealization before extraction
+
+query:                        # S2
+  padding: 2                  # residues flanking each partner (±2)
+  dist_thresh: 1.0            # Folddisco -d
+  angle_thresh: 15.0          # Folddisco -a
+  feature_mode: null          # null => auto (sequenced iff a sequence is present)
+
+search:                       # S3
+  backend: mock               # mock | folddisco
+  index_dir: /data/afdb50_folddisco
+  source_db: afdb50           # afdb50 | swissprot | pdb (drives the §S4.2 pLDDT exemption)
+  top_n_prefilter: 2000
+  skip_match: false           # true => wide prefilter-only scan (§S3)
+
+stats:                        # S4
+  plddt_min: 70.0             # §S4.2 confidence filter
+  n_eff_min: 10.0             # below this a contact is low-confidence, excluded from S5 (§S4.4)
+  pseudocount_alpha: 0.5      # Dirichlet smoothing, background-weighted
+  clustering_backend: mock    # mock | mmseqs2 (redundancy reweighting, §6.3)
+  max_hits_to_cluster: 50000  # documented cap on hits fed to clustering (§10)
+  background:                 # the null f0(a,b) — determines the entire candidate ordering (§S4.4)
+    kind: geometry_burial_conditioned   # or independent_marginal (baseline only)
+    distance_bins_angstrom: [4.0, 5.0, 6.0, 7.0, 8.0]
+    corpus_id: pinned-highconf-contacts-v0
+
+candidate:                    # S5
+  top_k: 5
+  candidate_cap: 200          # bounds the oracle stage; beam-sampled per cluster (§S5)
+  propensity_margin: 0.0      # must beat the current assignment by this margin
+  forbid_surface_cys: true    # §7.2 surface-cysteine artifact
+  forbidden_residues: []
+  fixed_positions: []
+
+oracle:                       # S6
+  primary: mock               # mock | thermompnn-d | foldx | rosetta
+  cross_check: []             # optional §7.3 second opinions
+  foldx_license_path: null    # required if foldx selected (§9)
+  rosetta_license_path: null  # required if rosetta selected (§9)
+
+report:                       # S7
+  ddg_min_effect: -0.5        # §7.2 minimum effect size (kcal/mol); below this => "no confident effect"
+  emit_ligandmpnn_bias: true
+  emit_resfile: true

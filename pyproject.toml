@@ -65,3 +65,7 @@ packages = ["tessera"]
 mypy_path = "src"
 warn_unused_ignores = true
 disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = ["pandas.*", "pyarrow.*"]
+ignore_missing_imports = true

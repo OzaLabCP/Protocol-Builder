@@ -109,7 +109,9 @@ class MockFolddisco(FolddiscoBackend):
 
     name = "mock"
 
-    def __init__(self, n_hits: int = 48, n_families: int = 6) -> None:
+    def __init__(self, n_hits: int = 96, n_families: int = 16) -> None:
+        # enough independent families that a contact clears the default n_eff_min (10)
+        # even after the §S4.2 pLDDT filter drops a fraction of hits.
         self.n_hits = n_hits
         self.n_families = n_families
 
@@ -150,8 +152,8 @@ class MockFolddisco(FolddiscoBackend):
                 # a small per-target perturbation so families differ slightly
                 if ub > 0.85:
                     b = AA20[int(_stable_unit(target_id, p.j, "perturb") * 20)]
-                plddt_i = 50.0 + 45.0 * _stable_unit(target_id, p.i, "plddt")
-                plddt_j = 50.0 + 45.0 * _stable_unit(target_id, p.j, "plddt")
+                plddt_i = 62.0 + 33.0 * _stable_unit(target_id, p.i, "plddt")
+                plddt_j = 62.0 + 33.0 * _stable_unit(target_id, p.j, "plddt")
                 plddts += [plddt_i, plddt_j]
                 residues.append(
                     MatchedResidue(contact_id=p.contact_id, role="i", target_index=p.i,
