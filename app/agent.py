@@ -55,6 +55,15 @@ class Session:
     grounding_log: list = field(default_factory=list)  # queries the app ran
 
 
+@dataclass
+class RunState:
+    """Per-call mutable state. Kept off the (shared) agent instance so concurrent
+    requests through one GapFillerAgent don't clobber each other's session or budget."""
+
+    session: Session
+    searches_left: int
+
+
 def _web_search_tool() -> dict:
     return {
         "type": config.WEB_SEARCH_TYPE,
@@ -101,24 +110,21 @@ class GapFillerAgent:
         self.system = [
             {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
         ]
-        self._searches_left = 0
-        self._session: Optional[Session] = None
 
     # -- client-tool dispatch ---------------------------------------------------
-    def _dispatch(self, name: str, tool_input: dict) -> str:
+    def _dispatch(self, name: str, tool_input: dict, state: RunState) -> str:
         enabled = _enabled_client_tools()
         if name not in enabled:
             return f"Unknown or disabled tool: {name}"
-        if self._searches_left <= 0:
+        if state.searches_left <= 0:
             return (
                 "Search budget exhausted. Do not search again; fill any remaining "
                 "values from best_practice or default_verify and proceed to emit."
             )
-        self._searches_left -= 1
+        state.searches_left -= 1
         search_fn, formatter = enabled[name]
         query = str(tool_input.get("query", "")).strip()
-        if self._session is not None:
-            self._session.grounding_log.append(f"{name}: {query}")
+        state.session.grounding_log.append(f"{name}: {query}")
         try:
             results = search_fn(query, tool_input.get("retmax", 5))
         except Exception as exc:  # noqa: BLE001
@@ -129,7 +135,7 @@ class GapFillerAgent:
         return formatter(results)
 
     # -- one terminal-seeking run -----------------------------------------------
-    def _run(self, messages: list, tools: list, terminal_name: str) -> Optional[Any]:
+    def _run(self, messages: list, tools: list, terminal_name: str, state: RunState) -> Optional[Any]:
         """Loop until the model calls `terminal_name`. Resumes across server-tool
         pauses and executes client tools (search_pubmed) in between. Returns the
         terminal tool_use block, or None if the model ended without calling it."""
@@ -162,7 +168,7 @@ class GapFillerAgent:
                         {
                             "type": "tool_result",
                             "tool_use_id": b.id,
-                            "content": self._dispatch(b.name, dict(b.input)),
+                            "content": self._dispatch(b.name, dict(b.input), state),
                         }
                     )
             if not results:
@@ -181,8 +187,7 @@ class GapFillerAgent:
         """Start from pasted Methods text OR a full-paper PDF (read natively by the
         API). Exactly one of `methods_text` / `pdf` should be provided."""
         session = Session()
-        self._session = session
-        self._searches_left = config.PUBMED_BUDGET
+        state = RunState(session=session, searches_left=config.PUBMED_BUDGET)
 
         if pdf is not None:
             import base64
@@ -217,7 +222,7 @@ class GapFillerAgent:
 
         session.messages.append({"role": "user", "content": content})
         tools = _grounding_tools() + [REQUEST_CLARIFICATIONS_TOOL]
-        block = self._run(session.messages, tools, "request_clarifications")
+        block = self._run(session.messages, tools, "request_clarifications", state)
         if block is None:
             raise AgentError("Phase 1 ended without calling request_clarifications.")
         session.request_tool_use_id = block.id
@@ -228,8 +233,7 @@ class GapFillerAgent:
     def continue_with_answers(self, session: Session, answers: list) -> dict:
         if session.request_tool_use_id is None:
             raise AgentError("Session has no pending clarification to answer.")
-        self._session = session
-        self._searches_left = config.PUBMED_BUDGET
+        state = RunState(session=session, searches_left=config.PUBMED_BUDGET)
 
         session.messages.append(
             {
@@ -246,7 +250,7 @@ class GapFillerAgent:
         session.request_tool_use_id = None  # prevent a second answer submission
 
         tools = _grounding_tools() + [EMIT_PROTOCOL_TOOL]
-        block = self._run(session.messages, tools, "emit_protocol")
+        block = self._run(session.messages, tools, "emit_protocol", state)
         if block is not None:
             session.emit_tool_use_id = block.id
             return dict(block.input)
@@ -259,7 +263,7 @@ class GapFillerAgent:
                 "finalized, provenance-tagged protocol.",
             }
         )
-        block = self._run(session.messages, [EMIT_PROTOCOL_TOOL], "emit_protocol")
+        block = self._run(session.messages, [EMIT_PROTOCOL_TOOL], "emit_protocol", state)
         if block is None:
             raise AgentError("Phase 3 ended without calling emit_protocol.")
         session.emit_tool_use_id = block.id
@@ -271,8 +275,7 @@ class GapFillerAgent:
         model keeps all prior context and grounding."""
         if session.emit_tool_use_id is None:
             raise AgentError("Nothing to revise yet — emit a protocol first.")
-        self._session = session
-        self._searches_left = config.PUBMED_BUDGET
+        state = RunState(session=session, searches_left=config.PUBMED_BUDGET)
 
         session.messages.append(
             {
@@ -296,7 +299,7 @@ class GapFillerAgent:
         )
         session.emit_tool_use_id = None
         tools = _grounding_tools() + [EMIT_PROTOCOL_TOOL]
-        block = self._run(session.messages, tools, "emit_protocol")
+        block = self._run(session.messages, tools, "emit_protocol", state)
         if block is None:
             raise AgentError("Revision ended without calling emit_protocol.")
         session.emit_tool_use_id = block.id

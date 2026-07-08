@@ -5,12 +5,17 @@ from __future__ import annotations
 from collections import Counter
 
 
+def _safe_url(u: str) -> str:
+    s = str(u or "").strip()
+    return s if s.lower().startswith(("http://", "https://")) else ""
+
+
 def _cite(entry: dict) -> str:
     c = entry.get("citation")
     if not c:
         return ""
     ident = c.get("identifier", "")
-    url = c.get("url") or (
+    url = _safe_url(c.get("url")) or (
         f"https://doi.org/{ident}" if ident.startswith("10.") else
         f"https://pubmed.ncbi.nlm.nih.gov/{ident}/" if ident.isdigit() else ""
     )

@@ -32,7 +32,9 @@ from .render import protocol_to_markdown
 from .validation import validate_and_finalize
 
 MAX_PDF_BYTES = 25 * 1024 * 1024  # API hard limit is 32 MB; leave headroom
+MAX_TEXT_CHARS = int(os.environ.get("GAPFILLER_MAX_TEXT_CHARS", "200000"))
 SESSION_TTL = int(os.environ.get("GAPFILLER_SESSION_TTL", "3600"))
+MAX_SESSIONS = int(os.environ.get("GAPFILLER_MAX_SESSIONS", "500"))
 
 app = FastAPI(title="Methods Gap-Filler")
 
@@ -66,6 +68,10 @@ def _prune() -> None:
     cutoff = _now() - SESSION_TTL
     for sid in [s for s, st in _SESSIONS.items() if st.created < cutoff]:
         _SESSIONS.pop(sid, None)
+    # Hard cap on live sessions (bounded memory) — evict the oldest beyond the cap.
+    if len(_SESSIONS) > MAX_SESSIONS:
+        for sid, _st in sorted(_SESSIONS.items(), key=lambda kv: kv[1].created)[: len(_SESSIONS) - MAX_SESSIONS]:
+            _SESSIONS.pop(sid, None)
 
 
 def _get(session_id: str) -> Store:
@@ -134,6 +140,8 @@ def analyze(
         text = (methods_text or "").strip()
         if len(text) < 40:
             raise HTTPException(400, "Paste a Methods section (a few sentences) or choose a PDF.")
+        if len(text) > MAX_TEXT_CHARS:
+            raise HTTPException(400, f"That's very long (> {MAX_TEXT_CHARS} chars). Paste just the Methods section, or upload the PDF.")
 
     try:
         session = agent.analyze(pdf=pdf_bytes) if pdf_bytes is not None else agent.analyze(methods_text=methods_text.strip())

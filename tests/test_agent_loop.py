@@ -10,7 +10,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import literature  # noqa: E402
-from app.agent import GapFillerAgent, Session  # noqa: E402
+from app.agent import GapFillerAgent, RunState, Session  # noqa: E402
 
 
 class Block:
@@ -114,12 +114,27 @@ def test_revise_reemits_with_correction():
 def test_pubmed_budget_exhaustion():
     agent = make_agent([])  # no queue needed; test _dispatch directly
     literature.search_pubmed = lambda q, retmax=5: [{"pmid": "1", "title": "t", "authors": "A", "year": 2020, "doi": None}]
-    agent._searches_left = 1
-    agent._session = Session()
-    first = agent._dispatch("search_pubmed", {"query": "a"})
-    second = agent._dispatch("search_pubmed", {"query": "b"})
+    state = RunState(session=Session(), searches_left=1)
+    first = agent._dispatch("search_pubmed", {"query": "a"}, state)
+    second = agent._dispatch("search_pubmed", {"query": "b"}, state)
     assert "PMID 1" in first
     assert "budget exhausted" in second.lower()
+
+
+def test_dispatch_state_is_per_call_not_shared():
+    """Concurrency guard: one shared agent must not share budget/session across
+    calls — each RunState is independent."""
+    agent = make_agent([])
+    literature.search_pubmed = lambda q, retmax=5: [{"pmid": "1", "title": "t", "authors": "A", "year": 2020, "doi": None}]
+    a = RunState(session=Session(), searches_left=1)
+    b = RunState(session=Session(), searches_left=1)
+    agent._dispatch("search_pubmed", {"query": "qa"}, a)  # spends a's budget
+    # b still has its own budget and its own grounding log
+    out_b = agent._dispatch("search_pubmed", {"query": "qb"}, b)
+    assert "PMID 1" in out_b
+    assert a.searches_left == 0 and b.searches_left == 0
+    assert a.session.grounding_log == ["search_pubmed: qa"]
+    assert b.session.grounding_log == ["search_pubmed: qb"]  # not cross-contaminated
 
 
 if __name__ == "__main__":

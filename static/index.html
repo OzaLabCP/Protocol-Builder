@@ -139,6 +139,8 @@
 const $ = (s) => document.querySelector(s);
 const el = (t, c, h) => { const e = document.createElement(t); if (c) e.className = c; if (h != null) e.innerHTML = h; return e; };
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (m) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]));
+// Only allow http(s) links — model/search output could carry a javascript: URL.
+const safeUrl = (u) => { const s = String(u || "").trim(); return /^https?:\/\//i.test(s) ? s : null; };
 
 let SESSION = null;
 let GAPS = [];
@@ -254,7 +256,8 @@ function optionLabel(o) {
   if (o.citation) {
     const c = o.citation;
     const t = `${esc(c.authors || "")} (${esc(c.year || "")}) — ${esc(c.identifier || "")}`;
-    cite = c.url ? ` <a href="${esc(c.url)}" target="_blank" rel="noopener">${t}</a>` : ` <span class="cite">${t}</span>`;
+    const u = safeUrl(c.url);
+    cite = u ? ` <a href="${esc(u)}" target="_blank" rel="noopener">${t}</a>` : ` <span class="cite">${t}</span>`;
   }
   const note = o.note ? `<div class="note">${esc(o.note)}</div>` : "";
   return `<b>${esc(o.label)}</b> ${tag}${cite}${note}`;
@@ -432,7 +435,8 @@ function citeInline(entry) {
   const c = entry.citation;
   const label = `${esc(c.authors || "")} ${esc(c.year || "")} — ${esc(c.identifier || "")}`;
   const badge = entry.citation_verified ? ' <span class="badge-ok">✓ verified</span>' : ' <span class="badge-warn">⚠ unverified</span>';
-  const link = c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">${label}</a>` : `<span class="cite">${label}</span>`;
+  const u = safeUrl(c.url);
+  const link = u ? `<a href="${esc(u)}" target="_blank" rel="noopener">${label}</a>` : `<span class="cite">${label}</span>`;
   return `<div class="cite">${link}${badge}</div>`;
 }
 
