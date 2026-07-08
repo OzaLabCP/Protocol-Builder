@@ -50,6 +50,7 @@ class AgentError(RuntimeError):
 class Session:
     messages: list = field(default_factory=list)
     request_tool_use_id: Optional[str] = None
+    emit_tool_use_id: Optional[str] = None  # last emit_protocol call, for revisions
     phase1: Optional[dict] = None
     grounding_log: list = field(default_factory=list)  # queries the app ran
 
@@ -247,6 +248,7 @@ class GapFillerAgent:
         tools = _grounding_tools() + [EMIT_PROTOCOL_TOOL]
         block = self._run(session.messages, tools, "emit_protocol")
         if block is not None:
+            session.emit_tool_use_id = block.id
             return dict(block.input)
 
         # Model stopped without emitting — nudge once, emit-only (no search tools).
@@ -260,4 +262,42 @@ class GapFillerAgent:
         block = self._run(session.messages, [EMIT_PROTOCOL_TOOL], "emit_protocol")
         if block is None:
             raise AgentError("Phase 3 ended without calling emit_protocol.")
+        session.emit_tool_use_id = block.id
+        return dict(block.input)
+
+    # -- Revise (edit-and-regenerate) -------------------------------------------
+    def revise(self, session: Session, instruction: str) -> dict:
+        """Feed a correction and re-emit. Continues the same conversation, so the
+        model keeps all prior context and grounding."""
+        if session.emit_tool_use_id is None:
+            raise AgentError("Nothing to revise yet — emit a protocol first.")
+        self._session = session
+        self._searches_left = config.PUBMED_BUDGET
+
+        session.messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": session.emit_tool_use_id,
+                        "content": "Protocol received.",
+                    },
+                    {
+                        "type": "text",
+                        "text": (
+                            "Apply this correction and call emit_protocol again with the "
+                            "full, updated protocol (keep everything else unchanged; ground "
+                            "any newly filled values):\n\n" + instruction.strip()
+                        ),
+                    },
+                ],
+            }
+        )
+        session.emit_tool_use_id = None
+        tools = _grounding_tools() + [EMIT_PROTOCOL_TOOL]
+        block = self._run(session.messages, tools, "emit_protocol")
+        if block is None:
+            raise AgentError("Revision ended without calling emit_protocol.")
+        session.emit_tool_use_id = block.id
         return dict(block.input)

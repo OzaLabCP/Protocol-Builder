@@ -45,8 +45,20 @@ uvicorn app.server:app --reload --port 8000
 
 Open <http://localhost:8000>, then either **paste a Methods section** (or click
 **Load example (CFPS)**) **or upload the paper as a PDF** — the API reads the PDF
-natively and the tool locates the Methods section itself. Answer the questions, and
-read the protocol.
+natively and the tool locates the Methods section itself. Answer the questions, read
+the protocol, then **download it as Markdown**, **print / save as PDF**, or **refine
+it** ("use 150 µL wells and drop to 2 replicates") to rebuild with full context.
+
+### Deploy (Docker)
+
+```bash
+docker build -t methods-gap-filler .
+docker run -p 8000:8000 -e ANTHROPIC_API_KEY=sk-ant-... methods-gap-filler
+```
+
+Sessions are in memory, so run **one worker** (the image does). `GET /healthz` reports
+liveness, the model, and which grounding sources are enabled. Sessions expire after
+`GAPFILLER_SESSION_TTL` seconds (default 3600).
 
 ### Configuration
 
@@ -80,13 +92,26 @@ app/
   schemas.py      # the two tool input_schemas (request_clarifications, emit_protocol)
   prompts.py      # the protocol-engineer system prompt
   agent.py        # the three-phase tool-use loop (dispatches client tools)
-  literature.py   # search_pubmed grounding tool (NCBI E-utilities)
-  resolvers.py    # DOI/PMID resolution (Crossref / PubMed)
+  literature.py   # PubMed / preprint / protocols.io grounding tools
+  resolvers.py    # DOI/PMID resolution (Crossref -> DataCite / PubMed)
   validation.py   # host-side citation validation + invariants + consistency
-  server.py       # FastAPI endpoints + session store
-static/index.html # paste-text UI + provenance-tagged render
-tests/            # validation unit tests
+  render.py       # protocol -> Markdown export
+  server.py       # FastAPI endpoints (analyze/resolve/revise/export) + sessions
+static/index.html # paste/PDF UI, provenance render, export + refine controls
+tests/            # 34 tests across validation, grounding, agent loop, render, HTTP
+Dockerfile        # single-worker container; /healthz healthcheck
 ```
+
+### Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/` | UI |
+| `GET` | `/healthz` | liveness + config |
+| `POST` | `/api/analyze` | Phase 1 (multipart: `methods_text` field or PDF `file`) |
+| `POST` | `/api/resolve` | Phase 2 + 3 + validation |
+| `POST` | `/api/revise` | apply a correction and re-emit |
+| `GET` | `/api/protocol/{id}.md` | download the protocol as Markdown |
 
 ## Notes & next steps
 

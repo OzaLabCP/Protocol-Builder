@@ -81,6 +81,20 @@
   li { margin: 4px 0; }
   h2 { font-size: 17px; margin: 22px 0 8px; }
   h3 { font-size: 15px; margin: 16px 0 6px; }
+  .toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin: 14px 0 6px; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; background: var(--accent); color: #0a0d13;
+    border: 0; border-radius: 8px; padding: 9px 14px; font-weight: 600; font-size: 13.5px; cursor: pointer; text-decoration: none; }
+  .btn.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--line); }
+  .refine { margin-top: 26px; padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel2); }
+  .refine textarea { min-height: 0; margin: 8px 0; }
+  @media print {
+    body { background: #fff; color: #000; }
+    header, #input-panel, #questions-panel, .noprint, .toolbar, .refine { display: none !important; }
+    .panel { border: 0; background: #fff; margin: 0; padding: 0; }
+    main { max-width: 100%; padding: 0; }
+    a { color: #000; text-decoration: underline; }
+    .tier { border: 1px solid #999; color: #000 !important; background: #fff !important; }
+  }
 </style>
 </head>
 <body>
@@ -128,6 +142,8 @@ const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (m) => ({"&":"&
 
 let SESSION = null;
 let GAPS = [];
+let MD_URL = null;
+let GLOG = [];
 
 const EXAMPLE = `CFPS reactions were assembled with S30 extract prepared as described previously and a PANOx-SP energy system, and incubated at 30 C. The template plasmid encoded a single-chain antibody fragment. Disulfide-bonded, correctly folded product was obtained. Reactions were quenched and product yield was quantified by radioactive leucine incorporation.`;
 
@@ -169,7 +185,13 @@ function handlePhase(r) {
     return;
   }
   if (r.phase === "questions") { renderQuestions(r.phase1); return; }
-  if (r.phase === "complete") { renderProtocol(r.protocol); return; }
+  if (r.phase === "complete") { renderResult(r); return; }
+}
+
+function renderResult(r) {
+  MD_URL = r.markdown_url || null;
+  GLOG = r.grounding_log || [];
+  renderProtocol(r.protocol);
 }
 
 function renderQuestions(p1) {
@@ -251,7 +273,7 @@ $("#submit-answers").onclick = async () => {
   lock(true, "Grounding values in the literature and verifying citations… (this can take a minute or two)");
   try {
     const r = await postJSON("/api/resolve", { session_id: SESSION, answers });
-    renderProtocol(r.protocol);
+    renderResult(r);
     hide("#questions-panel");
   } catch (e) { setStatus(e.message, true); }
   lock(false);
@@ -290,6 +312,7 @@ function renderProtocol(p) {
   if (p.summary) P.appendChild(el("p", "muted", esc(p.summary)));
   if (p.estimated_duration) P.appendChild(el("p", "muted", "Estimated duration: " + esc(p.estimated_duration)));
 
+  P.appendChild(toolbar());
   P.appendChild(validationSummary(p.validation_report));
   P.appendChild(legend());
 
@@ -355,8 +378,51 @@ function renderProtocol(p) {
     const ul = el("ul"); p.open_questions.forEach((q) => ul.appendChild(el("li", "muted", esc(q)))); P.appendChild(ul);
   }
 
+  if (GLOG.length) {
+    P.appendChild(el("h3", "noprint", "How values were grounded"));
+    const ul = el("ul", "noprint");
+    GLOG.forEach((g) => ul.appendChild(el("li", "muted", esc(g))));
+    P.appendChild(ul);
+  }
+
+  P.appendChild(refineBox());
+
   show("#result-panel");
   P.scrollIntoView({ behavior: "smooth" });
+}
+
+function toolbar() {
+  const bar = el("div", "toolbar noprint");
+  if (MD_URL) {
+    const dl = el("a", "btn", "⬇ Download .md");
+    dl.href = MD_URL; dl.setAttribute("download", "");
+    bar.appendChild(dl);
+  }
+  const pr = el("button", "btn secondary", "🖨 Print / Save PDF");
+  pr.onclick = () => window.print();
+  bar.appendChild(pr);
+  return bar;
+}
+
+function refineBox() {
+  const box = el("div", "refine noprint");
+  box.appendChild(el("h3", null, "Refine this protocol"));
+  box.appendChild(el("p", "muted small", "Describe a change and it rebuilds with full context — e.g. “use 150 µL wells and drop to 2 replicates”, or “switch the folding aid to DsbC”."));
+  const ta = el("textarea"); ta.id = "revise-text"; ta.rows = 2; ta.placeholder = "Your correction…";
+  box.appendChild(ta);
+  const btn = el("button", "btn", "Apply correction & rebuild");
+  btn.onclick = async () => {
+    const instruction = ta.value.trim();
+    if (instruction.length < 3) { setStatus("Describe the change first.", true); return; }
+    btn.disabled = true; setStatus("Rebuilding with your correction…");
+    try {
+      const r = await postJSON("/api/revise", { session_id: SESSION, instruction });
+      renderResult(r);
+    } catch (e) { setStatus(e.message, true); btn.disabled = false; }
+    setStatus("");
+  };
+  box.appendChild(btn);
+  return box;
 }
 
 function tierPill(t) { return `<span class="tier t-${esc(t)}">${esc((t || "").replace(/_/g, " "))}</span>`; }

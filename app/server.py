@@ -1,36 +1,53 @@
-"""FastAPI app: paste-text in, provenance-tagged protocol out.
+"""FastAPI app: paste-text or PDF in, provenance-tagged protocol out, with
+export and edit-and-regenerate.
 
-Two endpoints mirror the phase boundary:
-  POST /api/analyze  -> Phase 1 (questions, or straight to emit if no gaps)
-  POST /api/resolve  -> Phase 2 + 3 + host-side validation
+Endpoints:
+  GET  /                       -> the UI
+  GET  /healthz                -> liveness + config
+  POST /api/analyze            -> Phase 1 (multipart: methods_text field or PDF file)
+  POST /api/resolve            -> Phase 2 + 3 + validation
+  POST /api/revise             -> apply a correction and re-emit
+  GET  /api/protocol/{sid}.md  -> download the current protocol as Markdown
 
-Sessions are held in memory (single-process demo). The browser only carries a
-session_id; the message history stays server-side.
+Sessions are held in memory (run one worker) and expire after SESSION_TTL.
 """
 
 from __future__ import annotations
 
+import os
+import time
 import uuid
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-MAX_PDF_BYTES = 25 * 1024 * 1024  # API hard limit is 32 MB; leave headroom
-
-from pathlib import Path
-
+from . import config
 from .agent import AgentError, GapFillerAgent, Session
+from .render import protocol_to_markdown
 from .validation import validate_and_finalize
+
+MAX_PDF_BYTES = 25 * 1024 * 1024  # API hard limit is 32 MB; leave headroom
+SESSION_TTL = int(os.environ.get("GAPFILLER_SESSION_TTL", "3600"))
 
 app = FastAPI(title="Methods Gap-Filler")
 
 _STATIC = Path(__file__).resolve().parent.parent / "static"
 app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
 
-_SESSIONS: dict[str, Session] = {}
+
+@dataclass
+class Store:
+    session: Session
+    created: float
+    protocol: Optional[dict] = None
+
+
+_SESSIONS: dict[str, Store] = {}
 _agent: Optional[GapFillerAgent] = None
 
 
@@ -40,6 +57,26 @@ def get_agent() -> GapFillerAgent:
         _agent = GapFillerAgent()
     return _agent
 
+
+def _now() -> float:
+    return time.time()
+
+
+def _prune() -> None:
+    cutoff = _now() - SESSION_TTL
+    for sid in [s for s, st in _SESSIONS.items() if st.created < cutoff]:
+        _SESSIONS.pop(sid, None)
+
+
+def _get(session_id: str) -> Store:
+    _prune()
+    store = _SESSIONS.get(session_id)
+    if store is None:
+        raise HTTPException(404, "Unknown or expired session. Start over.")
+    return store
+
+
+# ---------------------------------------------------------------------------
 
 class Answer(BaseModel):
     id: str
@@ -52,9 +89,29 @@ class ResolveRequest(BaseModel):
     answers: list[Answer] = []
 
 
+class ReviseRequest(BaseModel):
+    session_id: str
+    instruction: str
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(str(_STATIC / "index.html"))
+
+
+@app.get("/healthz")
+def healthz() -> dict:
+    return {
+        "status": "ok",
+        "model": config.MODEL,
+        "grounding": {
+            "web_search": config.ENABLE_WEB_SEARCH,
+            "pubmed": config.ENABLE_PUBMED,
+            "preprints": config.ENABLE_PREPRINTS,
+            "protocols_io": config.ENABLE_PROTOCOLS_IO,
+        },
+        "sessions": len(_SESSIONS),
+    }
 
 
 @app.post("/api/analyze")
@@ -62,8 +119,7 @@ def analyze(
     methods_text: str = Form(default=""),
     file: Optional[UploadFile] = File(default=None),
 ) -> dict:
-    """Accept either a pasted Methods section (form field) or an uploaded PDF.
-    If both are given, the PDF wins."""
+    _prune()
     agent = get_agent()
     pdf_bytes: Optional[bytes] = None
 
@@ -80,55 +136,89 @@ def analyze(
             raise HTTPException(400, "Paste a Methods section (a few sentences) or choose a PDF.")
 
     try:
-        if pdf_bytes is not None:
-            session = agent.analyze(pdf=pdf_bytes)
-        else:
-            session = agent.analyze(methods_text=methods_text.strip())
-    except AgentError as exc:
-        raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
-    except Exception as exc:  # noqa: BLE001 - surface API/setup errors to the client
-        raise HTTPException(500, _explain(exc))
-
-    session_id = uuid.uuid4().hex
-    _SESSIONS[session_id] = session
-    phase1 = session.phase1 or {}
-
-    if not phase1.get("usable", False):
-        return {"session_id": session_id, "phase": "rejected", "phase1": phase1}
-
-    gaps = phase1.get("gaps") or []
-    if not gaps:
-        # No gaps: skip the question step, go straight to emit.
-        return _resolve(session_id, [])
-
-    return {"session_id": session_id, "phase": "questions", "phase1": phase1}
-
-
-@app.post("/api/resolve")
-def resolve(req: ResolveRequest) -> dict:
-    answers = [a.model_dump() for a in req.answers]
-    return _resolve(req.session_id, answers)
-
-
-def _resolve(session_id: str, answers: list) -> dict:
-    session = _SESSIONS.get(session_id)
-    if session is None:
-        raise HTTPException(404, "Unknown or expired session. Start over.")
-    agent = get_agent()
-    try:
-        protocol = agent.continue_with_answers(session, answers)
+        session = agent.analyze(pdf=pdf_bytes) if pdf_bytes is not None else agent.analyze(methods_text=methods_text.strip())
     except AgentError as exc:
         raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(500, _explain(exc))
 
+    session_id = uuid.uuid4().hex
+    _SESSIONS[session_id] = Store(session=session, created=_now())
+    phase1 = session.phase1 or {}
+
+    if not phase1.get("usable", False):
+        return {"session_id": session_id, "phase": "rejected", "phase1": phase1}
+    if not (phase1.get("gaps") or []):
+        return _resolve(session_id, [])  # no gaps -> straight to emit
+    return {"session_id": session_id, "phase": "questions", "phase1": phase1}
+
+
+@app.post("/api/resolve")
+def resolve(req: ResolveRequest) -> dict:
+    return _resolve(req.session_id, [a.model_dump() for a in req.answers])
+
+
+@app.post("/api/revise")
+def revise(req: ReviseRequest) -> dict:
+    instruction = (req.instruction or "").strip()
+    if len(instruction) < 3:
+        raise HTTPException(400, "Describe the correction you'd like.")
+    store = _get(req.session_id)
+    agent = get_agent()
+    try:
+        protocol = agent.revise(store.session, instruction)
+    except AgentError as exc:
+        raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, _explain(exc))
+    return _finish(req.session_id, store, protocol)
+
+
+@app.get("/api/protocol/{session_id}.md")
+def download_markdown(session_id: str) -> PlainTextResponse:
+    store = _get(session_id)
+    if store.protocol is None:
+        raise HTTPException(404, "No protocol generated for this session yet.")
+    md = protocol_to_markdown(store.protocol)
+    fname = _slug(store.protocol.get("title", "protocol")) + ".md"
+    return PlainTextResponse(
+        md,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+def _resolve(session_id: str, answers: list) -> dict:
+    store = _get(session_id)
+    agent = get_agent()
+    try:
+        protocol = agent.continue_with_answers(store.session, answers)
+    except AgentError as exc:
+        raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, _explain(exc))
+    return _finish(session_id, store, protocol)
+
+
+def _finish(session_id: str, store: Store, protocol: dict) -> dict:
     report = validate_and_finalize(protocol)
+    store.protocol = protocol
     return {
         "session_id": session_id,
         "phase": "complete",
         "protocol": protocol,
         "validation_report": report,
+        "grounding_log": store.session.grounding_log,
+        "markdown_url": f"/api/protocol/{session_id}.md",
     }
+
+
+def _slug(title: str) -> str:
+    keep = [c.lower() if c.isalnum() else "-" for c in (title or "protocol")]
+    s = "".join(keep).strip("-")
+    while "--" in s:
+        s = s.replace("--", "-")
+    return s[:60] or "protocol"
 
 
 def _explain(exc: Exception) -> str:
