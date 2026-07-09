@@ -87,6 +87,18 @@
   .btn.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--line); }
   .design { margin: 18px 0; padding: 4px 18px 16px; border: 1px solid var(--line); border-left: 3px solid var(--best); border-radius: 10px; background: var(--panel2); }
   .design h2 { color: var(--best); }
+  .align { margin: 18px 0; padding: 4px 18px 16px; border: 1px solid var(--line); border-left: 3px solid var(--user); border-radius: 10px; background: var(--panel2); }
+  .align h2 { color: var(--user); }
+  .verdict { display: inline-block; font-weight: 700; padding: 3px 12px; border-radius: 999px; font-size: 13.5px; }
+  .v-yes { background: rgba(74,192,122,.16); color: var(--stated); }
+  .v-partial { background: rgba(242,177,58,.16); color: var(--verify); }
+  .v-no { background: rgba(239,106,106,.16); color: var(--danger); }
+  .rec { border-top: 1px solid var(--line); padding: 10px 0; }
+  .rec:first-of-type { border-top: 0; }
+  .rec .type-tag { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); margin-right: 6px; }
+  .rec .addresses { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
+  .rec .apply { margin-top: 6px; padding: 6px 12px; font-size: 12.5px; }
+  .rec.applied { opacity: .6; }
   ul.gaps li { color: var(--verify); }
   .refine { margin-top: 26px; padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel2); }
   .refine textarea { min-height: 0; margin: 8px 0; }
@@ -117,6 +129,8 @@
       <span id="pdf-label">Upload the paper as a PDF</span>
     </label>
     <p class="muted small">If you choose a PDF, it's used instead of the pasted text — the tool finds the Methods section for you.</p>
+    <label class="muted" for="hypothesis" style="display:block;margin-top:14px">Your hypothesis <span class="small">(optional — orients the protocol and lets you check it's directly tested)</span></label>
+    <input type="text" id="hypothesis" placeholder="e.g. Adding DsbC increases the yield of correctly folded, disulfide-bonded scFv" style="margin-top:6px" />
     <div class="row">
       <button id="analyze">Analyze</button>
       <button class="secondary" id="example">Load example (CFPS)</button>
@@ -149,6 +163,7 @@ let SESSION = null;
 let GAPS = [];
 let MD_URL = null;
 let GLOG = [];
+let HYP = "";
 
 const EXAMPLE = `CFPS reactions were assembled with S30 extract prepared as described previously and a PANOx-SP energy system, and incubated at 30 C. The template plasmid encoded a single-chain antibody fragment. Disulfide-bonded, correctly folded product was obtained. Reactions were quenched and product yield was quantified by radioactive leucine incorporation.`;
 
@@ -177,6 +192,9 @@ $("#analyze").onclick = async () => {
   try {
     const fd = new FormData();
     if (file) fd.append("file", file); else fd.append("methods_text", text);
+    const hyp = $("#hypothesis").value.trim();
+    if (hyp) fd.append("hypothesis", hyp);
+    HYP = hyp;
     const r = await postForm("/api/analyze", fd);
     handlePhase(r);
   } catch (e) { setStatus(e.message, true); }
@@ -319,6 +337,7 @@ function renderProtocol(p) {
   if (p.estimated_duration) P.appendChild(el("p", "muted", "Estimated duration: " + esc(p.estimated_duration)));
 
   P.appendChild(toolbar());
+  P.appendChild(el("div", null, "")).id = "align-anchor";
   P.appendChild(el("div", null, "")).id = "design-anchor";
   P.appendChild(validationSummary(p.validation_report));
   P.appendChild(legend());
@@ -405,6 +424,10 @@ function toolbar() {
     dl.href = MD_URL; dl.setAttribute("download", "");
     bar.appendChild(dl);
   }
+  const al = el("button", "btn", "🎯 Test my hypothesis");
+  al.title = "Does this protocol directly test your hypothesis? Get a verdict, the critical comparison, confounds, and one-click protocol fixes.";
+  al.onclick = () => requestAlignment(al);
+  bar.appendChild(al);
   const dr = el("button", "btn", "🎓 Design review");
   dr.title = "Teach the experiment around this protocol: hypothesis, controls, readout, replication, pitfalls";
   dr.onclick = () => requestDesign(dr);
@@ -423,6 +446,102 @@ async function requestDesign(btn) {
     setStatus("");
   } catch (e) { setStatus(e.message, true); }
   btn.disabled = false;
+}
+
+async function requestAlignment(btn) {
+  btn.disabled = true;
+  setStatus("Checking whether the protocol directly tests your hypothesis… (this can take a minute)");
+  try {
+    const body = { session_id: SESSION };
+    if (HYP) body.hypothesis = HYP;
+    const r = await postJSON("/api/align", body);
+    renderAlignment(r.design_alignment);
+    setStatus("");
+  } catch (e) { setStatus(e.message, true); }
+  btn.disabled = false;
+}
+
+const VERDICT = {
+  yes: ["v-yes", "✓ Directly tests your hypothesis"],
+  partial: ["v-partial", "◐ Only partially tests your hypothesis"],
+  no: ["v-no", "✗ Does not directly test your hypothesis"],
+};
+
+function renderAlignment(a) {
+  const host = $("#align-anchor");
+  host.innerHTML = "";
+  const box = el("div", "align");
+  box.appendChild(el("h2", null, "🎯 Does this test your hypothesis?"));
+
+  const h = a.hypothesis || {};
+  if (h.statement) {
+    const tag = a.inferred ? ' <span class="src-tag">inferred</span>' : "";
+    box.appendChild(el("p", null, `<b>Hypothesis.</b> ${esc(h.statement)}${tag}`));
+    const ul = el("ul");
+    if (h.prediction_if_true) ul.appendChild(el("li", null, `<b>If true →</b> ${esc(h.prediction_if_true)}`));
+    if (h.prediction_if_false) ul.appendChild(el("li", null, `<b>If false →</b> ${esc(h.prediction_if_false)}`));
+    if (ul.children.length) box.appendChild(ul);
+  }
+
+  const dt = a.directly_tests || {};
+  if (dt.verdict) {
+    const [cls, label] = VERDICT[dt.verdict] || ["v-partial", dt.verdict];
+    box.appendChild(el("p", null, `<span class="verdict ${cls}">${esc(label)}</span>`));
+    if (dt.rationale) box.appendChild(el("p", "muted", esc(dt.rationale)));
+  }
+
+  if (a.critical_comparison) {
+    box.appendChild(el("h3", null, "The comparison that makes it a valid test"));
+    box.appendChild(el("p", null, esc(a.critical_comparison)));
+  }
+
+  if ((a.alignment_gaps || []).length) {
+    box.appendChild(el("h3", null, "Where it falls short"));
+    const ul = el("ul", "gaps");
+    a.alignment_gaps.forEach((g) => ul.appendChild(el("li", null, `<b>${esc(g.gap)}</b> — ${esc(g.why_it_breaks_the_test)}`)));
+    box.appendChild(ul);
+  }
+
+  if ((a.confounds || []).length) {
+    box.appendChild(el("h3", null, "Confounds that would make a positive result ambiguous"));
+    const ul = el("ul");
+    a.confounds.forEach((c) => {
+      const mit = c.mitigation ? ` <span class="muted">Mitigation: ${esc(c.mitigation)}</span>` : "";
+      ul.appendChild(el("li", null, `<b>${esc(c.confound)}</b> — ${esc(c.makes_result_ambiguous)}.${mit}`));
+    });
+    box.appendChild(ul);
+  }
+
+  if ((a.recommended_changes || []).length) {
+    box.appendChild(el("h3", null, "Recommended changes — apply to make it a direct test"));
+    box.appendChild(el("p", "muted small noprint", "Each button rebuilds the protocol with that change, keeping everything else."));
+    a.recommended_changes.forEach((c) => box.appendChild(recRow(c)));
+  }
+
+  if (a.summary) box.appendChild(el("p", null, `<b>Bottom line.</b> ${esc(a.summary)}`));
+
+  host.appendChild(box);
+  box.scrollIntoView({ behavior: "smooth" });
+}
+
+function recRow(c) {
+  const row = el("div", "rec");
+  const tag = c.type ? `<span class="type-tag">${esc(c.type.replace(/_/g, " "))}</span>` : "";
+  row.appendChild(el("div", null, `${tag}${esc(c.change)}`));
+  if (c.addresses) row.appendChild(el("div", "addresses", "Addresses: " + esc(c.addresses)));
+  const btn = el("button", "btn apply noprint", "Apply to protocol");
+  btn.onclick = async () => {
+    btn.disabled = true; setStatus("Applying the change and rebuilding the protocol…");
+    try {
+      const r = await postJSON("/api/revise", { session_id: SESSION, instruction: c.change });
+      row.classList.add("applied");
+      btn.textContent = "✓ Applied — protocol rebuilt below";
+      renderResult(r);
+    } catch (e) { setStatus(e.message, true); btn.disabled = false; }
+    setStatus("");
+  };
+  row.appendChild(btn);
+  return row;
 }
 
 function renderDesign(d) {

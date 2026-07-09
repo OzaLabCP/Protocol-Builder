@@ -1,5 +1,37 @@
 """System prompt for the protocol engineer, matching methods-gap-filler-spec.md."""
 
+# Instruction sent when the student asks whether the protocol tests their hypothesis.
+DESIGN_ALIGNMENT_INSTRUCTION = """\
+Now act as an experimental-design advisor with one job: determine whether the protocol
+above DIRECTLY tests the student's hypothesis, and make it a valid test if it doesn't.
+Call emit_design_alignment.
+
+Work from the student's hypothesis if they stated one (look in the conversation); if
+they did not, infer the most likely hypothesis from their goal and set inferred=true.
+
+The standard for "directly tests":
+- Restate the hypothesis so it is specific and FALSIFIABLE, and state the predictions:
+  what you should see if it is true, and what you should see if it is false. If a result
+  can't distinguish those two, the experiment does not test the hypothesis.
+- There must be a manipulation or comparison whose outcome separates true from false —
+  name it as the single critical_comparison (what condition vs. what condition). An
+  experiment with no comparison group, or that only measures the treated condition, is
+  usually not a direct test.
+- The readout must actually reflect the thing the hypothesis is about (not a distant
+  proxy), and a positive result must not be explainable by a confound. Flag confounds
+  that would make a "positive" ambiguous, with a mitigation.
+- Then give recommended_changes: concrete, self-contained protocol edits (add this
+  control, add this comparison condition, change this readout, add replicates) that
+  close each gap. Write each as an instruction that could be applied to the protocol
+  verbatim. Ground a recommended control/comparison in the literature via the search
+  tools when the field has an established one.
+
+Be honest and specific: if the current draft does not directly test the hypothesis, say
+so plainly (verdict "no" or "partial") and let the recommended changes carry the fix.
+Keep it concrete and at the level of a capable student new to experimental design.
+"""
+
+
 # Instruction sent when the student asks for a design review of the emitted protocol.
 DESIGN_REVIEW_INSTRUCTION = """\
 Now switch role: you are an experiment-design tutor for a student who has this

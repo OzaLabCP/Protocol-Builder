@@ -60,6 +60,18 @@ def test_design_unknown_session_is_404():
     assert r.status_code == 404
 
 
+def test_align_unknown_session_is_404():
+    r = client.post("/api/align", json={"session_id": "nope"})
+    assert r.status_code == 404
+
+
+def test_analyze_accepts_hypothesis_field():
+    # hypothesis is optional; with empty text the endpoint still 400s on the text,
+    # proving the field is accepted (not a 422 unprocessable-entity from an unknown form field).
+    r = client.post("/api/analyze", data={"methods_text": "", "hypothesis": "X increases Y"})
+    assert r.status_code == 400
+
+
 if __name__ == "__main__":
     import traceback
 

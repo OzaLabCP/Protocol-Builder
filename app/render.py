@@ -124,6 +124,61 @@ def protocol_to_markdown(p: dict) -> str:
     return "\n".join(out)
 
 
+_VERDICT_LABEL = {"yes": "✓ Directly tests the hypothesis",
+                  "partial": "◐ Partially tests the hypothesis",
+                  "no": "✗ Does not directly test the hypothesis"}
+
+
+def design_alignment_to_markdown(a: dict) -> str:
+    out: list[str] = ["# Does this test your hypothesis?\n"]
+    h = a.get("hypothesis") or {}
+    if h.get("statement"):
+        tag = " *(inferred)*" if a.get("inferred") else ""
+        out.append(f"**Hypothesis{tag}:** {h['statement']}")
+        if h.get("prediction_if_true"):
+            out.append(f"- If true → {h['prediction_if_true']}")
+        if h.get("prediction_if_false"):
+            out.append(f"- If false → {h['prediction_if_false']}")
+        out.append("")
+
+    dt = a.get("directly_tests") or {}
+    if dt:
+        out.append(f"**Verdict:** {_VERDICT_LABEL.get(dt.get('verdict'), dt.get('verdict',''))}")
+        if dt.get("rationale"):
+            out.append(f"> {dt['rationale']}")
+        out.append("")
+
+    if a.get("critical_comparison"):
+        out.append(f"**The comparison that makes it a valid test:** {a['critical_comparison']}\n")
+
+    gaps = a.get("alignment_gaps") or []
+    if gaps:
+        out.append("## Where it falls short of testing the hypothesis\n")
+        for g in gaps:
+            out.append(f"- **{g.get('gap','')}** — {g.get('why_it_breaks_the_test','')}")
+        out.append("")
+
+    conf = a.get("confounds") or []
+    if conf:
+        out.append("## Confounds that would make a positive result ambiguous\n")
+        for c in conf:
+            mit = f" *Mitigation:* {c['mitigation']}" if c.get("mitigation") else ""
+            out.append(f"- **{c.get('confound','')}** — {c.get('makes_result_ambiguous','')}.{mit}")
+        out.append("")
+
+    rc = a.get("recommended_changes") or []
+    if rc:
+        out.append("## Recommended protocol changes (to make it a direct test)\n")
+        for c in rc:
+            out.append(f"- **[{c.get('type','change')}]** {c.get('change','')}  \n"
+                       f"  *Addresses:* {c.get('addresses','')}")
+        out.append("")
+
+    if a.get("summary"):
+        out.append(f"**Bottom line:** {a['summary']}")
+    return "\n".join(out)
+
+
 def design_review_to_markdown(d: dict) -> str:
     out: list[str] = ["# Experiment design review\n"]
     if d.get("question"):

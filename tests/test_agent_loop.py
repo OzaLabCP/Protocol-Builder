@@ -124,6 +124,36 @@ def test_design_review_emits():
     assert session.pending_tool_use_id == "d1"  # can chain further follow-ups
 
 
+def test_design_alignment_emits_and_uses_hypothesis():
+    alignment = {
+        "hypothesis": {"statement": "s", "prediction_if_true": "t", "prediction_if_false": "f"},
+        "directly_tests": {"verdict": "no", "rationale": "r"},
+        "critical_comparison": "A vs B", "alignment_gaps": [], "recommended_changes": [],
+        "summary": "add a control",
+    }
+    session = Session(messages=[{"role": "user", "content": "seed"}], pending_tool_use_id="e1")
+    queue = [Resp([Block("emit_design_alignment", "a1", alignment)])]
+    agent = make_agent(queue)
+    out = agent.design_alignment(session, hypothesis="DsbC raises folded yield")
+    assert out["directly_tests"]["verdict"] == "no"
+    assert session.pending_tool_use_id == "a1"
+    assert session.hypothesis == "DsbC raises folded yield"
+    # the hypothesis is injected into the instruction the model sees
+    last_user = [m for m in session.messages if m["role"] == "user"][-1]
+    text = [b for b in last_user["content"] if b.get("type") == "text"][0]["text"]
+    assert "DsbC raises folded yield" in text
+
+
+def test_analyze_captures_hypothesis_and_injects_preamble():
+    queue = [Resp([Block("request_clarifications", "c1", {"usable": True, "gaps": []})])]
+    agent = make_agent(queue)
+    session = agent.analyze("A methods section describing a CFPS reaction with S30 extract.",
+                            hypothesis="Adding DsbC increases folded scFv yield")
+    assert session.hypothesis == "Adding DsbC increases folded scFv yield"
+    first_user = session.messages[0]["content"]
+    assert "Adding DsbC increases folded scFv yield" in first_user
+
+
 def test_pubmed_budget_exhaustion():
     agent = make_agent([])  # no queue needed; test _dispatch directly
     literature.search_pubmed = lambda q, retmax=5: [{"pmid": "1", "title": "t", "authors": "A", "year": 2020, "doi": None}]

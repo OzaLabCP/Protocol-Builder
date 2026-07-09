@@ -8,7 +8,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.render import design_review_to_markdown, protocol_to_markdown  # noqa: E402
+from app.render import (  # noqa: E402
+    design_alignment_to_markdown,
+    design_review_to_markdown,
+    protocol_to_markdown,
+)
 
 FIXTURE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -73,6 +77,38 @@ def test_design_review_markdown_and_schema():
     md = design_review_to_markdown(d)
     for chunk in ["# Experiment design review", "Controls — and what each rules out",
                   "X increases Y", "add a positive control", "cannot conclude"]:
+        assert chunk in md, f"missing {chunk}"
+
+
+def test_design_alignment_markdown_and_schema():
+    import json
+    from app.schemas import EMIT_DESIGN_ALIGNMENT_TOOL
+    req = EMIT_DESIGN_ALIGNMENT_TOOL["input_schema"]["required"]
+    for key in ["hypothesis", "directly_tests", "critical_comparison",
+                "recommended_changes", "summary"]:
+        assert key in req, f"missing required {key}"
+
+    a = {
+        "hypothesis": {"statement": "DsbC increases folded scFv yield",
+                       "prediction_if_true": "yield rises vs no-DsbC",
+                       "prediction_if_false": "yield unchanged"},
+        "inferred": False,
+        "directly_tests": {"verdict": "partial",
+                           "rationale": "no side-by-side comparison condition"},
+        "critical_comparison": "+DsbC reaction vs. matched -DsbC reaction",
+        "alignment_gaps": [{"gap": "no -DsbC arm",
+                            "why_it_breaks_the_test": "cannot attribute yield to DsbC"}],
+        "confounds": [{"confound": "batch variation", "makes_result_ambiguous": "yield shifts",
+                       "mitigation": "run arms from one master mix"}],
+        "recommended_changes": [
+            {"change": "Add a parallel reaction identical except DsbC is omitted.",
+             "addresses": "no -DsbC arm", "type": "add_comparison"}],
+        "summary": "Add the -DsbC arm and it becomes a direct test.",
+    }
+    md = design_alignment_to_markdown(a)
+    for chunk in ["# Does this test your hypothesis?", "DsbC increases folded scFv yield",
+                  "Partially", "+DsbC reaction vs. matched -DsbC reaction",
+                  "Add a parallel reaction", "Bottom line"]:
         assert chunk in md, f"missing {chunk}"
 
 

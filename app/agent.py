@@ -23,8 +23,9 @@ from typing import Any, Optional
 import anthropic
 
 from . import config, literature
-from .prompts import DESIGN_REVIEW_INSTRUCTION, SYSTEM_PROMPT
+from .prompts import DESIGN_ALIGNMENT_INSTRUCTION, DESIGN_REVIEW_INSTRUCTION, SYSTEM_PROMPT
 from .schemas import (
+    EMIT_DESIGN_ALIGNMENT_TOOL,
     EMIT_DESIGN_REVIEW_TOOL,
     EMIT_PROTOCOL_TOOL,
     REQUEST_CLARIFICATIONS_TOOL,
@@ -53,6 +54,7 @@ class Session:
     request_tool_use_id: Optional[str] = None
     pending_tool_use_id: Optional[str] = None  # last emit_* call awaiting ack (revise/design)
     phase1: Optional[dict] = None
+    hypothesis: Optional[str] = None  # what the student wants to test (optional)
     grounding_log: list = field(default_factory=list)  # queries the app ran
 
 
@@ -184,11 +186,21 @@ class GapFillerAgent:
         self,
         methods_text: Optional[str] = None,
         pdf: Optional[bytes] = None,
+        hypothesis: Optional[str] = None,
     ) -> Session:
         """Start from pasted Methods text OR a full-paper PDF (read natively by the
-        API). Exactly one of `methods_text` / `pdf` should be provided."""
+        API). Exactly one of `methods_text` / `pdf` should be provided. An optional
+        hypothesis orients the reconstruction and the clarifying questions."""
         session = Session()
+        session.hypothesis = (hypothesis or "").strip() or None
         state = RunState(session=session, searches_left=config.PUBMED_BUDGET)
+
+        hyp_preamble = (
+            f"The student's hypothesis (what they want to test) is:\n{session.hypothesis}\n\n"
+            "Orient your reconstruction and your clarifying questions toward directly "
+            "testing this hypothesis.\n\n"
+            if session.hypothesis else ""
+        )
 
         if pdf is not None:
             import base64
@@ -202,7 +214,8 @@ class GapFillerAgent:
                 {
                     "type": "text",
                     "text": (
-                        "The attached PDF is a full research paper. Locate its experimental "
+                        hyp_preamble
+                        + "The attached PDF is a full research paper. Locate its experimental "
                         "Methods / Materials-and-Methods section (ignore abstract, intro, "
                         "results, and references). Reconstruct the protocol from that section, "
                         "classify every parameter, scope ambiguous gaps with a light literature "
@@ -213,7 +226,8 @@ class GapFillerAgent:
             ]
         elif methods_text and methods_text.strip():
             content = (
-                "Here is a published Methods section. Reconstruct the protocol, "
+                hyp_preamble
+                + "Here is a published Methods section. Reconstruct the protocol, "
                 "classify every parameter, scope any ambiguous gaps with a light "
                 "literature search, then call request_clarifications.\n\n"
                 "=== METHODS ===\n" + methods_text.strip()
@@ -313,3 +327,20 @@ class GapFillerAgent:
         """Produce an experiment-design review of the emitted protocol."""
         return self._followup(session, DESIGN_REVIEW_INSTRUCTION, "emit_design_review",
                                EMIT_DESIGN_REVIEW_TOOL)
+
+    # -- Design alignment (does it directly test the hypothesis?) ---------------
+    def design_alignment(self, session: Session, hypothesis: Optional[str] = None) -> dict:
+        """Assess whether the protocol directly tests the hypothesis and recommend
+        concrete protocol changes. A hypothesis passed here overrides/sets the one
+        captured at analyze time."""
+        hypothesis = (hypothesis or "").strip()
+        if hypothesis:
+            session.hypothesis = hypothesis
+        instruction = DESIGN_ALIGNMENT_INSTRUCTION
+        if session.hypothesis:
+            instruction = (
+                f"The student states their hypothesis is:\n{session.hypothesis}\n\n"
+                + instruction
+            )
+        return self._followup(session, instruction, "emit_design_alignment",
+                               EMIT_DESIGN_ALIGNMENT_TOOL)

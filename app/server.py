@@ -28,7 +28,11 @@ from pydantic import BaseModel
 
 from . import config
 from .agent import AgentError, GapFillerAgent, Session
-from .render import design_review_to_markdown, protocol_to_markdown
+from .render import (
+    design_alignment_to_markdown,
+    design_review_to_markdown,
+    protocol_to_markdown,
+)
 from .validation import validate_and_finalize, validate_design_review
 
 MAX_PDF_BYTES = 25 * 1024 * 1024  # API hard limit is 32 MB; leave headroom
@@ -48,6 +52,7 @@ class Store:
     created: float
     protocol: Optional[dict] = None
     design_review: Optional[dict] = None
+    design_alignment: Optional[dict] = None
 
 
 _SESSIONS: dict[str, Store] = {}
@@ -105,6 +110,11 @@ class DesignRequest(BaseModel):
     session_id: str
 
 
+class AlignRequest(BaseModel):
+    session_id: str
+    hypothesis: Optional[str] = None
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(str(_STATIC / "index.html"))
@@ -128,6 +138,7 @@ def healthz() -> dict:
 @app.post("/api/analyze")
 def analyze(
     methods_text: str = Form(default=""),
+    hypothesis: str = Form(default=""),
     file: Optional[UploadFile] = File(default=None),
 ) -> dict:
     _prune()
@@ -148,8 +159,13 @@ def analyze(
         if len(text) > MAX_TEXT_CHARS:
             raise HTTPException(400, f"That's very long (> {MAX_TEXT_CHARS} chars). Paste just the Methods section, or upload the PDF.")
 
+    hyp = (hypothesis or "").strip() or None
     try:
-        session = agent.analyze(pdf=pdf_bytes) if pdf_bytes is not None else agent.analyze(methods_text=methods_text.strip())
+        session = (
+            agent.analyze(pdf=pdf_bytes, hypothesis=hyp)
+            if pdf_bytes is not None
+            else agent.analyze(methods_text=methods_text.strip(), hypothesis=hyp)
+        )
     except AgentError as exc:
         raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
     except Exception as exc:  # noqa: BLE001
@@ -204,12 +220,30 @@ def design(req: DesignRequest) -> dict:
     return {"session_id": req.session_id, "design_review": review, "validation_report": report}
 
 
+@app.post("/api/align")
+def align(req: AlignRequest) -> dict:
+    store = _get(req.session_id)
+    if store.protocol is None:
+        raise HTTPException(409, "Generate a protocol first, then test it against your hypothesis.")
+    agent = get_agent()
+    try:
+        alignment = agent.design_alignment(store.session, req.hypothesis)
+    except AgentError as exc:
+        raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, _explain(exc))
+    store.design_alignment = alignment
+    return {"session_id": req.session_id, "design_alignment": alignment}
+
+
 @app.get("/api/protocol/{session_id}.md")
 def download_markdown(session_id: str) -> PlainTextResponse:
     store = _get(session_id)
     if store.protocol is None:
         raise HTTPException(404, "No protocol generated for this session yet.")
     md = protocol_to_markdown(store.protocol)
+    if store.design_alignment is not None:
+        md += "\n\n" + design_alignment_to_markdown(store.design_alignment)
     if store.design_review is not None:
         md += "\n\n" + design_review_to_markdown(store.design_review)
     fname = _slug(store.protocol.get("title", "protocol")) + ".md"

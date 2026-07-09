@@ -210,6 +210,97 @@ EMIT_DESIGN_REVIEW_TOOL = {
 }
 
 
+EMIT_DESIGN_ALIGNMENT_TOOL = {
+    "name": "emit_design_alignment",
+    "description": (
+        "Assess whether the drafted protocol DIRECTLY tests the student's hypothesis, "
+        "and recommend concrete, applicable protocol changes to make it a valid test. "
+        "The crux: is there a manipulation or comparison whose outcome distinguishes "
+        "hypothesis-true from hypothesis-false, measured by an adequate readout, free of "
+        "confounds that would make a positive result ambiguous?"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "hypothesis": {
+                "type": "object",
+                "properties": {
+                    "statement": {"type": "string",
+                                  "description": "A specific, falsifiable restatement of what is being tested."},
+                    "prediction_if_true": {"type": "string",
+                                           "description": "What you should observe if the hypothesis holds."},
+                    "prediction_if_false": {"type": "string",
+                                            "description": "What you should observe if it does not."},
+                },
+                "required": ["statement", "prediction_if_true", "prediction_if_false"],
+            },
+            "inferred": {"type": "boolean",
+                         "description": "True if the hypothesis was inferred, not supplied by the student."},
+            "directly_tests": {
+                "type": "object",
+                "properties": {
+                    "verdict": {"type": "string", "enum": ["yes", "partial", "no"]},
+                    "rationale": {"type": "string"},
+                },
+                "required": ["verdict", "rationale"],
+            },
+            "critical_comparison": {
+                "type": "string",
+                "description": "The single comparison that must hold for this to be a valid test "
+                "(what condition vs. what condition, measured how).",
+            },
+            "alignment_gaps": {
+                "type": "array",
+                "description": "Where the protocol as drafted fails to directly test the hypothesis.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "gap": {"type": "string"},
+                        "why_it_breaks_the_test": {"type": "string"},
+                    },
+                    "required": ["gap", "why_it_breaks_the_test"],
+                },
+            },
+            "confounds": {
+                "type": "array",
+                "description": "Factors that would make a positive result fail to support the hypothesis.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "confound": {"type": "string"},
+                        "makes_result_ambiguous": {"type": "string"},
+                        "mitigation": {"type": ["string", "null"]},
+                    },
+                    "required": ["confound", "makes_result_ambiguous"],
+                },
+            },
+            "recommended_changes": {
+                "type": "array",
+                "description": "Concrete, directly-applicable protocol edits that make the experiment "
+                "a valid test of the hypothesis. Each should read as an instruction the tool can apply.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "change": {"type": "string",
+                                   "description": "An imperative, self-contained protocol edit."},
+                        "addresses": {"type": "string",
+                                      "description": "Which gap or confound this closes."},
+                        "type": {"type": "string",
+                                 "enum": ["add_control", "add_condition", "add_comparison",
+                                          "change_readout", "increase_replication", "other"]},
+                    },
+                    "required": ["change", "addresses"],
+                },
+            },
+            "summary": {"type": "string",
+                        "description": "One-sentence verdict the student can act on."},
+        },
+        "required": ["hypothesis", "directly_tests", "critical_comparison",
+                     "alignment_gaps", "recommended_changes", "summary"],
+    },
+}
+
+
 SEARCH_PREPRINTS_TOOL = {
     "name": "search_preprints",
     "description": (
