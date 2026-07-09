@@ -119,6 +119,115 @@ def test_analyze_accepts_hypothesis_field():
     assert r.status_code == 400
 
 
+# --- flows that need a fake Anthropic client (no network / API key) ---------
+
+import time as _time  # noqa: E402
+
+import app.server as srv  # noqa: E402
+from app.agent import GapFillerAgent, Session  # noqa: E402
+
+
+class _Block:
+    def __init__(self, name, id, tool_input):
+        self.type = "tool_use"; self.name = name; self.id = id; self.input = tool_input
+
+
+class _Resp:
+    def __init__(self, content, stop_reason="tool_use"):
+        self.content = content; self.stop_reason = stop_reason
+
+
+class _Msgs:
+    def __init__(self, queue):
+        self.queue = list(queue); self.calls = []
+
+    def create(self, **kw):
+        self.calls.append(kw); return self.queue.pop(0)
+
+
+class _FakeClient:
+    def __init__(self, queue):
+        self.messages = _Msgs(queue)
+
+
+def _install_agent(queue):
+    srv._agent = GapFillerAgent(client=_FakeClient(queue), model="fake")
+
+
+def test_finish_downgrades_stated_on_hypothesis_session():
+    proto = {"title": "P", "summary": "s", "estimated_duration": "1 h",
+             "materials": [{"name": "Buffer", "provenance": "stated"}],
+             "steps": [], "assumptions_log": []}
+    _install_agent([_Resp([_Block("emit_protocol", "e1", proto)])])
+    sid = "hypfin"
+    srv._SESSIONS[sid] = srv.Store(
+        session=Session(source_kind="hypothesis", request_tool_use_id="c1",
+                        messages=[{"role": "user", "content": "seed"}]),
+        created=_time.time())
+    try:
+        r = client.post("/api/resolve", json={"session_id": sid, "answers": []})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["protocol"]["materials"][0]["provenance"] == "default_verify"
+        assert len(body["validation_report"]["stated_downgrades"]) >= 1
+    finally:
+        srv._SESSIONS.pop(sid, None); srv._agent = None
+
+
+def test_finish_keeps_stated_on_paper_session():
+    proto = {"title": "P", "summary": "s", "estimated_duration": "1 h",
+             "materials": [{"name": "Buffer", "provenance": "stated"}],
+             "steps": [], "assumptions_log": []}
+    _install_agent([_Resp([_Block("emit_protocol", "e1", proto)])])
+    sid = "paperfin"
+    srv._SESSIONS[sid] = srv.Store(
+        session=Session(source_kind="paper", request_tool_use_id="c1",
+                        messages=[{"role": "user", "content": "seed"}]),
+        created=_time.time())
+    try:
+        r = client.post("/api/resolve", json={"session_id": sid, "answers": []})
+        assert r.status_code == 200
+        assert r.json()["protocol"]["materials"][0]["provenance"] == "stated"
+    finally:
+        srv._SESSIONS.pop(sid, None); srv._agent = None
+
+
+def test_discover_autopick_runs_full_flow():
+    opts = {"usable": True, "hypothesis_restated": "H",
+            "assays": [{"id": "fp", "name": "FP", "measures": "m", "why_tests_hypothesis": "w",
+                        "critical_comparison": "c", "throughput": "high", "difficulty": "low",
+                        "materials_burden": "cheap", "key_limitation": "k", "provenance": "best_practice"}],
+            "recommended_assay_id": "fp", "recommendation_rationale": "r"}
+    proto = {"title": "P", "summary": "s", "estimated_duration": "1 h",
+             "materials": [], "steps": [], "assumptions_log": []}
+    _install_agent([
+        _Resp([_Block("emit_assay_options", "a1", opts)]),
+        _Resp([_Block("request_clarifications", "c1", {"usable": True, "gaps": []})]),
+        _Resp([_Block("emit_protocol", "e1", proto)]),
+    ])
+    try:
+        r = client.post("/api/discover", json={"hypothesis": "Does X increase Y binding?", "auto_pick": True})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["phase"] == "complete"  # auto_pick drove through _choose to emit
+        assert body["protocol"]["title"] == "P"
+        assert body["chosen_assay"]["id"] == "fp"
+    finally:
+        srv._agent = None
+
+
+def test_discover_rejected_flow_returns_rejected():
+    _install_agent([_Resp([_Block("emit_assay_options", "a1", {"usable": False, "reason": "not testable"})])])
+    try:
+        r = client.post("/api/discover", json={"hypothesis": "banana banana banana"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["phase"] == "rejected"
+        assert body["assay_options"]["reason"] == "not testable"
+    finally:
+        srv._agent = None
+
+
 if __name__ == "__main__":
     import traceback
 

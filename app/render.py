@@ -197,6 +197,13 @@ def grounding_log_to_markdown(log: list) -> str:
     return "\n".join(out)
 
 
+def _csv_safe(v) -> str:
+    """Neutralize spreadsheet formula injection: a cell starting with =,+,-,@ (or a
+    control char Excel treats as a formula lead-in) is prefixed with a quote."""
+    s = "" if v is None else str(v)
+    return "'" + s if s[:1] in ("=", "+", "-", "@", "\t", "\r") else s
+
+
 def materials_to_csv(p: dict) -> str:
     """Reproducibility-grade materials table as CSV (provenance travels as columns)."""
     import csv
@@ -208,7 +215,7 @@ def materials_to_csv(p: dict) -> str:
                 "provenance", "citation_identifier", "citation_verified", "note"])
     for m in p.get("materials") or []:
         c = m.get("citation") or {}
-        w.writerow([
+        w.writerow([_csv_safe(x) for x in [
             m.get("name", ""),
             "" if m.get("amount") in (None, "") else m.get("amount"),
             m.get("unit") or "",
@@ -217,7 +224,7 @@ def materials_to_csv(p: dict) -> str:
             c.get("identifier", "") if c else "",
             "yes" if m.get("citation_verified") else "",
             m.get("provenance_note") or "",
-        ])
+        ]])
     return buf.getvalue()
 
 

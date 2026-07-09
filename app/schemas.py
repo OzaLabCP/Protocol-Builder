@@ -182,10 +182,10 @@ EMIT_ASSAY_OPTIONS_TOOL = {
                 "description": "Why this is the best default for a student new to the technique.",
             },
         },
-        "required": [
-            "usable", "hypothesis_restated", "assays",
-            "recommended_assay_id", "recommendation_rationale",
-        ],
+        # Only `usable` is unconditionally required so a reject (usable=false) can be
+        # emitted without inventing assays; the discovery prompt requires the rest when
+        # usable is true, and the host guards against a malformed usable=true payload.
+        "required": ["usable"],
     },
 }
 

@@ -175,6 +175,15 @@ def test_discover_emits_assay_options():
     assert agent.client.messages.calls[0]["system"] is agent.discovery_system
 
 
+def test_discover_rejected_returns_unusable():
+    queue = [Resp([Block("emit_assay_options", "a1", {"usable": False, "reason": "not a testable hypothesis"})])]
+    agent = make_agent(queue)
+    session = agent.discover("banana banana banana")
+    assert session.assay_options["usable"] is False
+    assert session.assay_options["reason"] == "not a testable hypothesis"
+    assert session.pending_tool_use_id == "a1"
+
+
 def test_choose_assay_threads_to_request_clarifications():
     session = Session(
         messages=[{"role": "user", "content": "seed"}],

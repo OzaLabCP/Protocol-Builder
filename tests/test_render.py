@@ -149,8 +149,20 @@ def test_titration_series_renders_in_protocol():
     md = protocol_to_markdown(p)
     assert "## Titration series" in md
     assert "brackets the Kd" in md
-    assert "C1" in md and "blank" in md
-    assert "ligand" in md and "buffer" in md
+    # verify the table is column-aligned: header and every data row share a column count,
+    # and the blank row (which omits 'ligand') still fills that column with a placeholder.
+    rows = [ln for ln in md.splitlines() if ln.startswith("| ")]
+    header = rows[0]
+    ncol = header.count("|")
+    assert "Condition" in header and "ligand" in header and "buffer" in header
+    data = [r for r in rows[2:] if "C1" in r or "blank" in r]
+    assert len(data) == 2
+    for r in data:
+        assert r.count("|") == ncol  # no ragged rows
+    blank = next(r for r in data if "blank" in r)
+    cells = [c.strip() for c in blank.strip("|").split("|")]
+    ligand_idx = [c.strip() for c in header.strip("|").split("|")].index("ligand")
+    assert cells[ligand_idx] == "—"  # missing component filled, not shifted
 
 
 def test_materials_csv_export():

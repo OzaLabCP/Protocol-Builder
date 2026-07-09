@@ -110,6 +110,14 @@ def validate_and_finalize(
                     f"{location}: tagged 'stated' but there is no source document "
                     f"(hypothesis-first draft); downgraded to default_verify."
                 )
+        # source_citation is a free-string claim of a source paper; there is none here.
+        if protocol.get("source_citation"):
+            report["stated_downgrades"].append("source_citation")
+            open_questions.append(
+                "source_citation: cleared — this protocol was drafted from a hypothesis, "
+                "not a source paper."
+            )
+            protocol["source_citation"] = None
 
     for entry, location in _iter_citation_entries(protocol):
         prov = entry.get("provenance")

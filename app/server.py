@@ -289,9 +289,10 @@ def discover(req: DiscoverRequest) -> dict:
 @app.post("/api/choose_assay")
 def choose_assay(req: ChooseAssayRequest) -> dict:
     store = _get(req.session_id)
-    if store.session.assay_options is None:
-        raise HTTPException(409, "Start from a hypothesis first, then choose an assay.")
-    ids = [a.get("id") for a in store.session.assay_options.get("assays", [])]
+    opts = store.session.assay_options
+    if not opts or opts.get("usable") is False or not (opts.get("assays") or []):
+        raise HTTPException(409, "Start from a usable hypothesis first, then choose an assay.")
+    ids = [a.get("id") for a in opts.get("assays", [])]
     if req.assay_id not in ids:
         raise HTTPException(400, "Unknown assay for this session.")  # before any model call
     return _choose(req.session_id, req.assay_id)

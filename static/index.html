@@ -148,6 +148,7 @@
     <button class="modebtn" id="mode-hyp">I have a hypothesis
       <small>Find the best assay to test it, then draft the protocol</small></button>
   </div>
+  <p id="gstatus" class="muted noprint" style="min-height:1.2em; margin:0 0 8px"></p>
 
   <section class="panel" id="input-panel">
     <label class="muted" for="methods">Paste a Methods section</label>
@@ -253,8 +254,9 @@ function setMode(mode) {
   $("#mode-hyp").classList.toggle("active", !paper);
   $("#input-panel").classList.toggle("hidden", !paper);
   $("#discovery-panel").classList.toggle("hidden", paper);
-  // reset any downstream panels when switching entry paths
+  // reset any downstream panels + diff baseline when switching entry paths
   ["#questions-panel", "#assays-panel", "#result-panel"].forEach(hide);
+  PREV_PROTOCOL = null; CURR_PROTOCOL = null;
   setStatus(""); $("#disc-status").textContent = "";
 }
 $("#mode-paper").onclick = () => setMode("paper");
@@ -308,6 +310,8 @@ $("#analyze").onclick = async () => {
 };
 
 function handlePhase(r) {
+  // A new session id == a new protocol lineage: don't diff across unrelated protocols.
+  if (r.session_id !== SESSION) { PREV_PROTOCOL = null; CURR_PROTOCOL = null; }
   SESSION = r.session_id;
   if (r.phase === "rejected") {
     const reason = (r.assay_options && r.assay_options.reason) || (r.phase1 && r.phase1.reason)
@@ -943,6 +947,9 @@ function validationSummary(r) {
   box.appendChild(el("div", "stat", `<b>${r.citations_checked}</b><div class="muted">citations checked</div>`));
   const cons = (r.consistency.inline_missing_from_log.length + r.consistency.log_missing_from_inline.length);
   box.appendChild(el("div", "stat", `<b>${cons}</b><div class="muted">log/inline mismatches</div>`));
+  if ((r.stated_downgrades || []).length) {
+    box.appendChild(el("div", "stat", `<b>${r.stated_downgrades.length}</b><div class="muted">stated → verify (no source)</div>`));
+  }
   return box;
 }
 
@@ -973,7 +980,9 @@ async function postForm(url, formData) {
   if (!res.ok) throw new Error(data.detail || `Request failed (${res.status})`);
   return data;
 }
-function setStatus(msg, isErr) { const s = $("#status"); s.textContent = msg || ""; s.className = isErr ? "err" : "muted"; }
+// Target an always-visible element (#status lives inside #input-panel, which is hidden
+// in hypothesis mode — writing there would silently swallow errors).
+function setStatus(msg, isErr) { const s = $("#gstatus"); s.textContent = msg || ""; s.className = "noprint " + (isErr ? "err" : "muted"); }
 function lock(on, msg) { $("#analyze").disabled = on; $("#submit-answers").disabled = on; setStatus(on ? (msg || "Working…") : ""); }
 function show(sel) { $(sel).classList.remove("hidden"); }
 function hide(sel) { $(sel).classList.add("hidden"); }
