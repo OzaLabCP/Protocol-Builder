@@ -703,6 +703,7 @@ EMIT_PROTOCOL_TOOL = {
                         "expected Kd across ~2 logs').",
                     },
                     "provenance": _PROVENANCE_ENUM,
+                    "source_quote": _SOURCE_QUOTE,
                     "points": {
                         "type": "array",
                         "description": "One row per condition, in order.",

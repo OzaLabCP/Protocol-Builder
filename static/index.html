@@ -554,7 +554,7 @@ function renderProtocol(p) {
       if (cp.provenance_note) line.appendChild(el("div", "pnote", esc(cp.provenance_note)));
       d.appendChild(line);
     });
-    (s.substeps || []).forEach((ss) => d.appendChild(el("div", "cp", `${esc(ss.number)} ${esc(ss.instruction)} ${tierPill(ss.provenance)}`)));
+    (s.substeps || []).forEach((ss) => d.appendChild(el("div", "cp", `${esc(ss.number)} ${esc(ss.instruction)} ${tierPill(ss.provenance)}${anchorInline(ss)}`)));
     (s.warnings || []).forEach((w) => d.appendChild(el("div", "warn", "⚠ " + esc(w))));
     steps.appendChild(d);
   });

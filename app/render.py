@@ -37,7 +37,9 @@ def _anchor(entry: dict) -> str:
     q = entry.get("source_quote")
     if not q or not entry.get("quote_verified"):
         return ""
-    q = " ".join(str(q).split()).replace("|", r"\|")  # collapse newlines; keep tables intact
+    # collapse newlines; neutralize Markdown table/code metachars so the exported
+    # anchor displays the verbatim characters it claims to (web UI uses esc()).
+    q = " ".join(str(q).split()).replace("|", r"\|").replace("`", "ˋ")
     return f' 📌 “{q}”'
 
 
@@ -105,7 +107,7 @@ def protocol_to_markdown(p: dict) -> str:
             note = f" — {cp['provenance_note']}" if cp.get("provenance_note") else ""
             out.append(f"- **{cp.get('name','')}:** {val} {_tier(cp)}{_cite(cp)}{_anchor(cp)}{note}")
         for ss in s.get("substeps", []):
-            out.append(f"  - {ss.get('number','')} {ss.get('instruction','')} {_tier(ss)}")
+            out.append(f"  - {ss.get('number','')} {ss.get('instruction','')} {_tier(ss)}{_anchor(ss)}")
         for w in s.get("warnings", []):
             out.append(f"> ⚠ {w}")
         out.append("")

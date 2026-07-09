@@ -64,6 +64,8 @@ class Session:
     hypothesis: Optional[str] = None  # what the student wants to test (optional)
     source_kind: str = "paper"  # "paper" or "hypothesis" — set by code, not pasteable text
     source_text: Optional[str] = None  # retained source, for host-side quote verification
+    source_exact: bool = True  # True: source_text is exactly what the model read (paste);
+    #                            False: lossy host extraction (PDF) — confirm-only, don't accuse
     assay_options: Optional[dict] = None  # validated emit_assay_options payload
     chosen_assay: Optional[dict] = None  # the picked assay dict (for brief + export)
     grounding_log: list = field(default_factory=list)  # queries the app ran
@@ -116,7 +118,8 @@ def _pdf_text(pdf: bytes) -> Optional[str]:
         import pypdf
 
         reader = pypdf.PdfReader(io.BytesIO(pdf))
-        return "\n".join((page.extract_text() or "") for page in reader.pages)
+        text = "\n".join((page.extract_text() or "") for page in reader.pages)
+        return text if text.strip() else None  # blank -> None (scanned/OCR-free PDF)
     except Exception:  # noqa: BLE001 — extractor missing or PDF unparseable
         return None
 
@@ -237,6 +240,7 @@ class GapFillerAgent:
             import base64
 
             session.source_text = _pdf_text(pdf)  # None if no extractor -> quotes unverifiable
+            session.source_exact = False  # extraction is lossy vs the model's native read
             b64 = base64.standard_b64encode(pdf).decode("ascii")
             content = [
                 {

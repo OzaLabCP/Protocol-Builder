@@ -38,22 +38,52 @@ def _norm_param(name: str) -> str:
 
 
 _WS_RE = re.compile(r"\s+")
+_HYPHEN_BREAK_RE = re.compile(r"-\s*\n\s*")
 
 
 def _normalize_source(text: str) -> str:
-    """Lowercase and collapse whitespace so a quote matches across line breaks,
-    hyphenation artifacts, and inconsistent spacing (common in extracted PDF text)."""
-    return _WS_RE.sub(" ", (text or "").lower()).strip()
+    """Lowercase and collapse whitespace so a quote matches across line breaks and
+    inconsistent spacing, and rejoin words hyphenated across a line break (common in
+    extracted PDF text: 'incu-\\nbated' -> 'incubated')."""
+    t = _HYPHEN_BREAK_RE.sub("", text or "")
+    return _WS_RE.sub(" ", t.lower()).strip()
 
 
 def _quote_matches(quote: str, normalized_source: str) -> bool:
     """True if the (verbatim-ish) quote occurs in the already-normalized source. The
     quote is normalized the same way and stripped of surrounding quote marks/ellipses;
-    quotes shorter than 8 chars are rejected as too weak to anchor anything."""
+    quotes shorter than 4 chars are rejected as too weak to anchor anything (the
+    value-support check below supplies the real specificity)."""
     q = _normalize_source(quote).strip("\"'“”‘’ .…")
-    if len(q) < 8:
+    if len(q) < 4:
         return False
     return q in normalized_source
+
+
+def _num_str(v) -> str:
+    """Render a numeric value without a spurious trailing '.0' so it matches how the
+    source is likely to write it (50, not 50.0)."""
+    try:
+        f = float(v)
+        return str(int(f)) if f == int(f) else str(f)
+    except (TypeError, ValueError):
+        return str(v)
+
+
+def _quote_supports(entry: dict, quote: str) -> bool:
+    """A verified quote must actually CONTAIN the value it anchors — the quote merely
+    occurring in the source is not enough (a real but unrelated sentence would otherwise
+    launder a wrong number into a 'source-anchored' badge). Entries with no scalar value
+    to check (prose steps/substeps) pass this gate on quote presence alone."""
+    nq = _normalize_source(quote)
+    for key in ("value", "amount"):
+        v = entry.get(key)
+        if v in (None, ""):
+            continue
+        token = _normalize_source(_num_str(v))
+        if token and not re.search(r"(?<!\w)" + re.escape(token) + r"(?!\w)", nq):
+            return False
+    return True
 
 
 def _iter_citation_entries(protocol: dict) -> Iterator[tuple[dict, str]]:
@@ -93,6 +123,7 @@ def _downgrade(entry: dict, note: str) -> None:
     entry["provenance"] = "default_verify"
     entry["citation"] = None
     entry["citation_verified"] = False
+    entry["quote_verified"] = False  # a downgraded value is not source-anchored
     if "verify" in entry or "basis" in entry:  # assumptions_log shape
         entry["verify"] = True
     existing = entry.get("provenance_note") or ""
@@ -105,6 +136,7 @@ def validate_and_finalize(
     *,
     allow_stated: bool = True,
     source_text: Optional[str] = None,
+    source_exact: bool = True,
 ) -> dict:
     """Validate and repair the protocol in place. Returns a report dict; the
     protocol argument is mutated (citations verified/nulled, tiers downgraded,
@@ -120,10 +152,17 @@ def validate_and_finalize(
         "downgraded": [],
         "invariant_fixes": [],
         "stated_downgrades": [],
-        "quotes": {"verified": [], "unmatched": [], "missing": []},
+        "quotes": {"verified": [], "downgraded": [], "unverified": [], "source_checked": False},
         "consistency": {"inline_missing_from_log": [], "log_missing_from_inline": []},
     }
     open_questions = list(protocol.get("open_questions") or [])
+
+    # SECURITY: quote_verified is a HOST-ONLY attestation. Never trust a model-supplied
+    # value — strip it from every entry so only the verification pass below can set it.
+    # (Item schemas are open, dict(block.input) is used verbatim, and the badge is the
+    # tool's whole trust signal, so a forged quote_verified must not survive.)
+    for entry, _loc in _iter_all_provenance_entries(protocol):
+        entry.pop("quote_verified", None)
 
     if not allow_stated:
         for entry, location in _iter_all_provenance_entries(protocol):
@@ -144,31 +183,37 @@ def validate_and_finalize(
             protocol["source_citation"] = None
 
     # Source-quote anchoring: verify that every "stated" value's quote actually appears
-    # in the source. Only possible when we retained the source text (paste, or a PDF we
-    # could extract); without it, quotes stay unverified rather than being trusted.
-    if source_text:
+    # in the source AND contains the value it anchors. Only possible when we retained the
+    # source text (paste, or a PDF we could extract); without it, quotes are never trusted.
+    #
+    # source_exact distinguishes an AUTHORITATIVE source (pasted text is exactly what the
+    # model read -> a mismatch is a real paraphrase/fabrication, so downgrade) from a
+    # LOSSY one (host-extracted PDF text != the model's native read: reflowed columns,
+    # dropped units/ligatures -> a mismatch is inconclusive, so confirm-only, never
+    # accuse). This keeps the teeth where they're reliable without libelling correct
+    # PDF-sourced values.
+    if source_text and str(source_text).strip():
+        report["quotes"]["source_checked"] = True
         norm_source = _normalize_source(source_text)
         for entry, location in _iter_all_provenance_entries(protocol):
             if entry.get("provenance") != "stated":
                 continue
             quote = (entry.get("source_quote") or "").strip()
-            if not quote:
-                _downgrade(entry, "tagged stated with no source_quote to anchor it.")
-                report["quotes"]["missing"].append(location)
-                open_questions.append(
-                    f"{location}: tagged 'stated' but carried no verbatim source quote; "
-                    f"downgraded to default_verify."
-                )
-            elif _quote_matches(quote, norm_source):
+            ok = bool(quote) and _quote_matches(quote, norm_source) and _quote_supports(entry, quote)
+            if ok:
                 entry["quote_verified"] = True
                 report["quotes"]["verified"].append(location)
-            else:
-                _downgrade(entry, "source_quote not found in the source (paraphrase or fabrication).")
-                report["quotes"]["unmatched"].append(location)
+            elif source_exact:
+                reason = ("no source_quote to anchor it" if not quote
+                          else "its source_quote was not found verbatim in the source")
+                _downgrade(entry, f"tagged stated but {reason}.")
+                report["quotes"]["downgraded"].append(location)
                 open_questions.append(
-                    f"{location}: its quoted source text was not found in the source; "
-                    f"downgraded to default_verify."
+                    f"{location}: tagged 'stated' but {reason}; downgraded to default_verify."
                 )
+            else:
+                # lossy source: cannot confirm, but a non-match is not proof of fabrication
+                report["quotes"]["unverified"].append(location)
 
     for entry, location in _iter_citation_entries(protocol):
         prov = entry.get("provenance")

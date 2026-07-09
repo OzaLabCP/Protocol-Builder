@@ -228,9 +228,9 @@ def test_source_quote_mismatch_downgraded():
                               "provenance": "best_practice", "critical_parameters": [cp]}])
     report = validate_and_finalize(p, fake_resolver({}), source_text=src)
     assert cp["provenance"] == "default_verify"
-    assert cp.get("quote_verified") is not True
-    assert len(report["quotes"]["unmatched"]) == 1
-    assert any("was not found in the source" in q for q in p["open_questions"])
+    assert cp.get("quote_verified") is False  # _downgrade clears the badge
+    assert len(report["quotes"]["downgraded"]) == 1
+    assert any("was not found verbatim in the source" in q for q in p["open_questions"])
 
 
 def test_stated_without_quote_downgraded_when_source_present():
@@ -238,7 +238,7 @@ def test_stated_without_quote_downgraded_when_source_present():
     p = base_protocol(materials=[mat])
     report = validate_and_finalize(p, fake_resolver({}), source_text="Reactions used a Tris buffer.")
     assert mat["provenance"] == "default_verify"
-    assert len(report["quotes"]["missing"]) == 1
+    assert len(report["quotes"]["downgraded"]) == 1
 
 
 def test_stated_preserved_when_no_source_text():
@@ -246,7 +246,47 @@ def test_stated_preserved_when_no_source_text():
     p = base_protocol(materials=[mat])
     report = validate_and_finalize(p, fake_resolver({}))  # no source_text -> cannot verify
     assert mat["provenance"] == "stated"  # not downgraded when we can't check
-    assert report["quotes"]["verified"] == [] and report["quotes"]["missing"] == []
+    assert report["quotes"]["source_checked"] is False
+    assert report["quotes"]["verified"] == [] and report["quotes"]["downgraded"] == []
+
+
+def test_quote_present_but_value_unsupported_is_downgraded():
+    # the quote is genuinely in the source, but does not contain the value it anchors
+    src = "The reaction mixture was prepared and incubated at 30 C in 50 uL."
+    cp = {"name": "temp", "value": "37", "provenance": "stated",
+          "source_quote": "The reaction mixture was prepared"}
+    p = base_protocol(steps=[{"number": 1, "title": "x", "instruction": "x",
+                              "provenance": "best_practice", "critical_parameters": [cp]}])
+    validate_and_finalize(p, fake_resolver({}), source_text=src)
+    assert cp["provenance"] == "default_verify"  # presence != support: 37 not in the quote
+    assert cp.get("quote_verified") is False
+
+
+def test_forged_quote_verified_is_stripped():
+    # a model that sets quote_verified itself must not be trusted (host-only attestation)
+    mat = {"name": "X", "provenance": "best_practice", "source_quote": "anything", "quote_verified": True}
+    p = base_protocol(materials=[mat])
+    validate_and_finalize(p, fake_resolver({}))  # no source_text: verification never runs
+    assert mat.get("quote_verified") is None  # stripped up front, never re-set
+
+
+def test_lossy_pdf_source_does_not_accuse():
+    # source_exact=False (extracted PDF): a non-match is inconclusive, not fabrication
+    src = "reactions were incubated"  # lossy extraction, missing the value
+    mat = {"name": "buffer", "provenance": "stated", "source_quote": "50 mM Tris pH 8.0"}
+    p = base_protocol(materials=[mat])
+    report = validate_and_finalize(p, fake_resolver({}), source_text=src, source_exact=False)
+    assert mat["provenance"] == "stated"  # NOT downgraded on a lossy source
+    assert mat.get("quote_verified") is not True  # but no badge either
+    assert len(report["quotes"]["unverified"]) == 1 and report["quotes"]["downgraded"] == []
+
+
+def test_whitespace_source_is_treated_as_no_source():
+    mat = {"name": "buffer", "provenance": "stated"}
+    p = base_protocol(materials=[mat])
+    report = validate_and_finalize(p, fake_resolver({}), source_text="   \n  ")
+    assert mat["provenance"] == "stated"  # blank source can't verify -> don't downgrade
+    assert report["quotes"]["source_checked"] is False
 
 
 def test_validate_assay_options():

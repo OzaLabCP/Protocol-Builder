@@ -129,6 +129,22 @@ def test_source_anchor_renders_only_when_verified():
     assert "a paraphrase" not in md       # an unverified model 'quote' is never rendered
 
 
+def test_source_anchor_renders_on_substeps():
+    from app.schemas import EMIT_PROTOCOL_TOOL
+    # titration_series must expose source_quote so a stated ladder can be anchored
+    ts_props = EMIT_PROTOCOL_TOOL["input_schema"]["properties"]["titration_series"]["properties"]
+    assert "source_quote" in ts_props
+    p = {
+        "title": "T", "summary": "", "estimated_duration": "1 h", "materials": [],
+        "steps": [{"number": 1, "title": "mix", "instruction": "mix", "provenance": "best_practice",
+                   "substeps": [{"number": "1.1", "instruction": "add buffer", "provenance": "stated",
+                                 "source_quote": "add 10 uL buffer", "quote_verified": True}]}],
+        "assumptions_log": [],
+    }
+    md = protocol_to_markdown(p)
+    assert "📌 “add 10 uL buffer”" in md   # verified substep anchor is rendered
+
+
 def test_assay_selection_to_markdown():
     chosen = {"id": "fp", "name": "Fluorescence polarization", "measures": "mP",
               "why_tests_hypothesis": "binding shifts mP", "critical_comparison": "+X vs -X",

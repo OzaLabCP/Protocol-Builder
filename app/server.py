@@ -368,6 +368,7 @@ def _finish(session_id: str, store: Store, protocol: dict) -> dict:
         protocol,
         allow_stated=(store.session.source_kind != "hypothesis"),
         source_text=store.session.source_text,
+        source_exact=store.session.source_exact,
     )
     store.protocol = protocol
     return {
