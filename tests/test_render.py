@@ -115,6 +115,20 @@ def test_design_alignment_markdown_and_schema():
         assert chunk in md, f"missing {chunk}"
 
 
+def test_source_anchor_renders_only_when_verified():
+    p = {
+        "title": "T", "summary": "", "estimated_duration": "1 h",
+        "materials": [
+            {"name": "Mg", "provenance": "stated", "source_quote": "10 mM Mg", "quote_verified": True},
+            {"name": "K", "provenance": "stated", "source_quote": "a paraphrase", "quote_verified": False},
+        ],
+        "steps": [], "assumptions_log": [],
+    }
+    md = protocol_to_markdown(p)
+    assert "📌 “10 mM Mg”" in md          # verified anchor is shown
+    assert "a paraphrase" not in md       # an unverified model 'quote' is never rendered
+
+
 def test_assay_selection_to_markdown():
     chosen = {"id": "fp", "name": "Fluorescence polarization", "measures": "mP",
               "why_tests_hypothesis": "binding shifts mP", "critical_comparison": "+X vs -X",

@@ -31,6 +31,16 @@ def _tier(entry: dict) -> str:
     return f"`{entry.get('provenance', '')}`"
 
 
+def _anchor(entry: dict) -> str:
+    """A verified verbatim source quote, shown only when the host confirmed it appears
+    in the source — never render an unverified model-supplied 'quote' as if from source."""
+    q = entry.get("source_quote")
+    if not q or not entry.get("quote_verified"):
+        return ""
+    q = " ".join(str(q).split()).replace("|", r"\|")  # collapse newlines; keep tables intact
+    return f' 📌 “{q}”'
+
+
 def protocol_to_markdown(p: dict) -> str:
     out: list[str] = []
     out.append(f"# {p.get('title', 'Protocol')}\n")
@@ -68,7 +78,7 @@ def protocol_to_markdown(p: dict) -> str:
             amt = " ".join(str(x) for x in [m.get("amount"), m.get("unit")] if x not in (None, ""))
             out.append(
                 f"| {m.get('name','')} | {amt or '—'} | {m.get('vendor_or_grade') or '—'} | "
-                f"{_tier(m)}{_cite(m)} |"
+                f"{_tier(m)}{_cite(m)}{_anchor(m)} |"
             )
         out.append("")
 
@@ -80,7 +90,7 @@ def protocol_to_markdown(p: dict) -> str:
 
     out.append("## Procedure\n")
     for s in p.get("steps", []):
-        out.append(f"### {s.get('number')}. {s.get('title','')} {_tier(s)}\n")
+        out.append(f"### {s.get('number')}. {s.get('title','')} {_tier(s)}{_anchor(s)}\n")
         out.append(s.get("instruction", "") + "\n")
         meta = " · ".join(
             x for x in [
@@ -93,7 +103,7 @@ def protocol_to_markdown(p: dict) -> str:
         for cp in s.get("critical_parameters", []):
             val = " ".join(str(x) for x in [cp.get("value"), cp.get("unit")] if x not in (None, ""))
             note = f" — {cp['provenance_note']}" if cp.get("provenance_note") else ""
-            out.append(f"- **{cp.get('name','')}:** {val} {_tier(cp)}{_cite(cp)}{note}")
+            out.append(f"- **{cp.get('name','')}:** {val} {_tier(cp)}{_cite(cp)}{_anchor(cp)}{note}")
         for ss in s.get("substeps", []):
             out.append(f"  - {ss.get('number','')} {ss.get('instruction','')} {_tier(ss)}")
         for w in s.get("warnings", []):

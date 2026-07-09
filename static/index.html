@@ -545,12 +545,12 @@ function renderProtocol(p) {
   const steps = el("div");
   (p.steps || []).forEach((s) => {
     const d = el("div", "step");
-    d.appendChild(el("div", null, `<span class="num">${esc(s.number)}.</span> <b>${esc(s.title)}</b> ${tierPill(s.provenance)}`));
+    d.appendChild(el("div", null, `<span class="num">${esc(s.number)}.</span> <b>${esc(s.title)}</b> ${tierPill(s.provenance)}${anchorInline(s)}`));
     d.appendChild(el("div", null, esc(s.instruction)));
     const meta = [s.duration ? "⏱ " + esc(s.duration) : "", s.temperature ? "🌡 " + esc(s.temperature) : ""].filter(Boolean).join(" · ");
     if (meta) d.appendChild(el("div", "cp", meta));
     (s.critical_parameters || []).forEach((cp) => {
-      const line = el("div", "cp", `${esc(cp.name)}: <b>${esc([cp.value, cp.unit].filter(Boolean).join(" "))}</b> ${tierPill(cp.provenance)} ${citeInline(cp)}`);
+      const line = el("div", "cp", `${esc(cp.name)}: <b>${esc([cp.value, cp.unit].filter(Boolean).join(" "))}</b> ${tierPill(cp.provenance)} ${citeInline(cp)}${anchorInline(cp)}`);
       if (cp.provenance_note) line.appendChild(el("div", "pnote", esc(cp.provenance_note)));
       d.appendChild(line);
     });
@@ -931,11 +931,17 @@ function citeInline(entry) {
   return `<div class="cite">${link}${badge}</div>`;
 }
 
+// A verified verbatim source quote — shown only when the host confirmed it.
+function anchorInline(entry) {
+  if (!entry.source_quote || !entry.quote_verified) return "";
+  return `<div class="cite">📌 “${esc(entry.source_quote)}” <span class="badge-ok">source-anchored</span></div>`;
+}
+
 function provCell(entry) {
   const td = el("td");
   td.innerHTML = tierPill(entry.provenance);
   if (entry.provenance_note) td.appendChild(el("div", "pnote", esc(entry.provenance_note)));
-  td.insertAdjacentHTML("beforeend", citeInline(entry));
+  td.insertAdjacentHTML("beforeend", citeInline(entry) + anchorInline(entry));
   return td;
 }
 
@@ -949,6 +955,10 @@ function validationSummary(r) {
   box.appendChild(el("div", "stat", `<b>${cons}</b><div class="muted">log/inline mismatches</div>`));
   if ((r.stated_downgrades || []).length) {
     box.appendChild(el("div", "stat", `<b>${r.stated_downgrades.length}</b><div class="muted">stated → verify (no source)</div>`));
+  }
+  const anchored = r.quotes && r.quotes.verified ? r.quotes.verified.length : 0;
+  if (anchored) {
+    box.appendChild(el("div", "stat", `<b>${anchored}</b><div class="muted">stated values source-anchored</div>`));
   }
   return box;
 }

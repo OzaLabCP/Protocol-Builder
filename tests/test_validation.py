@@ -208,6 +208,47 @@ def test_validate_and_finalize_no_stated_downgrades():
     assert mat2["provenance"] == "stated"
 
 
+def test_source_quote_verified_when_present_in_source():
+    src = "Reactions were incubated at 30 C for 4 hours in a total volume of 50 uL."
+    cp = {"name": "temp", "value": "30", "unit": "C", "provenance": "stated",
+          "source_quote": "incubated at 30 C"}
+    step = {"number": 1, "title": "incubate", "instruction": "incubate", "provenance": "stated",
+            "source_quote": "incubated at 30 C for 4 hours", "critical_parameters": [cp]}
+    p = base_protocol(steps=[step])
+    report = validate_and_finalize(p, fake_resolver({}), source_text=src)
+    assert cp["quote_verified"] is True and cp["provenance"] == "stated"
+    assert step["quote_verified"] is True
+    assert len(report["quotes"]["verified"]) == 2
+
+
+def test_source_quote_mismatch_downgraded():
+    src = "Reactions were incubated at 30 C."
+    cp = {"name": "temp", "value": "37", "provenance": "stated", "source_quote": "incubated at 37 C"}
+    p = base_protocol(steps=[{"number": 1, "title": "x", "instruction": "x",
+                              "provenance": "best_practice", "critical_parameters": [cp]}])
+    report = validate_and_finalize(p, fake_resolver({}), source_text=src)
+    assert cp["provenance"] == "default_verify"
+    assert cp.get("quote_verified") is not True
+    assert len(report["quotes"]["unmatched"]) == 1
+    assert any("was not found in the source" in q for q in p["open_questions"])
+
+
+def test_stated_without_quote_downgraded_when_source_present():
+    mat = {"name": "buffer", "provenance": "stated"}  # no source_quote
+    p = base_protocol(materials=[mat])
+    report = validate_and_finalize(p, fake_resolver({}), source_text="Reactions used a Tris buffer.")
+    assert mat["provenance"] == "default_verify"
+    assert len(report["quotes"]["missing"]) == 1
+
+
+def test_stated_preserved_when_no_source_text():
+    mat = {"name": "buffer", "provenance": "stated", "source_quote": "a Tris buffer"}
+    p = base_protocol(materials=[mat])
+    report = validate_and_finalize(p, fake_resolver({}))  # no source_text -> cannot verify
+    assert mat["provenance"] == "stated"  # not downgraded when we can't check
+    assert report["quotes"]["verified"] == [] and report["quotes"]["missing"] == []
+
+
 def test_validate_assay_options():
     opts = {
         "recommended_assay_id": "ghost",  # dangling -> must be repaired

@@ -144,6 +144,14 @@ def test_design_alignment_emits_and_uses_hypothesis():
     assert "DsbC raises folded yield" in text
 
 
+def test_analyze_retains_source_text_for_quote_verification():
+    queue = [Resp([Block("request_clarifications", "c1", {"usable": True, "gaps": []})])]
+    agent = make_agent(queue)
+    text = "A methods section: reactions incubated at 30 C for 4 h in 50 uL."
+    session = agent.analyze(text)
+    assert session.source_text == text  # retained so the host can verify 'stated' quotes
+
+
 def test_analyze_captures_hypothesis_and_injects_preamble():
     queue = [Resp([Block("request_clarifications", "c1", {"usable": True, "gaps": []})])]
     agent = make_agent(queue)

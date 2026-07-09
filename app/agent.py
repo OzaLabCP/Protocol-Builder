@@ -63,6 +63,7 @@ class Session:
     phase1: Optional[dict] = None
     hypothesis: Optional[str] = None  # what the student wants to test (optional)
     source_kind: str = "paper"  # "paper" or "hypothesis" — set by code, not pasteable text
+    source_text: Optional[str] = None  # retained source, for host-side quote verification
     assay_options: Optional[dict] = None  # validated emit_assay_options payload
     chosen_assay: Optional[dict] = None  # the picked assay dict (for brief + export)
     grounding_log: list = field(default_factory=list)  # queries the app ran
@@ -103,6 +104,21 @@ def _grounding_tools() -> list:
         if getattr(config, flag):
             tools.append(schema)
     return tools
+
+
+def _pdf_text(pdf: bytes) -> Optional[str]:
+    """Best-effort host-side text extraction from a PDF, for quote verification. The
+    model still reads the PDF natively; this is only so the host can confirm a 'stated'
+    quote actually appears in the paper. Returns None if no extractor is available."""
+    try:
+        import io
+
+        import pypdf
+
+        reader = pypdf.PdfReader(io.BytesIO(pdf))
+        return "\n".join((page.extract_text() or "") for page in reader.pages)
+    except Exception:  # noqa: BLE001 — extractor missing or PDF unparseable
+        return None
 
 
 def _tool_use_blocks(content: list) -> list:
@@ -220,6 +236,7 @@ class GapFillerAgent:
         if pdf is not None:
             import base64
 
+            session.source_text = _pdf_text(pdf)  # None if no extractor -> quotes unverifiable
             b64 = base64.standard_b64encode(pdf).decode("ascii")
             content = [
                 {
@@ -240,6 +257,7 @@ class GapFillerAgent:
                 },
             ]
         elif methods_text and methods_text.strip():
+            session.source_text = methods_text.strip()
             content = (
                 hyp_preamble
                 + "Here is a published Methods section. Reconstruct the protocol, "

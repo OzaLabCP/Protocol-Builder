@@ -55,6 +55,18 @@ _SELECTED_BY_USER = {
     "Independent of the provenance tier.",
 }
 
+# Attached to a value tagged "stated": the exact text from the source that states it.
+# The host verifies this substring actually occurs in the source and downgrades the
+# value to default_verify if it does not — so only paste a verbatim quote.
+_SOURCE_QUOTE = {
+    "type": ["string", "null"],
+    "description": "REQUIRED when provenance is 'stated': a short (<=200 char) snippet "
+    "copied VERBATIM (character-for-character) from the source text that states or "
+    "directly supports this value. Do not paraphrase or reconstruct it. The host checks "
+    "that this text appears in the source; a quote that does not match downgrades the "
+    "value to default_verify. Null for non-stated values.",
+}
+
 
 # ---------------------------------------------------------------------------
 # search_pubmed — client-side grounding tool (available in both phases)
@@ -582,6 +594,7 @@ _MATERIAL = {
             "description": "Basis/standard named; scaling math if scaled; verify "
             "note for defaults.",
         },
+        "source_quote": _SOURCE_QUOTE,
         "citation": CITATION_SCHEMA,
     },
     "required": ["name", "provenance"],
@@ -596,6 +609,7 @@ _CRITICAL_PARAMETER = {
         "provenance": _PROVENANCE_ENUM,
         "selected_by_user": _SELECTED_BY_USER,
         "provenance_note": {"type": ["string", "null"]},
+        "source_quote": _SOURCE_QUOTE,
         "citation": CITATION_SCHEMA,
     },
     "required": ["name", "value", "provenance"],
@@ -608,6 +622,7 @@ _SUBSTEP = {
         "instruction": {"type": "string"},
         "provenance": _PROVENANCE_ENUM,
         "provenance_note": {"type": ["string", "null"]},
+        "source_quote": _SOURCE_QUOTE,
     },
     "required": ["number", "instruction", "provenance"],
 }
@@ -621,6 +636,7 @@ _STEP = {
         "duration": {"type": ["string", "null"]},
         "temperature": {"type": ["string", "null"]},
         "provenance": _PROVENANCE_ENUM,
+        "source_quote": _SOURCE_QUOTE,
         "critical_parameters": {"type": "array", "items": _CRITICAL_PARAMETER},
         "substeps": {"type": "array", "items": _SUBSTEP},
         "warnings": {"type": "array", "items": {"type": "string"}},

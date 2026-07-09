@@ -37,6 +37,25 @@ def _norm_param(name: str) -> str:
     return " ".join(_WORD_RE.findall((name or "").lower()))
 
 
+_WS_RE = re.compile(r"\s+")
+
+
+def _normalize_source(text: str) -> str:
+    """Lowercase and collapse whitespace so a quote matches across line breaks,
+    hyphenation artifacts, and inconsistent spacing (common in extracted PDF text)."""
+    return _WS_RE.sub(" ", (text or "").lower()).strip()
+
+
+def _quote_matches(quote: str, normalized_source: str) -> bool:
+    """True if the (verbatim-ish) quote occurs in the already-normalized source. The
+    quote is normalized the same way and stripped of surrounding quote marks/ellipses;
+    quotes shorter than 8 chars are rejected as too weak to anchor anything."""
+    q = _normalize_source(quote).strip("\"'“”‘’ .…")
+    if len(q) < 8:
+        return False
+    return q in normalized_source
+
+
 def _iter_citation_entries(protocol: dict) -> Iterator[tuple[dict, str]]:
     """Yield (entry, human-readable location) for every value that carries a
     provenance tier and may carry a citation."""
@@ -81,7 +100,11 @@ def _downgrade(entry: dict, note: str) -> None:
 
 
 def validate_and_finalize(
-    protocol: dict, resolver: Resolver = resolve_citation, *, allow_stated: bool = True
+    protocol: dict,
+    resolver: Resolver = resolve_citation,
+    *,
+    allow_stated: bool = True,
+    source_text: Optional[str] = None,
 ) -> dict:
     """Validate and repair the protocol in place. Returns a report dict; the
     protocol argument is mutated (citations verified/nulled, tiers downgraded,
@@ -97,6 +120,7 @@ def validate_and_finalize(
         "downgraded": [],
         "invariant_fixes": [],
         "stated_downgrades": [],
+        "quotes": {"verified": [], "unmatched": [], "missing": []},
         "consistency": {"inline_missing_from_log": [], "log_missing_from_inline": []},
     }
     open_questions = list(protocol.get("open_questions") or [])
@@ -118,6 +142,33 @@ def validate_and_finalize(
                 "not a source paper."
             )
             protocol["source_citation"] = None
+
+    # Source-quote anchoring: verify that every "stated" value's quote actually appears
+    # in the source. Only possible when we retained the source text (paste, or a PDF we
+    # could extract); without it, quotes stay unverified rather than being trusted.
+    if source_text:
+        norm_source = _normalize_source(source_text)
+        for entry, location in _iter_all_provenance_entries(protocol):
+            if entry.get("provenance") != "stated":
+                continue
+            quote = (entry.get("source_quote") or "").strip()
+            if not quote:
+                _downgrade(entry, "tagged stated with no source_quote to anchor it.")
+                report["quotes"]["missing"].append(location)
+                open_questions.append(
+                    f"{location}: tagged 'stated' but carried no verbatim source quote; "
+                    f"downgraded to default_verify."
+                )
+            elif _quote_matches(quote, norm_source):
+                entry["quote_verified"] = True
+                report["quotes"]["verified"].append(location)
+            else:
+                _downgrade(entry, "source_quote not found in the source (paraphrase or fabrication).")
+                report["quotes"]["unmatched"].append(location)
+                open_questions.append(
+                    f"{location}: its quoted source text was not found in the source; "
+                    f"downgraded to default_verify."
+                )
 
     for entry, location in _iter_citation_entries(protocol):
         prov = entry.get("provenance")

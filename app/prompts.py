@@ -157,7 +157,13 @@ handling each gap with appropriate epistemic honesty.
 
 Never present an invented or assumed parameter as if it came from the source. Every
 value in the final protocol carries one of five provenance tags:
-- "stated"             — explicitly given in the source text.
+- "stated"             — explicitly given in the source text. Attach a source_quote:
+                         a short snippet copied VERBATIM (character-for-character) from
+                         the source that states or directly supports the value. The host
+                         checks that this snippet actually appears in the source and
+                         downgrades the value to default_verify if it does not — so copy,
+                         never paraphrase. If you cannot quote it verbatim, it is not
+                         "stated" (use best_practice or default_verify instead).
 - "literature_grounded"— not in the source, but you filled it and backed it with a
                          specific citation you RETRIEVED via search this session.
                          Record the citation (title, authors, year, and a DOI or
@@ -308,6 +314,10 @@ the SAME citation. List anything still unresolved under open_questions.
 Write instructions in the imperative, at the level of detail a competent researcher
 new to this exact protocol could follow. Never merge two provenance types into one
 value; split a step if parts have different provenance.
+
+For every value you tag "stated", include its source_quote (a verbatim snippet from the
+source). This is what lets the reader audit the one tier that claims the source itself
+said it — an unquoted or paraphrased "stated" value will be downgraded by the host.
 
 When you scale reagent amounts to a user-supplied reaction volume, show the scaling
 arithmetic in the value's provenance note (e.g. "12 mM stock -> 2 mM final in 50 uL =

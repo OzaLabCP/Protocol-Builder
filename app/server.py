@@ -365,7 +365,9 @@ def _resolve(session_id: str, answers: list) -> dict:
 
 def _finish(session_id: str, store: Store, protocol: dict) -> dict:
     report = validate_and_finalize(
-        protocol, allow_stated=(store.session.source_kind != "hypothesis")
+        protocol,
+        allow_stated=(store.session.source_kind != "hypothesis"),
+        source_text=store.session.source_text,
     )
     store.protocol = protocol
     return {
