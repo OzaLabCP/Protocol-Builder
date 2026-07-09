@@ -29,11 +29,18 @@ from pydantic import BaseModel
 from . import config
 from .agent import AgentError, GapFillerAgent, Session
 from .render import (
+    assay_selection_to_markdown,
     design_alignment_to_markdown,
     design_review_to_markdown,
+    grounding_log_to_markdown,
+    materials_to_csv,
     protocol_to_markdown,
 )
-from .validation import validate_and_finalize, validate_design_review
+from .validation import (
+    validate_and_finalize,
+    validate_assay_options,
+    validate_design_review,
+)
 
 MAX_PDF_BYTES = 25 * 1024 * 1024  # API hard limit is 32 MB; leave headroom
 MAX_TEXT_CHARS = int(os.environ.get("GAPFILLER_MAX_TEXT_CHARS", "200000"))
@@ -53,6 +60,8 @@ class Store:
     protocol: Optional[dict] = None
     design_review: Optional[dict] = None
     design_alignment: Optional[dict] = None
+    assay_options: Optional[dict] = None
+    chosen_assay: Optional[dict] = None
 
 
 _SESSIONS: dict[str, Store] = {}
@@ -113,6 +122,17 @@ class DesignRequest(BaseModel):
 class AlignRequest(BaseModel):
     session_id: str
     hypothesis: Optional[str] = None
+
+
+class DiscoverRequest(BaseModel):
+    hypothesis: str
+    constraints: Optional[dict] = None
+    auto_pick: bool = False
+
+
+class ChooseAssayRequest(BaseModel):
+    session_id: str
+    assay_id: str
 
 
 @app.get("/")
@@ -236,20 +256,96 @@ def align(req: AlignRequest) -> dict:
     return {"session_id": req.session_id, "design_alignment": alignment}
 
 
+@app.post("/api/discover")
+def discover(req: DiscoverRequest) -> dict:
+    _prune()
+    hyp = (req.hypothesis or "").strip()
+    if len(hyp) < 12:
+        raise HTTPException(400, "State a hypothesis or goal to test (a sentence).")
+    agent = get_agent()
+    try:
+        session = agent.discover(hyp, req.constraints)
+    except AgentError as exc:
+        raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, _explain(exc))
+
+    session_id = uuid.uuid4().hex
+    store = Store(session=session, created=_now())
+    _SESSIONS[session_id] = store
+    opts = session.assay_options or {}
+
+    if not opts.get("usable", True) or not (opts.get("assays") or []):
+        return {"session_id": session_id, "phase": "rejected", "assay_options": opts}
+
+    report = validate_assay_options(opts)
+    store.assay_options = opts
+    if req.auto_pick:
+        return _choose(session_id, opts.get("recommended_assay_id"))
+    return {"session_id": session_id, "phase": "assays",
+            "assay_options": opts, "validation_report": report}
+
+
+@app.post("/api/choose_assay")
+def choose_assay(req: ChooseAssayRequest) -> dict:
+    store = _get(req.session_id)
+    if store.session.assay_options is None:
+        raise HTTPException(409, "Start from a hypothesis first, then choose an assay.")
+    ids = [a.get("id") for a in store.session.assay_options.get("assays", [])]
+    if req.assay_id not in ids:
+        raise HTTPException(400, "Unknown assay for this session.")  # before any model call
+    return _choose(req.session_id, req.assay_id)
+
+
+def _choose(session_id: str, assay_id: str) -> dict:
+    store = _get(session_id)
+    agent = get_agent()
+    try:
+        phase1 = agent.choose_assay(store.session, assay_id)
+    except AgentError as exc:
+        raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, _explain(exc))
+    store.chosen_assay = store.session.chosen_assay
+    if not (phase1.get("gaps") or []):
+        return _resolve(session_id, [])  # no gaps -> straight to emit
+    return {"session_id": session_id, "phase": "questions", "phase1": phase1}
+
+
 @app.get("/api/protocol/{session_id}.md")
 def download_markdown(session_id: str) -> PlainTextResponse:
     store = _get(session_id)
     if store.protocol is None:
         raise HTTPException(404, "No protocol generated for this session yet.")
-    md = protocol_to_markdown(store.protocol)
+    md = ""
+    if store.chosen_assay is not None:
+        md += assay_selection_to_markdown(store.chosen_assay, store.assay_options or {}) + "\n\n"
+    md += protocol_to_markdown(store.protocol)
     if store.design_alignment is not None:
         md += "\n\n" + design_alignment_to_markdown(store.design_alignment)
     if store.design_review is not None:
         md += "\n\n" + design_review_to_markdown(store.design_review)
+    log_md = grounding_log_to_markdown(store.session.grounding_log)
+    if log_md:
+        md += "\n\n" + log_md
     fname = _slug(store.protocol.get("title", "protocol")) + ".md"
     return PlainTextResponse(
         md,
         media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@app.get("/api/protocol/{session_id}/materials.csv")
+def download_materials_csv(session_id: str) -> PlainTextResponse:
+    store = _get(session_id)
+    if store.protocol is None:
+        raise HTTPException(404, "No protocol generated for this session yet.")
+    csv_text = materials_to_csv(store.protocol)
+    fname = _slug(store.protocol.get("title", "protocol")) + "-materials.csv"
+    return PlainTextResponse(
+        csv_text,
+        media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
 
@@ -267,7 +363,9 @@ def _resolve(session_id: str, answers: list) -> dict:
 
 
 def _finish(session_id: str, store: Store, protocol: dict) -> dict:
-    report = validate_and_finalize(protocol)
+    report = validate_and_finalize(
+        protocol, allow_stated=(store.session.source_kind != "hypothesis")
+    )
     store.protocol = protocol
     return {
         "session_id": session_id,
@@ -276,6 +374,8 @@ def _finish(session_id: str, store: Store, protocol: dict) -> dict:
         "validation_report": report,
         "grounding_log": store.session.grounding_log,
         "markdown_url": f"/api/protocol/{session_id}.md",
+        "materials_csv_url": f"/api/protocol/{session_id}/materials.csv",
+        "chosen_assay": store.chosen_assay,
     }
 
 

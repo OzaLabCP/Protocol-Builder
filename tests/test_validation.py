@@ -9,7 +9,11 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.resolvers import ResolvedCitation, classify_identifier, resolve_doi  # noqa: E402
-from app.validation import validate_and_finalize, validate_design_review  # noqa: E402
+from app.validation import (  # noqa: E402
+    validate_and_finalize,
+    validate_assay_options,
+    validate_design_review,
+)
 
 
 class _DoiResp:
@@ -181,6 +185,46 @@ def test_consistency_flags_inline_value_missing_from_log():
     report = validate_and_finalize(p, fake_resolver({}))
     assert "magnesium glutamate" in report["consistency"]["inline_missing_from_log"]
     assert any("missing from the assumptions_log" in q for q in p["open_questions"])
+
+
+def test_validate_and_finalize_no_stated_downgrades():
+    # a 'stated' material, step, and substep — all must be reclassified with no source
+    mat = {"name": "Buffer", "provenance": "stated"}
+    step = {"number": 1, "title": "mix", "instruction": "mix", "provenance": "stated",
+            "substeps": [{"number": "1.1", "instruction": "pipette", "provenance": "stated"}],
+            "critical_parameters": []}
+    p = base_protocol(materials=[mat], steps=[step])
+    report = validate_and_finalize(p, fake_resolver({}), allow_stated=False)
+    assert mat["provenance"] == "default_verify"
+    assert step["provenance"] == "default_verify"
+    assert step["substeps"][0]["provenance"] == "default_verify"
+    assert len(report["stated_downgrades"]) == 3
+    assert any("no source document" in q for q in p["open_questions"])
+
+    # same protocol with allow_stated=True keeps the stated tiers
+    mat2 = {"name": "Buffer", "provenance": "stated"}
+    p2 = base_protocol(materials=[mat2])
+    validate_and_finalize(p2, fake_resolver({}), allow_stated=True)
+    assert mat2["provenance"] == "stated"
+
+
+def test_validate_assay_options():
+    opts = {
+        "recommended_assay_id": "ghost",  # dangling -> must be repaired
+        "assays": [
+            {"id": "fp", "name": "FP", "provenance": "literature_grounded", "citation": cite("12345678")},
+            {"id": "bad", "name": "BAD", "provenance": "literature_grounded", "citation": cite("99999999")},
+            {"id": "std", "name": "STD", "provenance": "best_practice", "citation": cite("12345678")},
+        ],
+    }
+    resolver = fake_resolver({"12345678": ResolvedCitation("12345678", "pmid", "A study of X", 2020, "pubmed")})
+    report = validate_assay_options(opts, resolver)
+    fp, bad, std = opts["assays"]
+    assert fp["citation_verified"] is True and fp["citation"]["url"].endswith("/12345678/")
+    assert bad["provenance"] == "best_practice" and bad["citation"] is None  # unresolved -> downgraded
+    assert std["citation"] is None  # stray citation stripped from a best_practice assay
+    assert report["recommended_repaired"] is True
+    assert opts["recommended_assay_id"] == "fp"  # repaired to a real id
 
 
 if __name__ == "__main__":

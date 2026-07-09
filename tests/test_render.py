@@ -9,8 +9,11 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.render import (  # noqa: E402
+    assay_selection_to_markdown,
     design_alignment_to_markdown,
     design_review_to_markdown,
+    grounding_log_to_markdown,
+    materials_to_csv,
     protocol_to_markdown,
 )
 
@@ -110,6 +113,65 @@ def test_design_alignment_markdown_and_schema():
                   "Partially", "+DsbC reaction vs. matched -DsbC reaction",
                   "Add a parallel reaction", "Bottom line"]:
         assert chunk in md, f"missing {chunk}"
+
+
+def test_assay_selection_to_markdown():
+    chosen = {"id": "fp", "name": "Fluorescence polarization", "measures": "mP",
+              "why_tests_hypothesis": "binding shifts mP", "critical_comparison": "+X vs -X",
+              "throughput": "high", "difficulty": "low", "key_limitation": "needs a tracer",
+              "provenance": "literature_grounded", "citation_verified": True,
+              "citation": {"authors": "Doe J", "year": 2020, "identifier": "12345678",
+                           "url": "https://pubmed.ncbi.nlm.nih.gov/12345678/"}}
+    opts = {"hypothesis_restated": "X increases binding of Y",
+            "recommendation_rationale": "cheapest high-throughput readout",
+            "assays": [chosen, {"id": "itc", "name": "ITC", "key_limitation": "needs lots of protein"}]}
+    md = assay_selection_to_markdown(chosen, opts)
+    for chunk in ["# Assay selection", "Fluorescence polarization", "+X vs -X",
+                  "Alternatives considered", "ITC", "Why this pick", "✓ verified"]:
+        assert chunk in md, f"missing {chunk}"
+
+
+def test_titration_series_renders_in_protocol():
+    p = {
+        "title": "Binding curve", "summary": "", "estimated_duration": "3 h",
+        "materials": [], "steps": [], "assumptions_log": [],
+        "titration_series": {
+            "variable": "ligand", "unit": "nM", "spacing": "log2", "provenance": "best_practice",
+            "rationale": "brackets the Kd",
+            "points": [
+                {"label": "C1", "target_concentration": "1000 nM",
+                 "components": [{"name": "ligand", "volume": "10 uL"}, {"name": "buffer", "volume": "90 uL"}]},
+                {"label": "blank", "target_concentration": "0",
+                 "components": [{"name": "buffer", "volume": "100 uL"}]},
+            ],
+        },
+    }
+    md = protocol_to_markdown(p)
+    assert "## Titration series" in md
+    assert "brackets the Kd" in md
+    assert "C1" in md and "blank" in md
+    assert "ligand" in md and "buffer" in md
+
+
+def test_materials_csv_export():
+    p = {"materials": [
+        {"name": "Mg", "amount": 10, "unit": "mM", "vendor_or_grade": "Sigma",
+         "provenance": "literature_grounded", "citation_verified": True,
+         "citation": {"identifier": "12345678"}},
+        {"name": "Buffer", "provenance": "best_practice"},
+    ]}
+    csv_text = materials_to_csv(p)
+    lines = csv_text.strip().splitlines()
+    assert lines[0].startswith("reagent,amount,unit")
+    assert "Mg,10,mM,Sigma,literature_grounded,12345678,yes" in csv_text
+    assert "Buffer" in csv_text
+
+
+def test_grounding_log_appendix():
+    assert grounding_log_to_markdown([]) == ""
+    md = grounding_log_to_markdown(["search_pubmed: Mg2+ optimum", "search_preprints: CyDisCo"])
+    assert "Appendix: grounding search trail" in md
+    assert "Mg2+ optimum" in md
 
 
 if __name__ == "__main__":

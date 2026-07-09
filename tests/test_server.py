@@ -65,6 +65,53 @@ def test_align_unknown_session_is_404():
     assert r.status_code == 404
 
 
+def test_discover_short_is_400():
+    r = client.post("/api/discover", json={"hypothesis": "too short"})
+    assert r.status_code == 400
+
+
+def test_discover_accepts_constraints_shape():
+    # constraints + auto_pick are accepted (a 400 on the short hypothesis, not a 422)
+    r = client.post("/api/discover", json={"hypothesis": "x", "constraints": {"equipment": "plate reader"}, "auto_pick": True})
+    assert r.status_code == 400
+
+
+def test_choose_assay_unknown_session_is_404():
+    r = client.post("/api/choose_assay", json={"session_id": "nope", "assay_id": "x"})
+    assert r.status_code == 404
+
+
+def test_choose_assay_wrong_flow_is_409():
+    # a session that never went through discovery has no assay_options -> 409
+    import time as _t
+
+    from app.agent import Session
+    from app.server import Store, _SESSIONS
+    sid = "flowtest"
+    _SESSIONS[sid] = Store(session=Session(), created=_t.time())
+    try:
+        r = client.post("/api/choose_assay", json={"session_id": sid, "assay_id": "x"})
+        assert r.status_code == 409
+    finally:
+        _SESSIONS.pop(sid, None)
+
+
+def test_choose_assay_bad_id_is_400():
+    # endpoint validates assay_id against stored options BEFORE any model call
+    import time as _t
+
+    from app.agent import Session
+    from app.server import Store, _SESSIONS
+    sid = "idtest"
+    sess = Session(source_kind="hypothesis", assay_options={"assays": [{"id": "x"}]})
+    _SESSIONS[sid] = Store(session=sess, created=_t.time())
+    try:
+        r = client.post("/api/choose_assay", json={"session_id": sid, "assay_id": "bogus"})
+        assert r.status_code == 400
+    finally:
+        _SESSIONS.pop(sid, None)
+
+
 def test_analyze_accepts_hypothesis_field():
     # hypothesis is optional; with empty text the endpoint still 400s on the text,
     # proving the field is accepted (not a 422 unprocessable-entity from an unknown form field).

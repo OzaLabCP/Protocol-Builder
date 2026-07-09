@@ -23,8 +23,15 @@ from typing import Any, Optional
 import anthropic
 
 from . import config, literature
-from .prompts import DESIGN_ALIGNMENT_INSTRUCTION, DESIGN_REVIEW_INSTRUCTION, SYSTEM_PROMPT
+from .prompts import (
+    CHOOSE_ASSAY_INSTRUCTION,
+    DESIGN_ALIGNMENT_INSTRUCTION,
+    DESIGN_REVIEW_INSTRUCTION,
+    DISCOVERY_SYSTEM_PROMPT,
+    SYSTEM_PROMPT,
+)
 from .schemas import (
+    EMIT_ASSAY_OPTIONS_TOOL,
     EMIT_DESIGN_ALIGNMENT_TOOL,
     EMIT_DESIGN_REVIEW_TOOL,
     EMIT_PROTOCOL_TOOL,
@@ -55,6 +62,9 @@ class Session:
     pending_tool_use_id: Optional[str] = None  # last emit_* call awaiting ack (revise/design)
     phase1: Optional[dict] = None
     hypothesis: Optional[str] = None  # what the student wants to test (optional)
+    source_kind: str = "paper"  # "paper" or "hypothesis" — set by code, not pasteable text
+    assay_options: Optional[dict] = None  # validated emit_assay_options payload
+    chosen_assay: Optional[dict] = None  # the picked assay dict (for brief + export)
     grounding_log: list = field(default_factory=list)  # queries the app ran
 
 
@@ -113,6 +123,9 @@ class GapFillerAgent:
         self.system = [
             {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
         ]
+        self.discovery_system = [
+            {"type": "text", "text": DISCOVERY_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
+        ]
 
     # -- client-tool dispatch ---------------------------------------------------
     def _dispatch(self, name: str, tool_input: dict, state: RunState) -> str:
@@ -138,15 +151,17 @@ class GapFillerAgent:
         return formatter(results)
 
     # -- one terminal-seeking run -----------------------------------------------
-    def _run(self, messages: list, tools: list, terminal_name: str, state: RunState) -> Optional[Any]:
+    def _run(self, messages: list, tools: list, terminal_name: str, state: RunState,
+             system: Optional[list] = None) -> Optional[Any]:
         """Loop until the model calls `terminal_name`. Resumes across server-tool
         pauses and executes client tools (search_pubmed) in between. Returns the
-        terminal tool_use block, or None if the model ended without calling it."""
+        terminal tool_use block, or None if the model ended without calling it.
+        `system` overrides the default protocol-engineer prompt (used by discover())."""
         while True:
             resp = self.client.messages.create(
                 model=self.model,
                 max_tokens=config.MAX_TOKENS,
-                system=self.system,
+                system=system or self.system,
                 messages=messages,
                 tools=tools,
                 thinking={"type": "adaptive"},
@@ -243,6 +258,63 @@ class GapFillerAgent:
         session.request_tool_use_id = block.id
         session.phase1 = dict(block.input)
         return session
+
+    # -- Phase 0 (hypothesis-first): discover candidate assays -------------------
+    def discover(self, hypothesis: str, constraints: Optional[dict] = None) -> Session:
+        """Hypothesis-first entry: recommend literature-grounded candidate assays that
+        directly test the hypothesis. Runs under DISCOVERY_SYSTEM_PROMPT so the
+        paper-first Methods-section input guard cannot misfire. Parks the emitted block
+        on pending_tool_use_id so choose_assay can ack it via the shared _followup."""
+        session = Session(source_kind="hypothesis")
+        session.hypothesis = (hypothesis or "").strip() or None
+        state = RunState(session=session, searches_left=config.PUBMED_BUDGET)
+
+        parts = [
+            "A student wants to test a hypothesis but has no protocol and does not know "
+            "which assay to run. Recommend the best assay(s) to DIRECTLY test it, "
+            "grounded in the literature, then call emit_assay_options.",
+            "",
+            f"Hypothesis / goal:\n{session.hypothesis or hypothesis}",
+        ]
+        con = {k: str(v).strip() for k, v in (constraints or {}).items() if str(v or "").strip()}
+        if con:
+            parts.append("")
+            parts.append("Constraints to weight the recommendation toward:")
+            for k, v in con.items():
+                parts.append(f"- {k}: {v}")
+        session.messages.append({"role": "user", "content": "\n".join(parts)})
+
+        tools = _grounding_tools() + [EMIT_ASSAY_OPTIONS_TOOL]
+        block = self._run(session.messages, tools, "emit_assay_options", state,
+                          system=self.discovery_system)
+        if block is None:
+            raise AgentError("Discovery ended without calling emit_assay_options.")
+        session.assay_options = dict(block.input)
+        session.pending_tool_use_id = block.id  # parked on the emit slot for _followup
+        return session
+
+    def choose_assay(self, session: Session, assay_id: str) -> dict:
+        """The student picked an assay: ack the parked emit_assay_options and drive the
+        UNTOUCHED request_clarifications phase for the chosen assay. Leaves the session
+        byte-identical to what analyze() produces, so the rest of the pipeline is reused."""
+        assays = (session.assay_options or {}).get("assays") or []
+        chosen = next((a for a in assays if a.get("id") == assay_id), None)
+        if chosen is None:
+            raise AgentError(f"Unknown assay id: {assay_id}")
+        session.chosen_assay = chosen
+        brief = CHOOSE_ASSAY_INSTRUCTION.format(
+            hypothesis=session.hypothesis or "(not explicitly stated)",
+            assay_name=chosen.get("name", assay_id),
+            measures=chosen.get("measures", ""),
+            critical_comparison=chosen.get("critical_comparison", ""),
+        )
+        phase1 = self._followup(session, brief, "request_clarifications",
+                                REQUEST_CLARIFICATIONS_TOOL)
+        # Re-thread exactly as analyze() leaves state for continue_with_answers().
+        session.request_tool_use_id = session.pending_tool_use_id
+        session.pending_tool_use_id = None
+        session.phase1 = phase1
+        return phase1
 
     # -- Phase 2 + 3 ------------------------------------------------------------
     def continue_with_answers(self, session: Session, answers: list) -> dict:

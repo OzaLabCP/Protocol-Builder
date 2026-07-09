@@ -93,6 +93,102 @@ _DESIGN_PROVENANCE = {
     "enum": ["stated", "literature_grounded", "best_practice", "default_verify"],
 }
 
+# Assay cards are proposed by the tool with no source paper: only grounded or
+# standard-practice tiers apply (no "stated", no user gap-fill tiers).
+_ASSAY_PROVENANCE = {
+    "type": "string",
+    "enum": ["literature_grounded", "best_practice"],
+}
+
+
+EMIT_ASSAY_OPTIONS_TOOL = {
+    "name": "emit_assay_options",
+    "description": (
+        "Terminal tool for the hypothesis-first discovery phase: return a falsifiable "
+        "restatement of the student's hypothesis plus 2-5 candidate ASSAYS that could "
+        "directly test it, each grounded in the literature and scored for a novice, and "
+        "a single recommended pick. There is NO source paper. If the input is not a "
+        "testable scientific hypothesis/goal, or is unsafe, set usable=false with a reason."
+    ),
+    "input_schema": {
+        "type": "object",
+        "$defs": {"citation": CITATION_SCHEMA},
+        "properties": {
+            "usable": {
+                "type": "boolean",
+                "description": "False if the input is not a testable scientific "
+                "hypothesis/goal, or is unsafe to assist with.",
+            },
+            "reason": {
+                "type": ["string", "null"],
+                "description": "If usable is false, a brief explanation. Otherwise null.",
+            },
+            "hypothesis_restated": {
+                "type": "string",
+                "description": "A specific, falsifiable restatement the candidate assays "
+                "are judged against.",
+            },
+            "assays": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 5,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "description": "Stable selector used by choose_assay and "
+                            "recommended_assay_id (e.g. 'fp', 'itc', 'bli').",
+                        },
+                        "name": {"type": "string"},
+                        "measures": {
+                            "type": "string",
+                            "description": "What the assay physically measures.",
+                        },
+                        "why_tests_hypothesis": {
+                            "type": "string",
+                            "description": "Why this assay DIRECTLY tests THIS hypothesis.",
+                        },
+                        "critical_comparison": {
+                            "type": "string",
+                            "description": "The condition-vs-condition comparison that "
+                            "makes it a valid test.",
+                        },
+                        "throughput": {"type": "string", "enum": ["low", "medium", "high"]},
+                        "difficulty": {"type": "string", "enum": ["low", "medium", "high"]},
+                        "materials_burden": {"type": "string"},
+                        "equipment_burden": {"type": ["string", "null"]},
+                        "turnaround": {
+                            "type": ["string", "null"],
+                            "description": "Rough time from start to readout.",
+                        },
+                        "key_limitation": {"type": "string"},
+                        "provenance": _ASSAY_PROVENANCE,
+                        "citation": CITATION_SCHEMA,
+                    },
+                    "required": [
+                        "id", "name", "measures", "why_tests_hypothesis",
+                        "critical_comparison", "throughput", "difficulty",
+                        "materials_burden", "key_limitation", "provenance",
+                    ],
+                },
+            },
+            "recommended_assay_id": {
+                "type": "string",
+                "description": "Must equal one assays[].id.",
+            },
+            "recommendation_rationale": {
+                "type": "string",
+                "description": "Why this is the best default for a student new to the technique.",
+            },
+        },
+        "required": [
+            "usable", "hypothesis_restated", "assays",
+            "recommended_assay_id", "recommendation_rationale",
+        ],
+    },
+}
+
 EMIT_DESIGN_REVIEW_TOOL = {
     "name": "emit_design_review",
     "description": (
@@ -434,6 +530,17 @@ REQUEST_CLARIFICATIONS_TOOL = {
                             "description": "Expected unit for number answers "
                             "(e.g. 'uL', 'mM').",
                         },
+                        "plausible_min": {
+                            "type": ["number", "null"],
+                            "description": "For number answers: the low end of the "
+                            "physically sensible range for this parameter. The UI warns "
+                            "(does not block) if the user's value falls outside it.",
+                        },
+                        "plausible_max": {
+                            "type": ["number", "null"],
+                            "description": "For number answers: the high end of the "
+                            "physically sensible range for this parameter.",
+                        },
                         "suggested_default": {
                             "type": ["string", "null"],
                             "description": "Fallback value if the user skips; becomes "
@@ -555,6 +662,59 @@ EMIT_PROTOCOL_TOOL = {
             "materials": {"type": "array", "items": _MATERIAL},
             "equipment": {"type": "array", "items": {"type": "string"}},
             "steps": {"type": "array", "items": _STEP},
+            "titration_series": {
+                "type": ["object", "null"],
+                "description": "Present ONLY when the experiment is run as a "
+                "concentration/dilution series across wells or tubes (binding curves, "
+                "enzyme-kinetics substrate ranges, dose-response, variant screens). It "
+                "turns the single-reaction narrative into the actual bench worklist. "
+                "Omit (null) for a single-reaction protocol.",
+                "additionalProperties": False,
+                "properties": {
+                    "variable": {
+                        "type": "string",
+                        "description": "What is titrated (e.g. 'ligand concentration').",
+                    },
+                    "unit": {"type": ["string", "null"]},
+                    "spacing": {
+                        "type": ["string", "null"],
+                        "enum": ["log2", "log10", "linear", "custom", None],
+                        "description": "How the ladder is spaced.",
+                    },
+                    "rationale": {
+                        "type": ["string", "null"],
+                        "description": "Why this range/spacing (e.g. 'brackets the "
+                        "expected Kd across ~2 logs').",
+                    },
+                    "provenance": _PROVENANCE_ENUM,
+                    "points": {
+                        "type": "array",
+                        "description": "One row per condition, in order.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "label": {"type": "string",
+                                          "description": "e.g. 'C1', 'blank', '1:2'."},
+                                "target_concentration": {"type": ["string", "null"]},
+                                "components": {
+                                    "type": "array",
+                                    "description": "Per-well volumes making up this point.",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "name": {"type": "string"},
+                                            "volume": {"type": ["string", "null"]},
+                                        },
+                                        "required": ["name"],
+                                    },
+                                },
+                            },
+                            "required": ["label"],
+                        },
+                    },
+                },
+                "required": ["variable", "points"],
+            },
             "assumptions_log": {
                 "type": "array",
                 "description": "Every value NOT stated in the source. A projection "

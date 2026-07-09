@@ -102,9 +102,31 @@
   ul.gaps li { color: var(--verify); }
   .refine { margin-top: 26px; padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel2); }
   .refine textarea { min-height: 0; margin: 8px 0; }
+  .modebar { display: flex; gap: 8px; margin: 0 0 14px; }
+  .modebtn { flex: 1; background: var(--panel2); color: var(--muted); border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px 14px; cursor: pointer; text-align: left; font-weight: 600; font-size: 14px; }
+  .modebtn.active { border-color: var(--accent); color: var(--text); background: rgba(110,168,254,.10); }
+  .modebtn small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; margin-top: 3px; }
+  .assay { border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin: 12px 0; background: var(--panel2); position: relative; }
+  .assay.recommended { border-color: var(--stated); box-shadow: 0 0 0 1px rgba(74,192,122,.3) inset; }
+  .assay h4 { margin: 0 0 4px; font-size: 15.5px; }
+  .assay .rec-badge { position: absolute; top: -9px; right: 12px; background: var(--stated); color: #0a0d13;
+    font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 999px; }
+  .assay .kv { font-size: 13px; margin: 4px 0; }
+  .assay .kv b { color: var(--muted); font-weight: 600; }
+  .pill { font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); margin-right: 4px; }
+  .pill.hi { color: var(--stated); border-color: var(--stated); }
+  .pill.med { color: var(--verify); border-color: var(--verify); }
+  .pill.lo { color: var(--muted); }
+  .rangewarn { color: var(--verify); font-size: 12px; margin-top: 4px; }
+  .diff { margin: 10px 0; padding: 10px 14px; border: 1px solid var(--line); border-left: 3px solid var(--accent);
+    border-radius: 8px; background: var(--panel2); font-size: 13px; }
+  .diff ins { color: var(--stated); text-decoration: none; background: rgba(74,192,122,.12); }
+  .diff del { color: var(--danger); background: rgba(239,106,106,.12); }
+  .hint { color: var(--muted); font-size: 12.5px; margin: 6px 0 0; }
   @media print {
     body { background: #fff; color: #000; }
-    header, #input-panel, #questions-panel, .noprint, .toolbar, .refine { display: none !important; }
+    header, #input-panel, #questions-panel, #discovery-panel, #assays-panel, .modebar, .noprint, .toolbar, .refine { display: none !important; }
     .panel { border: 0; background: #fff; margin: 0; padding: 0; }
     main { max-width: 100%; padding: 0; }
     a { color: #000; text-decoration: underline; }
@@ -115,11 +137,18 @@
 <body>
 <header>
   <h1>Methods Gap-Filler</h1>
-  <p>Paste a paper's Methods section. It reconstructs the protocol, asks only about the gaps that matter,
-     grounds filled values in the literature, and emits a protocol where every value is provenance-tagged and every citation is verified.</p>
+  <p>Start from a <b>hypothesis</b> — and find the assay that tests it — or start from a <b>paper</b> and adapt it.
+     Either way you get an executable protocol where every value is provenance-tagged and every citation is verified.</p>
 </header>
 
 <main>
+  <div class="modebar">
+    <button class="modebtn active" id="mode-paper">I have a paper / protocol
+      <small>Paste a Methods section or upload a PDF — adapt it to your needs</small></button>
+    <button class="modebtn" id="mode-hyp">I have a hypothesis
+      <small>Find the best assay to test it, then draft the protocol</small></button>
+  </div>
+
   <section class="panel" id="input-panel">
     <label class="muted" for="methods">Paste a Methods section</label>
     <textarea id="methods" placeholder="Paste the Methods / protocol text here…"></textarea>
@@ -128,7 +157,7 @@
       <input type="file" id="pdf" accept="application/pdf,.pdf" />
       <span id="pdf-label">Upload the paper as a PDF</span>
     </label>
-    <p class="muted small">If you choose a PDF, it's used instead of the pasted text — the tool finds the Methods section for you.</p>
+    <p class="muted small">If you choose a PDF, it's used instead of the pasted text — the tool finds the Methods section for you. Your file is sent to the model only to build this protocol and is held in memory for this session (about an hour), not stored permanently.</p>
     <label class="muted" for="hypothesis" style="display:block;margin-top:14px">Your hypothesis <span class="small">(optional — orients the protocol and lets you check it's directly tested)</span></label>
     <input type="text" id="hypothesis" placeholder="e.g. Adding DsbC increases the yield of correctly folded, disulfide-bonded scFv" style="margin-top:6px" />
     <div class="row">
@@ -137,6 +166,37 @@
       <button class="secondary hidden" id="clear-pdf">Clear PDF</button>
       <span class="muted" id="status"></span>
     </div>
+  </section>
+
+  <section class="panel hidden" id="discovery-panel">
+    <label class="muted" for="disc-hyp">What's your hypothesis or goal?</label>
+    <textarea id="disc-hyp" placeholder="e.g. Overexpressing the GroEL/ES chaperone increases the soluble yield of my membrane protein"></textarea>
+    <p class="muted small">No paper needed — describe what you want to find out. The tool proposes candidate assays, each grounded in the literature, and recommends one.</p>
+    <div class="row" style="margin-top:12px; align-items:flex-start; gap:14px; flex-wrap:wrap">
+      <div style="flex:1; min-width:180px">
+        <label class="muted small" for="c-equip">Equipment on hand <span>(optional)</span></label>
+        <input type="text" id="c-equip" placeholder="e.g. plate reader, qPCR, no FPLC" />
+      </div>
+      <div style="flex:1; min-width:150px">
+        <label class="muted small" for="c-time">Time budget <span>(optional)</span></label>
+        <input type="text" id="c-time" placeholder="e.g. results in a day" />
+      </div>
+      <div style="flex:1; min-width:150px">
+        <label class="muted small" for="c-skill">Skill comfort <span>(optional)</span></label>
+        <input type="text" id="c-skill" placeholder="e.g. new to the bench" />
+      </div>
+    </div>
+    <div class="row">
+      <button id="discover">Find the best assay</button>
+      <button class="secondary" id="autopick">Just pick the best &amp; start</button>
+      <span class="muted" id="disc-status"></span>
+    </div>
+  </section>
+
+  <section class="panel hidden" id="assays-panel">
+    <h2>Candidate assays</h2>
+    <p class="muted" id="assays-hyp"></p>
+    <div id="assays"></div>
   </section>
 
   <section class="panel hidden" id="questions-panel">
@@ -162,8 +222,11 @@ const safeUrl = (u) => { const s = String(u || "").trim(); return /^https?:\/\//
 let SESSION = null;
 let GAPS = [];
 let MD_URL = null;
+let CSV_URL = null;
 let GLOG = [];
 let HYP = "";
+let CURR_PROTOCOL = null;
+let PREV_PROTOCOL = null;
 
 const EXAMPLE = `CFPS reactions were assembled with S30 extract prepared as described previously and a PANOx-SP energy system, and incubated at 30 C. The template plasmid encoded a single-chain antibody fragment. Disulfide-bonded, correctly folded product was obtained. Reactions were quenched and product yield was quantified by radioactive leucine incorporation.`;
 
@@ -182,6 +245,49 @@ function clearPdf() {
   $("#clear-pdf").classList.add("hidden");
 }
 $("#clear-pdf").onclick = clearPdf;
+
+/* ---------- mode toggle ---------- */
+function setMode(mode) {
+  const paper = mode === "paper";
+  $("#mode-paper").classList.toggle("active", paper);
+  $("#mode-hyp").classList.toggle("active", !paper);
+  $("#input-panel").classList.toggle("hidden", !paper);
+  $("#discovery-panel").classList.toggle("hidden", paper);
+  // reset any downstream panels when switching entry paths
+  ["#questions-panel", "#assays-panel", "#result-panel"].forEach(hide);
+  setStatus(""); $("#disc-status").textContent = "";
+}
+$("#mode-paper").onclick = () => setMode("paper");
+$("#mode-hyp").onclick = () => setMode("hyp");
+
+/* ---------- hypothesis-first: discover assays ---------- */
+function discoverBody(autoPick) {
+  const hyp = $("#disc-hyp").value.trim();
+  HYP = hyp;
+  return {
+    hypothesis: hyp,
+    auto_pick: !!autoPick,
+    constraints: {
+      equipment: $("#c-equip").value.trim(),
+      time: $("#c-time").value.trim(),
+      skill: $("#c-skill").value.trim(),
+    },
+  };
+}
+async function runDiscover(autoPick) {
+  const body = discoverBody(autoPick);
+  if (body.hypothesis.length < 12) { discStatus("State a hypothesis or goal (a sentence).", true); return; }
+  discLock(true, autoPick ? "Finding and picking the best assay…" : "Searching the literature for the best assays to test this… (this can take a minute)");
+  try {
+    const r = await postJSON("/api/discover", body);
+    handlePhase(r);
+  } catch (e) { discStatus(e.message, true); }
+  discLock(false);
+}
+$("#discover").onclick = () => runDiscover(false);
+$("#autopick").onclick = () => runDiscover(true);
+function discStatus(msg, isErr) { const s = $("#disc-status"); s.textContent = msg || ""; s.className = isErr ? "err" : "muted"; }
+function discLock(on, msg) { $("#discover").disabled = on; $("#autopick").disabled = on; discStatus(on ? (msg || "Working…") : ""); }
 
 $("#analyze").onclick = async () => {
   const file = $("#pdf").files[0];
@@ -204,15 +310,66 @@ $("#analyze").onclick = async () => {
 function handlePhase(r) {
   SESSION = r.session_id;
   if (r.phase === "rejected") {
-    showResultMessage("Not a protocol", r.phase1.reason || "This input does not look like an experimental methods section.");
+    const reason = (r.assay_options && r.assay_options.reason) || (r.phase1 && r.phase1.reason)
+      || "This input does not look like something the tool can build from.";
+    showResultMessage("Can't proceed with this input", reason);
     return;
   }
+  if (r.phase === "assays") { renderAssays(r.assay_options); return; }
   if (r.phase === "questions") { renderQuestions(r.phase1); return; }
   if (r.phase === "complete") { renderResult(r); return; }
 }
 
+const LEVEL = { high: "hi", medium: "med", low: "lo" };
+function renderAssays(opts) {
+  const rec = opts.recommended_assay_id;
+  $("#assays-hyp").textContent = opts.hypothesis_restated ? "Testing: " + opts.hypothesis_restated : "";
+  const wrap = $("#assays"); wrap.innerHTML = "";
+  (opts.assays || []).forEach((a) => {
+    const box = el("div", "assay" + (a.id === rec ? " recommended" : ""));
+    if (a.id === rec) box.appendChild(el("span", "rec-badge", "Recommended"));
+    box.appendChild(el("h4", null, esc(a.name)));
+    const tp = `<span class="pill ${LEVEL[a.throughput] || "lo"}">throughput: ${esc(a.throughput || "?")}</span>`;
+    const df = `<span class="pill ${LEVEL[a.difficulty] || "lo"}">difficulty: ${esc(a.difficulty || "?")}</span>`;
+    const tt = a.turnaround ? `<span class="pill">⏱ ${esc(a.turnaround)}</span>` : "";
+    box.appendChild(el("div", "kv", tp + df + tt));
+    box.appendChild(el("div", "kv", `<b>Measures:</b> ${esc(a.measures)}`));
+    box.appendChild(el("div", "kv", `<b>Tests your hypothesis by:</b> ${esc(a.why_tests_hypothesis)}`));
+    box.appendChild(el("div", "kv", `<b>Critical comparison:</b> ${esc(a.critical_comparison)}`));
+    if (a.materials_burden) box.appendChild(el("div", "kv", `<b>Materials:</b> ${esc(a.materials_burden)}`));
+    if (a.equipment_burden) box.appendChild(el("div", "kv", `<b>Equipment:</b> ${esc(a.equipment_burden)}`));
+    box.appendChild(el("div", "kv", `<b>Key limitation:</b> ${esc(a.key_limitation)}`));
+    const prov = el("div", "kv"); prov.innerHTML = tierPill(a.provenance) + citeInline(a); box.appendChild(prov);
+    const btn = el("button", "btn", a.id === rec ? "Use this assay (recommended)" : "Use this assay");
+    btn.onclick = () => chooseAssay(a.id, btn);
+    box.appendChild(el("div", "row", "")).appendChild(btn);
+    wrap.appendChild(box);
+  });
+  if (opts.recommendation_rationale) {
+    wrap.appendChild(el("p", "hint", "Why the recommendation: " + esc(opts.recommendation_rationale)));
+  }
+  hide("#discovery-panel");
+  show("#assays-panel");
+  $("#assays-panel").scrollIntoView({ behavior: "smooth" });
+}
+
+async function chooseAssay(assayId, btn) {
+  const buttons = document.querySelectorAll("#assays button");
+  buttons.forEach((b) => (b.disabled = true));
+  setStatus("Drafting a protocol for this assay… (this can take a minute)");
+  try {
+    const r = await postJSON("/api/choose_assay", { session_id: SESSION, assay_id: assayId });
+    hide("#assays-panel");
+    handlePhase(r);
+  } catch (e) { setStatus(e.message, true); buttons.forEach((b) => (b.disabled = false)); }
+}
+
 function renderResult(r) {
+  // capture the just-rendered protocol so the next rebuild can diff against it
+  PREV_PROTOCOL = CURR_PROTOCOL;
+  CURR_PROTOCOL = r.protocol;
   MD_URL = r.markdown_url || null;
+  CSV_URL = r.materials_csv_url || null;
   GLOG = r.grounding_log || [];
   renderProtocol(r.protocol);
 }
@@ -255,6 +412,19 @@ function renderGap(g, i) {
     const wrap = el("div", "row"); wrap.appendChild(inp);
     if (g.unit) wrap.appendChild(el("span", "muted", esc(g.unit)));
     box.appendChild(wrap);
+    const lo = g.plausible_min, hi = g.plausible_max;
+    if (lo != null || hi != null) {
+      const warn = el("div", "rangewarn hidden");
+      box.appendChild(warn);
+      inp.addEventListener("input", () => {
+        const v = parseFloat(inp.value);
+        const bad = !isNaN(v) && ((lo != null && v < lo) || (hi != null && v > hi));
+        warn.textContent = bad
+          ? `⚠ Outside the usual range (${lo != null ? lo : "?"}–${hi != null ? hi : "?"}${g.unit ? " " + g.unit : ""}). Double-check before continuing.`
+          : "";
+        warn.classList.toggle("hidden", !bad);
+      });
+    }
   } else {
     const inp = el("input"); inp.type = "text"; inp.id = name + "_val";
     inp.placeholder = g.suggested_default != null ? `default: ${g.suggested_default}` : "";
@@ -339,6 +509,8 @@ function renderProtocol(p) {
   P.appendChild(toolbar());
   P.appendChild(el("div", null, "")).id = "align-anchor";
   P.appendChild(el("div", null, "")).id = "design-anchor";
+  const changes = protocolDiff(PREV_PROTOCOL, p);
+  if (changes.length) P.appendChild(diffBox(changes));
   P.appendChild(validationSummary(p.validation_report));
   P.appendChild(legend());
 
@@ -384,6 +556,28 @@ function renderProtocol(p) {
   });
   P.appendChild(steps);
 
+  // Titration series worklist (present for dilution/dose-response/screen protocols)
+  const ts = p.titration_series;
+  if (ts && (ts.points || []).length) {
+    const unit = ts.unit ? ` (${esc(ts.unit)})` : "";
+    P.appendChild(el("h3", null, `Titration series — ${esc(ts.variable || "condition")}${unit} ${tierPill(ts.provenance)}`));
+    const meta = [ts.spacing ? "spacing: " + esc(ts.spacing) : "", esc(ts.rationale || "")].filter(Boolean).join(" · ");
+    if (meta) P.appendChild(el("p", "muted small", meta));
+    const comp = [];
+    ts.points.forEach((pt) => (pt.components || []).forEach((c) => { if (c.name && !comp.includes(c.name)) comp.push(c.name); }));
+    const tt = el("table");
+    tt.innerHTML = "<tr><th>Condition</th><th>Target</th>" + comp.map((n) => `<th>${esc(n)}</th>`).join("") + "</tr>";
+    ts.points.forEach((pt) => {
+      const vols = {}; (pt.components || []).forEach((c) => (vols[c.name] = c.volume));
+      const tr = el("tr");
+      tr.appendChild(el("td", null, esc(pt.label || "")));
+      tr.appendChild(el("td", null, esc(pt.target_concentration || "—")));
+      comp.forEach((n) => tr.appendChild(el("td", null, esc(vols[n] != null ? vols[n] : "—"))));
+      tt.appendChild(tr);
+    });
+    P.appendChild(tt);
+  }
+
   // Assumptions log — the payoff panel
   P.appendChild(el("h3", null, "Assumptions log — everything not stated in the source"));
   const tbl = el("table");
@@ -418,24 +612,36 @@ function renderProtocol(p) {
 }
 
 function toolbar() {
+  const wrap = el("div", "noprint");
   const bar = el("div", "toolbar noprint");
   if (MD_URL) {
     const dl = el("a", "btn", "⬇ Download .md");
     dl.href = MD_URL; dl.setAttribute("download", "");
     bar.appendChild(dl);
   }
-  const al = el("button", "btn", "🎯 Test my hypothesis");
-  al.title = "Does this protocol directly test your hypothesis? Get a verdict, the critical comparison, confounds, and one-click protocol fixes.";
-  al.onclick = () => requestAlignment(al);
-  bar.appendChild(al);
+  if (CSV_URL) {
+    const cs = el("a", "btn secondary", "⬇ Materials .csv");
+    cs.href = CSV_URL; cs.setAttribute("download", "");
+    cs.title = "The materials table as CSV, with provenance columns.";
+    bar.appendChild(cs);
+  }
   const dr = el("button", "btn", "🎓 Design review");
-  dr.title = "Teach the experiment around this protocol: hypothesis, controls, readout, replication, pitfalls";
+  dr.title = "Reason about the experiment around this protocol: controls, variables, readout, replication, pitfalls.";
   dr.onclick = () => requestDesign(dr);
   bar.appendChild(dr);
+  const al = el("button", "btn", HYP ? "🎯 Test my hypothesis" : "🎯 Test a hypothesis");
+  al.title = HYP
+    ? "Does this protocol directly test your hypothesis? Get a verdict, the critical comparison, confounds, and one-click protocol fixes."
+    : "Check whether this protocol directly tests a hypothesis. You didn't state one, so you can type it now (or let the tool infer it, clearly labelled).";
+  al.onclick = () => requestAlignment(al);
+  bar.appendChild(al);
   const pr = el("button", "btn secondary", "🖨 Print / Save PDF");
   pr.onclick = () => window.print();
   bar.appendChild(pr);
-  return bar;
+  wrap.appendChild(bar);
+  wrap.appendChild(el("p", "hint noprint",
+    "New to designing this? Start with <b>Design review</b> to sanity-check the experiment, then <b>Test a hypothesis</b> to confirm it's directly tested."));
+  return wrap;
 }
 
 async function requestDesign(btn) {
@@ -448,17 +654,37 @@ async function requestDesign(btn) {
   btn.disabled = false;
 }
 
-async function requestAlignment(btn) {
-  btn.disabled = true;
-  setStatus("Checking whether the protocol directly tests your hypothesis… (this can take a minute)");
+function requestAlignment(btn) {
+  if (HYP) { runAlignment(HYP); return; }
+  // No hypothesis on file — ask for one rather than silently inferring.
+  const host = $("#align-anchor");
+  host.innerHTML = "";
+  const box = el("div", "align");
+  box.appendChild(el("h2", null, "🎯 Test a hypothesis"));
+  box.appendChild(el("p", "muted small", "You didn't state a hypothesis. Type the one this protocol should test, or let the tool infer it (it'll be clearly labelled as inferred)."));
+  const inp = el("input"); inp.type = "text"; inp.id = "align-hyp";
+  inp.placeholder = "e.g. Adding DsbC increases the yield of correctly folded scFv";
+  box.appendChild(inp);
+  const row = el("div", "row");
+  const go = el("button", "btn", "Check alignment");
+  go.onclick = () => { HYP = inp.value.trim(); runAlignment(HYP || null); };
+  const infer = el("button", "btn secondary", "Let the tool infer");
+  infer.onclick = () => runAlignment(null);
+  row.appendChild(go); row.appendChild(infer);
+  box.appendChild(row);
+  host.appendChild(box);
+  box.scrollIntoView({ behavior: "smooth" });
+}
+
+async function runAlignment(hyp) {
+  setStatus("Checking whether the protocol directly tests the hypothesis… (this can take a minute)");
   try {
     const body = { session_id: SESSION };
-    if (HYP) body.hypothesis = HYP;
+    if (hyp) body.hypothesis = hyp;
     const r = await postJSON("/api/align", body);
     renderAlignment(r.design_alignment);
     setStatus("");
   } catch (e) { setStatus(e.message, true); }
-  btn.disabled = false;
 }
 
 const VERDICT = {
@@ -647,6 +873,45 @@ function refineBox() {
     setStatus("");
   };
   box.appendChild(btn);
+  return box;
+}
+
+/* Structured before/after diff of the LAST rebuild only (not a version history). */
+function protocolDiff(prev, curr) {
+  if (!prev || !curr) return [];
+  const out = [];
+  const amt = (m) => [m.amount, m.unit].filter((x) => x != null && x !== "").join(" ");
+  if ((prev.title || "") !== (curr.title || "")) out.push(`Title: <del>${esc(prev.title || "")}</del> <ins>${esc(curr.title || "")}</ins>`);
+  if ((prev.estimated_duration || "") !== (curr.estimated_duration || "")) out.push(`Duration: <del>${esc(prev.estimated_duration || "")}</del> <ins>${esc(curr.estimated_duration || "")}</ins>`);
+  // materials by name
+  const pm = new Map((prev.materials || []).map((m) => [m.name, m]));
+  const cm = new Map((curr.materials || []).map((m) => [m.name, m]));
+  cm.forEach((m, name) => {
+    if (!pm.has(name)) out.push(`Added reagent: <ins>${esc(name)}${amt(m) ? " (" + esc(amt(m)) + ")" : ""}</ins>`);
+    else {
+      const o = pm.get(name);
+      if (amt(o) !== amt(m)) out.push(`${esc(name)}: <del>${esc(amt(o) || "—")}</del> → <ins>${esc(amt(m) || "—")}</ins>`);
+      else if ((o.provenance || "") !== (m.provenance || "")) out.push(`${esc(name)} provenance: <del>${esc(o.provenance)}</del> → <ins>${esc(m.provenance)}</ins>`);
+    }
+  });
+  pm.forEach((m, name) => { if (!cm.has(name)) out.push(`Removed reagent: <del>${esc(name)}</del>`); });
+  // steps by count + titles
+  const ps = prev.steps || [], cs = curr.steps || [];
+  if (ps.length !== cs.length) out.push(`Steps: <del>${ps.length}</del> → <ins>${cs.length}</ins>`);
+  const pt = new Set(ps.map((s) => s.title));
+  cs.forEach((s) => { if (!pt.has(s.title)) out.push(`New step: <ins>${esc(s.title)}</ins>`); });
+  const ct = new Set(cs.map((s) => s.title));
+  ps.forEach((s) => { if (!ct.has(s.title)) out.push(`Dropped step: <del>${esc(s.title)}</del>`); });
+  return out;
+}
+
+function diffBox(changes) {
+  const box = el("div", "diff noprint");
+  box.appendChild(el("div", null, "<b>What changed in this rebuild</b>"));
+  const ul = el("ul");
+  changes.slice(0, 20).forEach((c) => ul.appendChild(el("li", null, c)));
+  box.appendChild(ul);
+  if (changes.length > 20) box.appendChild(el("div", "muted", `…and ${changes.length - 20} more.`));
   return box;
 }
 

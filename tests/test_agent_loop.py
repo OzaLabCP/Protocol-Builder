@@ -154,6 +154,70 @@ def test_analyze_captures_hypothesis_and_injects_preamble():
     assert "Adding DsbC increases folded scFv yield" in first_user
 
 
+def test_discover_emits_assay_options():
+    opts = {"usable": True, "hypothesis_restated": "H",
+            "assays": [{"id": "fp", "name": "FP", "measures": "m", "why_tests_hypothesis": "w",
+                        "critical_comparison": "c", "throughput": "high", "difficulty": "low",
+                        "materials_burden": "cheap", "key_limitation": "k", "provenance": "best_practice"}],
+            "recommended_assay_id": "fp", "recommendation_rationale": "r"}
+    queue = [
+        Resp([Block("search_pubmed", "s1", {"query": "FP binding assay"})]),
+        Resp([Block("emit_assay_options", "a1", opts)]),
+    ]
+    agent = make_agent(queue)
+    session = agent.discover("Does adding X increase binding of Y?", {"equipment": "plate reader"})
+    assert session.source_kind == "hypothesis"
+    assert session.hypothesis == "Does adding X increase binding of Y?"
+    assert session.assay_options["assays"][0]["id"] == "fp"
+    assert session.pending_tool_use_id == "a1"  # parked on the emit slot for _followup
+    assert session.grounding_log == ["search_pubmed: FP binding assay"]
+    # discovery ran under the discovery system prompt, not the protocol-engineer one
+    assert agent.client.messages.calls[0]["system"] is agent.discovery_system
+
+
+def test_choose_assay_threads_to_request_clarifications():
+    session = Session(
+        messages=[{"role": "user", "content": "seed"}],
+        assay_options={"assays": [{"id": "x", "name": "X", "measures": "m", "critical_comparison": "c"}]},
+        pending_tool_use_id="a1", source_kind="hypothesis", hypothesis="H",
+    )
+    queue = [Resp([Block("request_clarifications", "c1", {"usable": True, "gaps": []})])]
+    agent = make_agent(queue)
+    phase1 = agent.choose_assay(session, "x")
+    assert session.chosen_assay["id"] == "x"
+    assert session.request_tool_use_id == "c1"
+    assert session.pending_tool_use_id is None  # re-threaded
+    assert phase1 == {"usable": True, "gaps": []}
+    last_user = [m for m in session.messages if m["role"] == "user"][-1]
+    kinds = [b.get("type") for b in last_user["content"]]
+    assert "tool_result" in kinds and "text" in kinds
+    text = [b for b in last_user["content"] if b.get("type") == "text"][0]["text"]
+    assert text.startswith("=== DESIGN BRIEF ===")
+
+
+def test_choose_assay_unknown_id_raises():
+    session = Session(messages=[{"role": "user", "content": "seed"}],
+                      assay_options={"assays": [{"id": "x"}]}, pending_tool_use_id="a1")
+    agent = make_agent([])  # empty queue: raising before any model call proves no spend
+    try:
+        agent.choose_assay(session, "nope")
+        assert False, "expected AgentError"
+    except Exception as exc:
+        from app.agent import AgentError
+        assert isinstance(exc, AgentError)
+
+
+def test_hypothesis_first_reaches_emit_protocol():
+    protocol = {"title": "P", "summary": "s", "estimated_duration": "1 h",
+                "materials": [], "steps": [], "assumptions_log": []}
+    session = Session(messages=[{"role": "user", "content": "seed"}],
+                      request_tool_use_id="c1", source_kind="hypothesis")
+    queue = [Resp([Block("emit_protocol", "e1", protocol)])]
+    agent = make_agent(queue)
+    out = agent.continue_with_answers(session, answers=[])
+    assert out["title"] == "P"  # hypothesis-first converges on the untouched phase-2/3 path
+
+
 def test_pubmed_budget_exhaustion():
     agent = make_agent([])  # no queue needed; test _dispatch directly
     literature.search_pubmed = lambda q, retmax=5: [{"pmid": "1", "title": "t", "authors": "A", "year": 2020, "doi": None}]

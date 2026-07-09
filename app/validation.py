@@ -50,6 +50,26 @@ def _iter_citation_entries(protocol: dict) -> Iterator[tuple[dict, str]]:
         yield a, f"assumptions_log[{k}] '{a.get('parameter', '?')}'"
 
 
+def _iter_all_provenance_entries(protocol: dict) -> Iterator[tuple[dict, str]]:
+    """Yield (entry, location) for EVERY provenance-bearing location, including step
+    and substep provenance that _iter_citation_entries deliberately omits. Used by the
+    no-source pre-pass so a stray "stated" tier cannot hide in a step or substep."""
+    for i, mat in enumerate(protocol.get("materials") or []):
+        yield mat, f"materials[{i}] '{mat.get('name', '?')}'"
+    for step in protocol.get("steps") or []:
+        snum = step.get("number", "?")
+        yield step, f"step {snum} '{step.get('title', '?')}'"
+        for j, cp in enumerate(step.get("critical_parameters") or []):
+            yield cp, f"step {snum} critical_parameters[{j}] '{cp.get('name', '?')}'"
+        for k, ss in enumerate(step.get("substeps") or []):
+            yield ss, f"step {snum} substeps[{k}] '{ss.get('number', '?')}'"
+    ts = protocol.get("titration_series")
+    if isinstance(ts, dict):
+        yield ts, "titration_series"
+    for m, a in enumerate(protocol.get("assumptions_log") or []):
+        yield a, f"assumptions_log[{m}] '{a.get('parameter', '?')}'"
+
+
 def _downgrade(entry: dict, note: str) -> None:
     entry["provenance"] = "default_verify"
     entry["citation"] = None
@@ -61,19 +81,35 @@ def _downgrade(entry: dict, note: str) -> None:
 
 
 def validate_and_finalize(
-    protocol: dict, resolver: Resolver = resolve_citation
+    protocol: dict, resolver: Resolver = resolve_citation, *, allow_stated: bool = True
 ) -> dict:
     """Validate and repair the protocol in place. Returns a report dict; the
     protocol argument is mutated (citations verified/nulled, tiers downgraded,
-    open_questions appended)."""
+    open_questions appended).
+
+    When allow_stated is False (hypothesis-first: no source document), a pre-pass
+    downgrades any value tagged "stated" to default_verify — the "stated" tier is a
+    claim about a source paper, and there is none. This is keyed by the caller on
+    session.source_kind (set in code), not on any pasteable text, so it is paste-proof."""
     report = {
         "citations_checked": 0,
         "verified": [],
         "downgraded": [],
         "invariant_fixes": [],
+        "stated_downgrades": [],
         "consistency": {"inline_missing_from_log": [], "log_missing_from_inline": []},
     }
     open_questions = list(protocol.get("open_questions") or [])
+
+    if not allow_stated:
+        for entry, location in _iter_all_provenance_entries(protocol):
+            if entry.get("provenance") == "stated":
+                _downgrade(entry, "tagged stated but this protocol has no source document.")
+                report["stated_downgrades"].append(location)
+                open_questions.append(
+                    f"{location}: tagged 'stated' but there is no source document "
+                    f"(hypothesis-first draft); downgraded to default_verify."
+                )
 
     for entry, location in _iter_citation_entries(protocol):
         prov = entry.get("provenance")
@@ -283,4 +319,52 @@ def validate_design_review(review: dict, resolver: Resolver = resolve_citation) 
             )
 
     review["validation_report"] = report
+    return report
+
+
+def validate_assay_options(opts: dict, resolver: Resolver = resolve_citation) -> dict:
+    """Verify the citation on each candidate assay (hypothesis-first discovery). Keeps
+    verified literature_grounded assays (with a canonical url), downgrades unverifiable
+    ones to best_practice, strips stray citations, and repairs a dangling
+    recommended_assay_id. Mutates `opts`; returns a small report."""
+    report = {"citations_checked": 0, "verified": [], "downgraded": [], "recommended_repaired": False}
+    assays = opts.get("assays") or []
+    for assay in assays:
+        prov = assay.get("provenance")
+        cit = assay.get("citation")
+        name = assay.get("name", "?")
+
+        if prov == "literature_grounded" and not cit:
+            assay["provenance"] = "best_practice"
+            assay["citation"] = None
+            assay["citation_verified"] = False
+            report["downgraded"].append({"assay": name, "reason": "no citation"})
+            continue
+        if prov != "literature_grounded" and cit:
+            assay["citation"] = None  # stray citation on a non-grounded assay
+            continue
+        if not cit:
+            continue
+
+        report["citations_checked"] += 1
+        ok, resolved, reason = check_citation(cit, resolver)
+        if ok:
+            assay["citation_verified"] = True
+            assay["citation"]["url"] = cit.get("url") or (_canonical_url(resolved) if resolved else None)
+            report["verified"].append({"assay": name, "identifier": cit.get("identifier")})
+        else:
+            assay["provenance"] = "best_practice"
+            assay["citation"] = None
+            assay["citation_verified"] = False
+            report["downgraded"].append(
+                {"assay": name, "identifier": cit.get("identifier"), "reason": reason}
+            )
+
+    # Repair a recommended_assay_id that points at no assay.
+    ids = [a.get("id") for a in assays]
+    if assays and opts.get("recommended_assay_id") not in ids:
+        opts["recommended_assay_id"] = ids[0]
+        report["recommended_repaired"] = True
+
+    opts["validation_report"] = report
     return report
