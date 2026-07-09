@@ -28,8 +28,8 @@ from pydantic import BaseModel
 
 from . import config
 from .agent import AgentError, GapFillerAgent, Session
-from .render import protocol_to_markdown
-from .validation import validate_and_finalize
+from .render import design_review_to_markdown, protocol_to_markdown
+from .validation import validate_and_finalize, validate_design_review
 
 MAX_PDF_BYTES = 25 * 1024 * 1024  # API hard limit is 32 MB; leave headroom
 MAX_TEXT_CHARS = int(os.environ.get("GAPFILLER_MAX_TEXT_CHARS", "200000"))
@@ -47,6 +47,7 @@ class Store:
     session: Session
     created: float
     protocol: Optional[dict] = None
+    design_review: Optional[dict] = None
 
 
 _SESSIONS: dict[str, Store] = {}
@@ -98,6 +99,10 @@ class ResolveRequest(BaseModel):
 class ReviseRequest(BaseModel):
     session_id: str
     instruction: str
+
+
+class DesignRequest(BaseModel):
+    session_id: str
 
 
 @app.get("/")
@@ -182,12 +187,31 @@ def revise(req: ReviseRequest) -> dict:
     return _finish(req.session_id, store, protocol)
 
 
+@app.post("/api/design")
+def design(req: DesignRequest) -> dict:
+    store = _get(req.session_id)
+    if store.protocol is None:
+        raise HTTPException(409, "Generate a protocol first, then request a design review.")
+    agent = get_agent()
+    try:
+        review = agent.design_review(store.session)
+    except AgentError as exc:
+        raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, _explain(exc))
+    report = validate_design_review(review)
+    store.design_review = review
+    return {"session_id": req.session_id, "design_review": review, "validation_report": report}
+
+
 @app.get("/api/protocol/{session_id}.md")
 def download_markdown(session_id: str) -> PlainTextResponse:
     store = _get(session_id)
     if store.protocol is None:
         raise HTTPException(404, "No protocol generated for this session yet.")
     md = protocol_to_markdown(store.protocol)
+    if store.design_review is not None:
+        md += "\n\n" + design_review_to_markdown(store.design_review)
     fname = _slug(store.protocol.get("title", "protocol")) + ".md"
     return PlainTextResponse(
         md,

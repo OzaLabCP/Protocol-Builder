@@ -9,7 +9,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.resolvers import ResolvedCitation, classify_identifier, resolve_doi  # noqa: E402
-from app.validation import validate_and_finalize  # noqa: E402
+from app.validation import validate_and_finalize, validate_design_review  # noqa: E402
 
 
 class _DoiResp:
@@ -154,6 +154,25 @@ def test_year_mismatch_downgraded():
     report = validate_and_finalize(p, fake_resolver({"12345678": ResolvedCitation("12345678", "pmid", "A study of X", 2020, "pubmed")}))
     assert mat["provenance"] == "default_verify"
     assert any("mismatch" in d["reason"] for d in report["downgraded"])
+
+
+def test_validate_design_review_verifies_and_downgrades():
+    review = {"controls": [
+        {"name": "pos", "type": "positive", "rules_out": "assay can't detect",
+         "provenance": "literature_grounded",
+         "citation": cite("12345678", title="A study of X", year=2020)},
+        {"name": "neg", "type": "negative", "rules_out": "background",
+         "provenance": "literature_grounded", "citation": cite("99999999")},
+        {"name": "veh", "type": "vehicle", "rules_out": "solvent effect",
+         "provenance": "best_practice", "citation": None},
+    ]}
+    resolver = fake_resolver({"12345678": ResolvedCitation("12345678", "pmid", "A study of X", 2020, "pubmed")})
+    report = validate_design_review(review, resolver)
+    assert [v["control"] for v in report["verified"]] == ["pos"]
+    assert [d["control"] for d in report["downgraded"]] == ["neg"]
+    assert review["controls"][0]["citation_verified"] is True
+    assert review["controls"][1]["provenance"] == "best_practice"
+    assert review["controls"][1]["citation"] is None
 
 
 def test_consistency_flags_inline_value_missing_from_log():

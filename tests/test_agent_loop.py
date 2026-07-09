@@ -99,16 +99,29 @@ def test_phase2_nudges_when_no_emit():
 
 def test_revise_reemits_with_correction():
     protocol = {"title": "P2", "summary": "s", "estimated_duration": "1 h", "materials": [], "steps": [], "assumptions_log": []}
-    session = Session(messages=[{"role": "user", "content": "seed"}], emit_tool_use_id="e0")
+    session = Session(messages=[{"role": "user", "content": "seed"}], pending_tool_use_id="e0")
     queue = [Resp([Block("emit_protocol", "e1", protocol)])]
     agent = make_agent(queue)
     out = agent.revise(session, "use 150 uL wells")
     assert out["title"] == "P2"
-    assert session.emit_tool_use_id == "e1"  # updated to the new emit
+    assert session.pending_tool_use_id == "e1"  # updated to the new emit
     # a tool_result for the previous emit + the correction text were appended
     last_user = [m for m in session.messages if m["role"] == "user"][-1]
     kinds = [b.get("type") for b in last_user["content"]]
     assert "tool_result" in kinds and "text" in kinds
+
+
+def test_design_review_emits():
+    review = {"question": "q", "hypothesis": "h",
+              "variables": {"independent": [], "dependent": [], "controlled": []},
+              "controls": [], "readout": {"measures": "m", "answers_question": True},
+              "replication": {"rationale": "r"}, "expected_results": [], "interpretation_limits": []}
+    session = Session(messages=[{"role": "user", "content": "seed"}], pending_tool_use_id="e1")
+    queue = [Resp([Block("emit_design_review", "d1", review)])]
+    agent = make_agent(queue)
+    out = agent.design_review(session)
+    assert out["hypothesis"] == "h"
+    assert session.pending_tool_use_id == "d1"  # can chain further follow-ups
 
 
 def test_pubmed_budget_exhaustion():

@@ -88,6 +88,128 @@ SEARCH_PUBMED_TOOL = {
 }
 
 
+_DESIGN_PROVENANCE = {
+    "type": "string",
+    "enum": ["stated", "literature_grounded", "best_practice", "default_verify"],
+}
+
+EMIT_DESIGN_REVIEW_TOOL = {
+    "name": "emit_design_review",
+    "description": (
+        "Emit an experiment-design review that teaches the student to reason about "
+        "the experiment AROUND this protocol — hypothesis, controls, variables, "
+        "readout adequacy, replication, expected results, failure modes, and the "
+        "limits of interpretation. Ground controls in the literature where you can."
+    ),
+    "input_schema": {
+        "type": "object",
+        "$defs": {"citation": CITATION_SCHEMA},
+        "properties": {
+            "question": {
+                "type": "string",
+                "description": "The scientific question this experiment addresses, in one sentence.",
+            },
+            "hypothesis": {
+                "type": "string",
+                "description": "A specific, testable hypothesis that predicts a direction or "
+                "outcome (not a topic). If the student's goal is unstated, infer the most "
+                "likely one and say so.",
+            },
+            "variables": {
+                "type": "object",
+                "properties": {
+                    "independent": {"type": "array", "items": {"type": "string"},
+                                    "description": "What is deliberately varied."},
+                    "dependent": {"type": "array", "items": {"type": "string"},
+                                  "description": "What is measured (the outcome)."},
+                    "controlled": {"type": "array", "items": {"type": "string"},
+                                   "description": "What is held constant to avoid confounds."},
+                },
+                "required": ["independent", "dependent", "controlled"],
+            },
+            "controls": {
+                "type": "array",
+                "description": "Every control the experiment needs. A control the student "
+                "cannot explain is cargo-culting — so each states what it rules out.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "type": {"type": "string",
+                                 "enum": ["positive", "negative", "vehicle", "no_template",
+                                          "loading", "sham", "other"]},
+                        "rules_out": {"type": "string",
+                                      "description": "The artifact or alternative explanation "
+                                      "this control eliminates."},
+                        "provenance": _DESIGN_PROVENANCE,
+                        "citation": CITATION_SCHEMA,
+                    },
+                    "required": ["name", "type", "rules_out"],
+                },
+            },
+            "readout": {
+                "type": "object",
+                "properties": {
+                    "measures": {"type": "string", "description": "What the readout physically measures."},
+                    "answers_question": {"type": "boolean",
+                                         "description": "Does this readout actually test the hypothesis?"},
+                    "caveat": {"type": ["string", "null"],
+                               "description": "Where the readout could mislead (proxy, saturation, indirect)."},
+                },
+                "required": ["measures", "answers_question"],
+            },
+            "replication": {
+                "type": "object",
+                "properties": {
+                    "biological": {"type": ["string", "null"], "description": "Independent biological replicates."},
+                    "technical": {"type": ["string", "null"], "description": "Technical replicates per sample."},
+                    "rationale": {"type": "string",
+                                  "description": "Why this many, and what source of variation each captures."},
+                },
+                "required": ["rationale"],
+            },
+            "expected_results": {
+                "type": "array",
+                "description": "If you see X, it means Y — before you're staring at the data.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "scenario": {"type": "string"},
+                        "interpretation": {"type": "string"},
+                    },
+                    "required": ["scenario", "interpretation"],
+                },
+            },
+            "failure_modes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "symptom": {"type": "string"},
+                        "likely_cause": {"type": "string"},
+                        "check": {"type": ["string", "null"], "description": "How to confirm/rule out the cause."},
+                    },
+                    "required": ["symptom", "likely_cause"],
+                },
+            },
+            "interpretation_limits": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "What this experiment cannot conclude even if it works perfectly.",
+            },
+            "design_gaps": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Weaknesses in the CURRENT plan the student should fix "
+                "(missing control, underpowered, confounded readout, no baseline).",
+            },
+        },
+        "required": ["question", "hypothesis", "variables", "controls", "readout",
+                     "replication", "expected_results", "interpretation_limits"],
+    },
+}
+
+
 SEARCH_PREPRINTS_TOOL = {
     "name": "search_preprints",
     "description": (

@@ -23,8 +23,9 @@ from typing import Any, Optional
 import anthropic
 
 from . import config, literature
-from .prompts import SYSTEM_PROMPT
+from .prompts import DESIGN_REVIEW_INSTRUCTION, SYSTEM_PROMPT
 from .schemas import (
+    EMIT_DESIGN_REVIEW_TOOL,
     EMIT_PROTOCOL_TOOL,
     REQUEST_CLARIFICATIONS_TOOL,
     SEARCH_PREPRINTS_TOOL,
@@ -50,7 +51,7 @@ class AgentError(RuntimeError):
 class Session:
     messages: list = field(default_factory=list)
     request_tool_use_id: Optional[str] = None
-    emit_tool_use_id: Optional[str] = None  # last emit_protocol call, for revisions
+    pending_tool_use_id: Optional[str] = None  # last emit_* call awaiting ack (revise/design)
     phase1: Optional[dict] = None
     grounding_log: list = field(default_factory=list)  # queries the app ran
 
@@ -252,7 +253,7 @@ class GapFillerAgent:
         tools = _grounding_tools() + [EMIT_PROTOCOL_TOOL]
         block = self._run(session.messages, tools, "emit_protocol", state)
         if block is not None:
-            session.emit_tool_use_id = block.id
+            session.pending_tool_use_id = block.id
             return dict(block.input)
 
         # Model stopped without emitting — nudge once, emit-only (no search tools).
@@ -266,41 +267,49 @@ class GapFillerAgent:
         block = self._run(session.messages, [EMIT_PROTOCOL_TOOL], "emit_protocol", state)
         if block is None:
             raise AgentError("Phase 3 ended without calling emit_protocol.")
-        session.emit_tool_use_id = block.id
+        session.pending_tool_use_id = block.id
         return dict(block.input)
 
-    # -- Revise (edit-and-regenerate) -------------------------------------------
-    def revise(self, session: Session, instruction: str) -> dict:
-        """Feed a correction and re-emit. Continues the same conversation, so the
-        model keeps all prior context and grounding."""
-        if session.emit_tool_use_id is None:
-            raise AgentError("Nothing to revise yet — emit a protocol first.")
+    # -- Continue after an emit (ack the pending tool_use) ----------------------
+    def _followup(self, session: Session, instruction: str, terminal: str, tool: dict) -> dict:
+        """Ack the last emit, append an instruction, and run to a new terminal tool.
+        Shared by revise (re-emit protocol) and design_review (emit design review).
+        Responding to whatever tool_use is pending lets protocol edits and design
+        reviews interleave in any order without breaking the conversation."""
+        if session.pending_tool_use_id is None:
+            raise AgentError("Nothing to build on yet — emit a protocol first.")
         state = RunState(session=session, searches_left=config.PUBMED_BUDGET)
-
         session.messages.append(
             {
                 "role": "user",
                 "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": session.emit_tool_use_id,
-                        "content": "Protocol received.",
-                    },
-                    {
-                        "type": "text",
-                        "text": (
-                            "Apply this correction and call emit_protocol again with the "
-                            "full, updated protocol (keep everything else unchanged; ground "
-                            "any newly filled values):\n\n" + instruction.strip()
-                        ),
-                    },
+                    {"type": "tool_result", "tool_use_id": session.pending_tool_use_id,
+                     "content": "Received."},
+                    {"type": "text", "text": instruction},
                 ],
             }
         )
-        session.emit_tool_use_id = None
-        tools = _grounding_tools() + [EMIT_PROTOCOL_TOOL]
-        block = self._run(session.messages, tools, "emit_protocol", state)
+        session.pending_tool_use_id = None
+        block = self._run(session.messages, _grounding_tools() + [tool], terminal, state)
         if block is None:
-            raise AgentError("Revision ended without calling emit_protocol.")
-        session.emit_tool_use_id = block.id
+            raise AgentError(f"Model ended without calling {terminal}.")
+        session.pending_tool_use_id = block.id
         return dict(block.input)
+
+    # -- Revise (edit-and-regenerate) -------------------------------------------
+    def revise(self, session: Session, instruction: str) -> dict:
+        """Feed a correction and re-emit, keeping all prior context and grounding."""
+        return self._followup(
+            session,
+            "Apply this correction and call emit_protocol again with the full, updated "
+            "protocol (keep everything else unchanged; ground any newly filled "
+            "values):\n\n" + instruction.strip(),
+            "emit_protocol",
+            EMIT_PROTOCOL_TOOL,
+        )
+
+    # -- Design review (teach the experiment around the protocol) ---------------
+    def design_review(self, session: Session) -> dict:
+        """Produce an experiment-design review of the emitted protocol."""
+        return self._followup(session, DESIGN_REVIEW_INSTRUCTION, "emit_design_review",
+                               EMIT_DESIGN_REVIEW_TOOL)

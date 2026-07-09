@@ -55,6 +55,11 @@ def test_revise_empty_instruction_is_400():
     assert r.status_code == 400
 
 
+def test_design_unknown_session_is_404():
+    r = client.post("/api/design", json={"session_id": "nope"})
+    assert r.status_code == 404
+
+
 if __name__ == "__main__":
     import traceback
 

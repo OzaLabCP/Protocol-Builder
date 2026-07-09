@@ -219,3 +219,68 @@ def _consistency_check(protocol: dict, report: dict, open_questions: list) -> No
             f"Consistency: assumptions_log lists '{name}' with no matching inline "
             f"material or critical parameter — confirm it is applied somewhere."
         )
+
+
+def check_citation(citation: dict, resolver: Resolver = resolve_citation):
+    """Resolve one citation and confirm year/title. Returns (ok, resolved, reason)."""
+    identifier = str(citation.get("identifier", "")).strip()
+    try:
+        resolved = resolver(identifier)
+    except Exception as exc:  # network failure -> unresolved
+        return False, None, f"did not resolve ({exc})"
+    if resolved is None:
+        return False, None, "citation identifier did not resolve"
+    claimed_year = citation.get("year")
+    year_mismatch = (
+        claimed_year is not None and resolved.year is not None
+        and int(claimed_year) != int(resolved.year)
+    )
+    overlap = _title_overlap(citation.get("title", ""), resolved.title)
+    if year_mismatch or overlap < 0.34:
+        bits = []
+        if year_mismatch:
+            bits.append(f"year {claimed_year} vs source {resolved.year}")
+        if overlap < 0.34:
+            bits.append(f"title overlap {overlap:.0%}")
+        return False, resolved, "metadata mismatch (" + "; ".join(bits) + ")"
+    return True, resolved, ""
+
+
+def validate_design_review(review: dict, resolver: Resolver = resolve_citation) -> dict:
+    """Verify grounded controls in a design review: resolve each control's citation,
+    keep verified ones (with a canonical url), and downgrade unverifiable ones to
+    best_practice. Mutates `review`; returns a small report."""
+    report = {"citations_checked": 0, "verified": [], "downgraded": []}
+    for ctrl in review.get("controls") or []:
+        prov = ctrl.get("provenance")
+        cit = ctrl.get("citation")
+        name = ctrl.get("name", "?")
+
+        if prov == "literature_grounded" and not cit:
+            ctrl["provenance"] = "best_practice"
+            ctrl["citation"] = None
+            ctrl["citation_verified"] = False
+            report["downgraded"].append({"control": name, "reason": "no citation"})
+            continue
+        if prov != "literature_grounded" and cit:
+            ctrl["citation"] = None  # stray citation on a non-grounded control
+            continue
+        if not cit:
+            continue
+
+        report["citations_checked"] += 1
+        ok, resolved, reason = check_citation(cit, resolver)
+        if ok:
+            ctrl["citation_verified"] = True
+            ctrl["citation"]["url"] = cit.get("url") or (_canonical_url(resolved) if resolved else None)
+            report["verified"].append({"control": name, "identifier": cit.get("identifier")})
+        else:
+            ctrl["provenance"] = "best_practice"
+            ctrl["citation"] = None
+            ctrl["citation_verified"] = False
+            report["downgraded"].append(
+                {"control": name, "identifier": cit.get("identifier"), "reason": reason}
+            )
+
+    review["validation_report"] = report
+    return report

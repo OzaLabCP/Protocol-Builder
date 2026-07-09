@@ -8,7 +8,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.render import protocol_to_markdown  # noqa: E402
+from app.render import design_review_to_markdown, protocol_to_markdown  # noqa: E402
 
 FIXTURE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -50,6 +50,30 @@ def test_markdown_flags_unverified_literature():
     }
     md = protocol_to_markdown(proto)
     assert "⚠ unverified" in md
+
+
+def test_design_review_markdown_and_schema():
+    import json
+    from app.schemas import EMIT_DESIGN_REVIEW_TOOL
+    assert "$ref" not in json.dumps(EMIT_DESIGN_REVIEW_TOOL)  # citation inlined
+    assert "hypothesis" in EMIT_DESIGN_REVIEW_TOOL["input_schema"]["required"]
+
+    d = {
+        "question": "Q", "hypothesis": "X increases Y",
+        "variables": {"independent": ["a"], "dependent": ["b"], "controlled": ["c"]},
+        "controls": [{"name": "no-template", "type": "negative", "rules_out": "contamination",
+                      "provenance": "best_practice", "citation": None}],
+        "readout": {"measures": "fluorescence", "answers_question": True},
+        "replication": {"biological": "3", "technical": "2", "rationale": "captures prep variance"},
+        "expected_results": [{"scenario": "signal rises", "interpretation": "binding occurred"}],
+        "failure_modes": [{"symptom": "no signal", "likely_cause": "inactive protein", "check": "run a gel"}],
+        "interpretation_limits": ["cannot conclude in vivo relevance"],
+        "design_gaps": ["add a positive control to prove the assay works"],
+    }
+    md = design_review_to_markdown(d)
+    for chunk in ["# Experiment design review", "Controls — and what each rules out",
+                  "X increases Y", "add a positive control", "cannot conclude"]:
+        assert chunk in md, f"missing {chunk}"
 
 
 if __name__ == "__main__":

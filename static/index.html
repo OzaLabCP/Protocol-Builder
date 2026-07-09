@@ -85,6 +85,9 @@
   .btn { display: inline-flex; align-items: center; gap: 6px; background: var(--accent); color: #0a0d13;
     border: 0; border-radius: 8px; padding: 9px 14px; font-weight: 600; font-size: 13.5px; cursor: pointer; text-decoration: none; }
   .btn.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--line); }
+  .design { margin: 18px 0; padding: 4px 18px 16px; border: 1px solid var(--line); border-left: 3px solid var(--best); border-radius: 10px; background: var(--panel2); }
+  .design h2 { color: var(--best); }
+  ul.gaps li { color: var(--verify); }
   .refine { margin-top: 26px; padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel2); }
   .refine textarea { min-height: 0; margin: 8px 0; }
   @media print {
@@ -316,6 +319,7 @@ function renderProtocol(p) {
   if (p.estimated_duration) P.appendChild(el("p", "muted", "Estimated duration: " + esc(p.estimated_duration)));
 
   P.appendChild(toolbar());
+  P.appendChild(el("div", null, "")).id = "design-anchor";
   P.appendChild(validationSummary(p.validation_report));
   P.appendChild(legend());
 
@@ -401,10 +405,109 @@ function toolbar() {
     dl.href = MD_URL; dl.setAttribute("download", "");
     bar.appendChild(dl);
   }
+  const dr = el("button", "btn", "🎓 Design review");
+  dr.title = "Teach the experiment around this protocol: hypothesis, controls, readout, replication, pitfalls";
+  dr.onclick = () => requestDesign(dr);
+  bar.appendChild(dr);
   const pr = el("button", "btn secondary", "🖨 Print / Save PDF");
   pr.onclick = () => window.print();
   bar.appendChild(pr);
   return bar;
+}
+
+async function requestDesign(btn) {
+  btn.disabled = true; setStatus("Building the experiment-design review… (this can take a minute)");
+  try {
+    const r = await postJSON("/api/design", { session_id: SESSION });
+    renderDesign(r.design_review);
+    setStatus("");
+  } catch (e) { setStatus(e.message, true); }
+  btn.disabled = false;
+}
+
+function renderDesign(d) {
+  const host = $("#design-anchor");
+  host.innerHTML = "";
+  const box = el("div", "design");
+  box.appendChild(el("h2", null, "🎓 Experiment design review"));
+  box.appendChild(el("p", "muted small", "The protocol tells you what to do; this explains how to reason about the experiment around it."));
+  if (d.question) box.appendChild(el("p", null, `<b>Question.</b> ${esc(d.question)}`));
+  if (d.hypothesis) box.appendChild(el("p", null, `<b>Hypothesis.</b> ${esc(d.hypothesis)}`));
+
+  const v = d.variables || {};
+  if (v.independent || v.dependent || v.controlled) {
+    box.appendChild(el("h3", null, "Variables"));
+    const ul = el("ul");
+    [["Independent (you vary)", v.independent], ["Dependent (you measure)", v.dependent], ["Controlled (held constant)", v.controlled]]
+      .forEach(([k, arr]) => ul.appendChild(el("li", null, `<b>${k}:</b> ${esc((arr || []).join(", ") || "—")}`)));
+    box.appendChild(ul);
+  }
+
+  if ((d.controls || []).length) {
+    box.appendChild(el("h3", null, "Controls — and what each rules out"));
+    const tbl = el("table");
+    tbl.innerHTML = "<tr><th>Control</th><th>Type</th><th>Rules out</th><th>Provenance</th></tr>";
+    d.controls.forEach((c) => {
+      const tr = el("tr");
+      tr.appendChild(el("td", null, esc(c.name)));
+      tr.appendChild(el("td", null, esc(c.type)));
+      tr.appendChild(el("td", null, esc(c.rules_out)));
+      const p = el("td"); p.innerHTML = tierPill(c.provenance || "best_practice") + citeInline(c);
+      tr.appendChild(p);
+      tbl.appendChild(tr);
+    });
+    box.appendChild(tbl);
+  }
+
+  const r = d.readout || {};
+  if (r.measures) {
+    box.appendChild(el("h3", null, "Readout adequacy"));
+    const ok = r.answers_question ? '<span class="badge-ok">✓ tests the hypothesis</span>' : '<span class="badge-warn">⚠ may not test the hypothesis</span>';
+    box.appendChild(el("p", null, `${esc(r.measures)} — ${ok}`));
+    if (r.caveat) box.appendChild(el("p", "muted", "Caveat: " + esc(r.caveat)));
+  }
+
+  const rep = d.replication || {};
+  if (rep.rationale) {
+    box.appendChild(el("h3", null, "Replication"));
+    const bits = [rep.biological ? `biological: ${esc(rep.biological)}` : "", rep.technical ? `technical: ${esc(rep.technical)}` : ""].filter(Boolean).join(" · ");
+    if (bits) box.appendChild(el("p", "muted", bits));
+    box.appendChild(el("p", null, esc(rep.rationale)));
+  }
+
+  if ((d.expected_results || []).length) {
+    box.appendChild(el("h3", null, "Expected results — if you see X, it means Y"));
+    const ul = el("ul");
+    d.expected_results.forEach((e) => ul.appendChild(el("li", null, `<b>${esc(e.scenario)}</b> → ${esc(e.interpretation)}`)));
+    box.appendChild(ul);
+  }
+
+  if ((d.failure_modes || []).length) {
+    box.appendChild(el("h3", null, "Failure modes"));
+    const tbl = el("table");
+    tbl.innerHTML = "<tr><th>Symptom</th><th>Likely cause</th><th>Check</th></tr>";
+    d.failure_modes.forEach((f) => {
+      const tr = el("tr");
+      tr.appendChild(el("td", null, esc(f.symptom)));
+      tr.appendChild(el("td", null, esc(f.likely_cause)));
+      tr.appendChild(el("td", null, esc(f.check || "—")));
+      tbl.appendChild(tr);
+    });
+    box.appendChild(tbl);
+  }
+
+  if ((d.interpretation_limits || []).length) {
+    box.appendChild(el("h3", null, "What this experiment cannot conclude"));
+    const ul = el("ul"); d.interpretation_limits.forEach((x) => ul.appendChild(el("li", "muted", esc(x)))); box.appendChild(ul);
+  }
+
+  if ((d.design_gaps || []).length) {
+    box.appendChild(el("h3", null, "Design gaps to fix in this plan"));
+    const ul = el("ul", "gaps"); d.design_gaps.forEach((g) => ul.appendChild(el("li", null, esc(g)))); box.appendChild(ul);
+  }
+
+  host.appendChild(box);
+  box.scrollIntoView({ behavior: "smooth" });
 }
 
 function refineBox() {
