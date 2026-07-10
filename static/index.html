@@ -142,6 +142,15 @@
 </header>
 
 <main>
+  <section class="panel hidden" id="authbar" style="border-color:var(--verify)">
+    <label class="muted" for="authtok">This instance requires an access token</label>
+    <div class="row" style="margin-top:8px">
+      <input type="password" id="authtok" placeholder="access token" style="flex:1;min-width:180px" />
+      <button id="authsave">Save</button>
+      <span class="muted" id="authmsg"></span>
+    </div>
+  </section>
+
   <div class="modebar">
     <button class="modebtn active" id="mode-paper">I have a paper / protocol
       <small>Paste a Methods section or upload a PDF — adapt it to your needs</small></button>
@@ -226,6 +235,32 @@ let MD_URL = null;
 let CSV_URL = null;
 let GLOG = [];
 let HYP = "";
+
+/* ---------- access token (only when this instance requires one) ---------- */
+let AUTH = localStorage.getItem("gf_token") || "";
+function authHeaders(h) { h = h || {}; if (AUTH) h["X-API-Key"] = AUTH; return h; }
+function withTok(url) {
+  if (!AUTH || !url) return url;
+  return url + (url.includes("?") ? "&" : "?") + "t=" + encodeURIComponent(AUTH);
+}
+function showAuthBar(msg) {
+  $("#authbar").classList.remove("hidden");
+  $("#authtok").value = AUTH;
+  $("#authmsg").textContent = msg || "";
+  $("#authmsg").className = msg ? "err" : "muted";
+  $("#authtok").focus();
+}
+$("#authsave").onclick = () => {
+  AUTH = $("#authtok").value.trim();
+  localStorage.setItem("gf_token", AUTH);
+  $("#authbar").classList.add("hidden");
+};
+(async () => {
+  try {
+    const h = await (await fetch("/healthz")).json();
+    if (h.auth_required && !AUTH) showAuthBar("");
+  } catch (e) { /* ignore — health probe is best-effort */ }
+})();
 let CURR_PROTOCOL = null;
 let PREV_PROTOCOL = null;
 
@@ -620,12 +655,12 @@ function toolbar() {
   const bar = el("div", "toolbar noprint");
   if (MD_URL) {
     const dl = el("a", "btn", "⬇ Download .md");
-    dl.href = MD_URL; dl.setAttribute("download", "");
+    dl.href = withTok(MD_URL); dl.setAttribute("download", "");
     bar.appendChild(dl);
   }
   if (CSV_URL) {
     const cs = el("a", "btn secondary", "⬇ Materials .csv");
-    cs.href = CSV_URL; cs.setAttribute("download", "");
+    cs.href = withTok(CSV_URL); cs.setAttribute("download", "");
     cs.title = "The materials table as CSV, with provenance columns.";
     bar.appendChild(cs);
   }
@@ -978,15 +1013,20 @@ function showResultMessage(title, body) {
 }
 
 /* ---------- helpers ---------- */
+function _handleAuth(res, data) {
+  if (res.status === 401) { showAuthBar("Access token required or invalid."); throw new Error(data.detail || "Access token required."); }
+}
 async function postJSON(url, body) {
-  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const res = await fetch(url, { method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));
+  _handleAuth(res, data);
   if (!res.ok) throw new Error(data.detail || `Request failed (${res.status})`);
   return data;
 }
 async function postForm(url, formData) {
-  const res = await fetch(url, { method: "POST", body: formData });
+  const res = await fetch(url, { method: "POST", headers: authHeaders({}), body: formData });
   const data = await res.json().catch(() => ({}));
+  _handleAuth(res, data);
   if (!res.ok) throw new Error(data.detail || `Request failed (${res.status})`);
   return data;
 }

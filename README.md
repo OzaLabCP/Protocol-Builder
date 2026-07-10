@@ -78,6 +78,9 @@ liveness, the model, and which grounding sources are enabled. Sessions expire af
 | `GAPFILLER_ENABLE_PREPRINTS` | `1` | Set `0` to disable bioRxiv/medRxiv (Europe PMC) search. |
 | `NCBI_API_KEY` | — | Optional; raises the E-utilities rate limit (3→10 req/s). |
 | `PROTOCOLS_IO_TOKEN` | — | protocols.io developer token; when set, enables `search_protocols`. |
+| `GAPFILLER_AUTH_TOKEN` | — | If set, `/api/*` requires it (`Authorization: Bearer`, `X-API-Key`, or `?t=` for downloads). Off by default. |
+| `GAPFILLER_RATE_LIMIT` | `0` | Per-client requests/minute on the model-driving endpoints; `0` disables. |
+| `GAPFILLER_TRUST_PROXY` | `0` | Set `1` to read the client IP from `X-Forwarded-For` (only behind a proxy you control). |
 
 ## Tests
 
@@ -127,6 +130,12 @@ Dockerfile        # single-worker container; /healthz healthcheck
   grounding behaves identically across providers. Validation resolves DOIs via Crossref then DataCite
   (so protocols.io/Zenodo/data DOIs verify) and PMIDs via PubMed. Add a new source by
   mirroring a function in `literature.py` and registering it in `agent._CLIENT_TOOLS`.
+- **Security:** the API key is server-side only (never sent to the browser, never
+  logged; `/healthz` reports only a boolean). Before any public/multi-user deployment,
+  set `GAPFILLER_AUTH_TOKEN` + `GAPFILLER_RATE_LIMIT` (both off by default) and cap the
+  OpenRouter key's spend. 500s return a generic message; full detail is logged
+  server-side. The source paper is untrusted model input — prompt injection is bounded
+  by the host-side citation/quote verification, which can't be talked past.
 - **Sessions** are in-memory (single process) — fine for a demo, swap for a store to scale.
 - **Latency:** Phase 2 can run for a minute or two while it searches; the UI shows a
   working state. Streaming the emit call is a reasonable enhancement.

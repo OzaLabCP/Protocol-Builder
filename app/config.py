@@ -48,3 +48,13 @@ ENABLE_PROTOCOLS_IO = (
 # Max literature searches the agent may run per phase, and max hits per search.
 PUBMED_BUDGET = int(os.environ.get("GAPFILLER_PUBMED_BUDGET", "12"))
 PUBMED_RETMAX_CAP = int(os.environ.get("GAPFILLER_PUBMED_RETMAX", "8"))
+
+# --- Access control (all OFF by default so local dev is unaffected) ---------
+# When set, the /api/* endpoints require this token (Authorization: Bearer,
+# X-API-Key header, or ?t= query param for download links). Protects the
+# token-spending endpoints from arbitrary callers.
+AUTH_TOKEN = os.environ.get("GAPFILLER_AUTH_TOKEN", "")
+# Per-client requests/minute on the model-driving endpoints; 0 disables.
+RATE_LIMIT = int(os.environ.get("GAPFILLER_RATE_LIMIT", "0"))
+# Only trust X-Forwarded-For for the client IP when behind a proxy you control.
+TRUST_PROXY = os.environ.get("GAPFILLER_TRUST_PROXY", "0") != "0"

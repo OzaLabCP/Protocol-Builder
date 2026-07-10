@@ -22,6 +22,7 @@ def test_healthz():
     body = r.json()
     assert body["status"] == "ok"
     assert "grounding" in body and "pubmed" in body["grounding"]
+    assert body["auth_required"] is False  # off by default
 
 
 def test_index_served():
@@ -118,6 +119,59 @@ def test_analyze_accepts_hypothesis_field():
     # proving the field is accepted (not a 422 unprocessable-entity from an unknown form field).
     r = client.post("/api/analyze", data={"methods_text": "", "hypothesis": "X increases Y"})
     assert r.status_code == 400
+
+
+# --- access control (env-gated) --------------------------------------------
+
+from app import config as _config  # noqa: E402
+from app.server import _RATE  # noqa: E402
+
+
+def test_auth_disabled_by_default():
+    # no token configured -> endpoints are open (the empty-text 400, not a 401)
+    assert _config.AUTH_TOKEN == ""
+    r = client.post("/api/analyze", data={"methods_text": ""})
+    assert r.status_code == 400
+
+
+def test_auth_required_rejects_missing_and_wrong_token():
+    _config.AUTH_TOKEN = "s3cret"
+    try:
+        assert client.post("/api/analyze", data={"methods_text": ""}).status_code == 401
+        r = client.post("/api/analyze", data={"methods_text": ""}, headers={"X-API-Key": "nope"})
+        assert r.status_code == 401
+    finally:
+        _config.AUTH_TOKEN = ""
+
+
+def test_auth_accepts_correct_token_via_header_and_query():
+    _config.AUTH_TOKEN = "s3cret"
+    try:
+        # correct token -> auth passes, so we reach the handler's 400 (empty text), not 401
+        r = client.post("/api/analyze", data={"methods_text": ""}, headers={"X-API-Key": "s3cret"})
+        assert r.status_code == 400
+        r = client.post("/api/analyze", data={"methods_text": ""},
+                        headers={"Authorization": "Bearer s3cret"})
+        assert r.status_code == 400
+        # download route accepts the token via ?t= (unknown session -> 404, i.e. auth passed)
+        assert client.get("/api/protocol/deadbeef.md").status_code == 401
+        assert client.get("/api/protocol/deadbeef.md?t=s3cret").status_code == 404
+    finally:
+        _config.AUTH_TOKEN = ""
+
+
+def test_rate_limit_returns_429_over_the_window():
+    _config.RATE_LIMIT = 2
+    _RATE.clear()
+    try:
+        assert client.post("/api/analyze", data={"methods_text": ""}).status_code == 400  # 1
+        assert client.post("/api/analyze", data={"methods_text": ""}).status_code == 400  # 2
+        r = client.post("/api/analyze", data={"methods_text": ""})                        # 3 -> limited
+        assert r.status_code == 429
+        assert r.headers.get("retry-after") == "60"
+    finally:
+        _config.RATE_LIMIT = 0
+        _RATE.clear()
 
 
 # --- flows that need a fake LLM client (no network / API key) ---------------

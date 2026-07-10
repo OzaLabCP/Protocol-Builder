@@ -14,14 +14,16 @@ Sessions are held in memory (run one worker) and expire after SESSION_TTL.
 
 from __future__ import annotations
 
+import logging
 import os
+import secrets
 import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -47,10 +49,65 @@ MAX_TEXT_CHARS = int(os.environ.get("GAPFILLER_MAX_TEXT_CHARS", "200000"))
 SESSION_TTL = int(os.environ.get("GAPFILLER_SESSION_TTL", "3600"))
 MAX_SESSIONS = int(os.environ.get("GAPFILLER_MAX_SESSIONS", "500"))
 
+_log = logging.getLogger("gapfiller")
+
 app = FastAPI(title="Methods Gap-Filler")
 
 _STATIC = Path(__file__).resolve().parent.parent / "static"
 app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
+
+
+# --- Access control (env-gated; no-ops when unconfigured) -------------------
+
+_RATE: dict[str, list] = {}  # client -> recent request timestamps (in-memory)
+
+
+def _client_ip(request: Request) -> str:
+    if config.TRUST_PROXY:
+        xff = request.headers.get("x-forwarded-for", "")
+        if xff:
+            return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _supplied_token(request: Request) -> str:
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return (request.headers.get("x-api-key", "").strip()
+            or request.query_params.get("t", "").strip())
+
+
+def require_auth(request: Request) -> None:
+    """Reject requests without the configured token (constant-time compare)."""
+    if not config.AUTH_TOKEN:
+        return  # auth disabled
+    supplied = _supplied_token(request)
+    if not supplied or not secrets.compare_digest(supplied, config.AUTH_TOKEN):
+        raise HTTPException(401, "Missing or invalid access token.")
+
+
+def rate_limit(request: Request) -> None:
+    """Fixed 60s window, per client. In-memory (single worker), pruned as it goes."""
+    if config.RATE_LIMIT <= 0:
+        return  # rate limiting disabled
+    now = time.time()
+    cutoff = now - 60.0
+    ip = _client_ip(request)
+    bucket = [t for t in _RATE.get(ip, []) if t >= cutoff]
+    if len(bucket) >= config.RATE_LIMIT:
+        raise HTTPException(429, "Rate limit exceeded. Please slow down and retry shortly.",
+                            headers={"Retry-After": "60"})
+    bucket.append(now)
+    _RATE[ip] = bucket
+    if len(_RATE) > 10000:  # bound memory: drop clients with no recent activity
+        for k in [k for k, v in _RATE.items() if not v or v[-1] < cutoff]:
+            _RATE.pop(k, None)
+
+
+# Dependency bundles applied per route.
+_MUTATING = [Depends(require_auth), Depends(rate_limit)]  # POSTs that drive the model
+_READONLY = [Depends(require_auth)]  # GET downloads (auth via ?t=; cheap, not rate-limited)
 
 
 @dataclass
@@ -147,6 +204,7 @@ def healthz() -> dict:
         "provider": "openrouter",
         "model": config.MODEL,
         "api_key_set": bool(config.OPENROUTER_API_KEY),
+        "auth_required": bool(config.AUTH_TOKEN),
         "grounding": {
             "pubmed": config.ENABLE_PUBMED,
             "preprints": config.ENABLE_PREPRINTS,
@@ -156,7 +214,7 @@ def healthz() -> dict:
     }
 
 
-@app.post("/api/analyze")
+@app.post("/api/analyze", dependencies=_MUTATING)
 def analyze(
     methods_text: str = Form(default=""),
     hypothesis: str = Form(default=""),
@@ -206,12 +264,12 @@ def analyze(
     return {"session_id": session_id, "phase": "questions", "phase1": phase1}
 
 
-@app.post("/api/resolve")
+@app.post("/api/resolve", dependencies=_MUTATING)
 def resolve(req: ResolveRequest) -> dict:
     return _resolve(req.session_id, [a.model_dump() for a in req.answers])
 
 
-@app.post("/api/revise")
+@app.post("/api/revise", dependencies=_MUTATING)
 def revise(req: ReviseRequest) -> dict:
     instruction = (req.instruction or "").strip()
     if len(instruction) < 3:
@@ -227,7 +285,7 @@ def revise(req: ReviseRequest) -> dict:
     return _finish(req.session_id, store, protocol)
 
 
-@app.post("/api/design")
+@app.post("/api/design", dependencies=_MUTATING)
 def design(req: DesignRequest) -> dict:
     store = _get(req.session_id)
     if store.protocol is None:
@@ -244,7 +302,7 @@ def design(req: DesignRequest) -> dict:
     return {"session_id": req.session_id, "design_review": review, "validation_report": report}
 
 
-@app.post("/api/align")
+@app.post("/api/align", dependencies=_MUTATING)
 def align(req: AlignRequest) -> dict:
     store = _get(req.session_id)
     if store.protocol is None:
@@ -260,7 +318,7 @@ def align(req: AlignRequest) -> dict:
     return {"session_id": req.session_id, "design_alignment": alignment}
 
 
-@app.post("/api/discover")
+@app.post("/api/discover", dependencies=_MUTATING)
 def discover(req: DiscoverRequest) -> dict:
     _prune()
     hyp = (req.hypothesis or "").strip()
@@ -290,7 +348,7 @@ def discover(req: DiscoverRequest) -> dict:
             "assay_options": opts, "validation_report": report}
 
 
-@app.post("/api/choose_assay")
+@app.post("/api/choose_assay", dependencies=_MUTATING)
 def choose_assay(req: ChooseAssayRequest) -> dict:
     store = _get(req.session_id)
     opts = store.session.assay_options
@@ -317,7 +375,7 @@ def _choose(session_id: str, assay_id: str) -> dict:
     return {"session_id": session_id, "phase": "questions", "phase1": phase1}
 
 
-@app.get("/api/protocol/{session_id}.md")
+@app.get("/api/protocol/{session_id}.md", dependencies=_READONLY)
 def download_markdown(session_id: str) -> PlainTextResponse:
     store = _get(session_id)
     if store.protocol is None:
@@ -341,7 +399,7 @@ def download_markdown(session_id: str) -> PlainTextResponse:
     )
 
 
-@app.get("/api/protocol/{session_id}/materials.csv")
+@app.get("/api/protocol/{session_id}/materials.csv", dependencies=_READONLY)
 def download_materials_csv(session_id: str) -> PlainTextResponse:
     store = _get(session_id)
     if store.protocol is None:
@@ -396,11 +454,13 @@ def _slug(title: str) -> str:
 
 
 def _explain(exc: Exception) -> str:
-    msg = str(exc)
-    low = msg.lower()
-    if "openrouter_api_key" in low or "401" in low or "auth" in low or "no auth credentials" in low:
-        return (
-            "OpenRouter auth failed. Set OPENROUTER_API_KEY (get one at openrouter.ai) "
-            "and restart the server."
-        )
-    return f"{type(exc).__name__}: {msg}"
+    """Client-safe message. Full detail (including any upstream body) is logged
+    server-side only — never echoed to the client, which could otherwise leak
+    provider/internal error text."""
+    _log.warning("request failed: %s: %s", type(exc).__name__, exc)
+    low = str(exc).lower()
+    if "openrouter_api_key" in low or "401" in low or "no auth credentials" in low or (
+        "auth" in low and "openrouter" in low
+    ):
+        return "The model provider rejected the request (authentication). Check the server's OPENROUTER_API_KEY."
+    return "Something went wrong while building the protocol. Please try again; if it persists, check the server logs."
