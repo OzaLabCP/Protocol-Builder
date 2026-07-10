@@ -8,6 +8,20 @@ everywhere.
 
 from __future__ import annotations
 
+def as_openai_tool(tool: dict) -> dict:
+    """Convert a `{name, description, input_schema}` tool (the source of truth used
+    throughout this module) into OpenAI/OpenRouter function-calling shape. The
+    `input_schema` IS the function's `parameters` JSON Schema — no other changes."""
+    return {
+        "type": "function",
+        "function": {
+            "name": tool["name"],
+            "description": tool.get("description", ""),
+            "parameters": tool["input_schema"],
+        },
+    }
+
+
 PROVENANCE_TIERS = [
     "stated",
     "literature_grounded",

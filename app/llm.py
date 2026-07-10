@@ -1,0 +1,84 @@
+"""Provider-agnostic chat client, via OpenRouter's OpenAI-compatible API.
+
+One thin `POST /chat/completions` wrapper. Any model OpenRouter serves works —
+the only requirement is tool/function calling, which the protocol loop depends on.
+The client is injected into GapFillerAgent, so tests pass a fake with the same
+`.chat(...)` surface and never touch the network.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Optional
+
+import httpx
+
+from . import config
+
+
+class LLMError(RuntimeError):
+    """Raised on a transport error or a non-2xx response from the provider."""
+
+
+class OpenRouterClient:
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        model: Optional[str] = None,
+        timeout: Optional[float] = None,
+    ):
+        self.api_key = api_key if api_key is not None else config.OPENROUTER_API_KEY
+        self.base_url = (base_url or config.OPENROUTER_BASE_URL).rstrip("/")
+        self.model = model or config.MODEL
+        self.timeout = timeout or config.REQUEST_TIMEOUT
+        # trust_env=True lets a deployment's HTTPS_PROXY / CA bundle apply.
+        self._client = httpx.Client(timeout=self.timeout)
+
+    def chat(
+        self,
+        messages: list,
+        tools: Optional[list] = None,
+        tool_choice: Optional[Any] = None,
+        model: Optional[str] = None,
+    ) -> dict:
+        """Call /chat/completions and return the parsed JSON dict (OpenAI shape)."""
+        if not self.api_key:
+            raise LLMError(
+                "OPENROUTER_API_KEY is not set. Get a key at openrouter.ai and export it."
+            )
+        payload: dict = {"model": model or self.model, "messages": messages}
+        if tools:
+            payload["tools"] = tools
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+        if config.MAX_TOKENS:
+            payload["max_tokens"] = config.MAX_TOKENS
+        if config.REASONING_EFFORT:
+            # Honored by reasoning-capable models; silently ignored by the rest.
+            payload["reasoning"] = {"effort": config.REASONING_EFFORT}
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        if config.OPENROUTER_REFERER:
+            headers["HTTP-Referer"] = config.OPENROUTER_REFERER
+        if config.OPENROUTER_TITLE:
+            headers["X-Title"] = config.OPENROUTER_TITLE
+
+        try:
+            resp = self._client.post(
+                f"{self.base_url}/chat/completions", json=payload, headers=headers
+            )
+        except httpx.HTTPError as exc:
+            raise LLMError(f"OpenRouter request failed ({type(exc).__name__}): {exc}") from exc
+
+        if resp.status_code >= 400:
+            raise LLMError(f"OpenRouter returned {resp.status_code}: {resp.text[:600]}")
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            raise LLMError(f"OpenRouter returned non-JSON body: {resp.text[:300]}") from exc
+        if data.get("error"):  # OpenRouter can 200 with an inline error object
+            raise LLMError(f"OpenRouter error: {data['error']}")
+        return data

@@ -1,5 +1,6 @@
 """HTTP-surface tests via FastAPI TestClient. These exercise everything that
-does NOT require the Anthropic API (health, validation, error paths, routing)."""
+does NOT require a live LLM provider (health, validation, error paths, routing);
+flow tests inject a fake OpenRouter client."""
 
 from __future__ import annotations
 
@@ -119,46 +120,40 @@ def test_analyze_accepts_hypothesis_field():
     assert r.status_code == 400
 
 
-# --- flows that need a fake Anthropic client (no network / API key) ---------
+# --- flows that need a fake LLM client (no network / API key) ---------------
 
+import json as _json  # noqa: E402
 import time as _time  # noqa: E402
 
 import app.server as srv  # noqa: E402
 from app.agent import GapFillerAgent, Session  # noqa: E402
 
 
-class _Block:
-    def __init__(self, name, id, tool_input):
-        self.type = "tool_use"; self.name = name; self.id = id; self.input = tool_input
+def _tool_msg(name, args, cid):
+    """An OpenAI/OpenRouter-shaped assistant turn with a single tool call."""
+    return {"choices": [{"finish_reason": "tool_calls", "message": {
+        "role": "assistant", "content": None,
+        "tool_calls": [{"id": cid, "type": "function",
+                        "function": {"name": name, "arguments": _json.dumps(args)}}]}}]}
 
 
-class _Resp:
-    def __init__(self, content, stop_reason="tool_use"):
-        self.content = content; self.stop_reason = stop_reason
-
-
-class _Msgs:
+class _FakeLLM:
     def __init__(self, queue):
         self.queue = list(queue); self.calls = []
 
-    def create(self, **kw):
-        self.calls.append(kw); return self.queue.pop(0)
-
-
-class _FakeClient:
-    def __init__(self, queue):
-        self.messages = _Msgs(queue)
+    def chat(self, messages, tools=None, tool_choice=None, model=None):
+        self.calls.append({"tool_choice": tool_choice}); return self.queue.pop(0)
 
 
 def _install_agent(queue):
-    srv._agent = GapFillerAgent(client=_FakeClient(queue), model="fake")
+    srv._agent = GapFillerAgent(client=_FakeLLM(queue), model="fake")
 
 
 def test_finish_downgrades_stated_on_hypothesis_session():
     proto = {"title": "P", "summary": "s", "estimated_duration": "1 h",
              "materials": [{"name": "Buffer", "provenance": "stated"}],
              "steps": [], "assumptions_log": []}
-    _install_agent([_Resp([_Block("emit_protocol", "e1", proto)])])
+    _install_agent([_tool_msg("emit_protocol", proto, "e1")])
     sid = "hypfin"
     srv._SESSIONS[sid] = srv.Store(
         session=Session(source_kind="hypothesis", request_tool_use_id="c1",
@@ -178,7 +173,7 @@ def test_finish_keeps_stated_on_paper_session():
     proto = {"title": "P", "summary": "s", "estimated_duration": "1 h",
              "materials": [{"name": "Buffer", "provenance": "stated"}],
              "steps": [], "assumptions_log": []}
-    _install_agent([_Resp([_Block("emit_protocol", "e1", proto)])])
+    _install_agent([_tool_msg("emit_protocol", proto, "e1")])
     sid = "paperfin"
     srv._SESSIONS[sid] = srv.Store(
         session=Session(source_kind="paper", request_tool_use_id="c1",
@@ -201,9 +196,9 @@ def test_discover_autopick_runs_full_flow():
     proto = {"title": "P", "summary": "s", "estimated_duration": "1 h",
              "materials": [], "steps": [], "assumptions_log": []}
     _install_agent([
-        _Resp([_Block("emit_assay_options", "a1", opts)]),
-        _Resp([_Block("request_clarifications", "c1", {"usable": True, "gaps": []})]),
-        _Resp([_Block("emit_protocol", "e1", proto)]),
+        _tool_msg("emit_assay_options", opts, "a1"),
+        _tool_msg("request_clarifications", {"usable": True, "gaps": []}, "c1"),
+        _tool_msg("emit_protocol", proto, "e1"),
     ])
     try:
         r = client.post("/api/discover", json={"hypothesis": "Does X increase Y binding?", "auto_pick": True})
@@ -217,7 +212,7 @@ def test_discover_autopick_runs_full_flow():
 
 
 def test_discover_rejected_flow_returns_rejected():
-    _install_agent([_Resp([_Block("emit_assay_options", "a1", {"usable": False, "reason": "not testable"})])])
+    _install_agent([_tool_msg("emit_assay_options", {"usable": False, "reason": "not testable"}, "a1")])
     try:
         r = client.post("/api/discover", json={"hypothesis": "banana banana banana"})
         assert r.status_code == 200

@@ -27,7 +27,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import config
-from .agent import AgentError, GapFillerAgent, Session
+from .agent import AgentError, GapFillerAgent, Session, _pdf_text
 from .render import (
     assay_selection_to_markdown,
     design_alignment_to_markdown,
@@ -144,9 +144,10 @@ def index() -> FileResponse:
 def healthz() -> dict:
     return {
         "status": "ok",
+        "provider": "openrouter",
         "model": config.MODEL,
+        "api_key_set": bool(config.OPENROUTER_API_KEY),
         "grounding": {
-            "web_search": config.ENABLE_WEB_SEARCH,
             "pubmed": config.ENABLE_PUBMED,
             "preprints": config.ENABLE_PREPRINTS,
             "protocols_io": config.ENABLE_PROTOCOLS_IO,
@@ -163,7 +164,8 @@ def analyze(
 ) -> dict:
     _prune()
     agent = get_agent()
-    pdf_bytes: Optional[bytes] = None
+    is_full_paper = False
+    text: str
 
     if file is not None and file.filename:
         pdf_bytes = file.file.read()
@@ -171,8 +173,14 @@ def analyze(
             raise HTTPException(400, "That file doesn't look like a PDF.")
         if len(pdf_bytes) > MAX_PDF_BYTES:
             raise HTTPException(400, "PDF is too large (max ~25 MB). Paste the Methods section instead.")
-
-    if pdf_bytes is None:
+        # Extract text host-side so this works behind any model (no native-PDF reliance).
+        extracted = _pdf_text(pdf_bytes)
+        if not extracted:
+            raise HTTPException(400, "Couldn't read text from that PDF (it may be scanned or "
+                                     "image-only). Paste the Methods section instead.")
+        text = extracted[:MAX_TEXT_CHARS]
+        is_full_paper = True
+    else:
         text = (methods_text or "").strip()
         if len(text) < 40:
             raise HTTPException(400, "Paste a Methods section (a few sentences) or choose a PDF.")
@@ -181,11 +189,7 @@ def analyze(
 
     hyp = (hypothesis or "").strip() or None
     try:
-        session = (
-            agent.analyze(pdf=pdf_bytes, hypothesis=hyp)
-            if pdf_bytes is not None
-            else agent.analyze(methods_text=methods_text.strip(), hypothesis=hyp)
-        )
+        session = agent.analyze(methods_text=text, hypothesis=hyp, is_full_paper=is_full_paper)
     except AgentError as exc:
         raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
     except Exception as exc:  # noqa: BLE001
@@ -393,9 +397,10 @@ def _slug(title: str) -> str:
 
 def _explain(exc: Exception) -> str:
     msg = str(exc)
-    if "api_key" in msg.lower() or "authentication" in msg.lower():
+    low = msg.lower()
+    if "openrouter_api_key" in low or "401" in low or "auth" in low or "no auth credentials" in low:
         return (
-            "Anthropic API auth failed. Set ANTHROPIC_API_KEY (or run `ant auth login`) "
+            "OpenRouter auth failed. Set OPENROUTER_API_KEY (get one at openrouter.ai) "
             "and restart the server."
         )
     return f"{type(exc).__name__}: {msg}"

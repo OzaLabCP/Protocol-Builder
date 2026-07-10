@@ -1,28 +1,37 @@
-"""Runtime configuration, read from the environment with sensible defaults."""
+"""Runtime configuration, read from the environment with sensible defaults.
+
+The model runs through OpenRouter's OpenAI-compatible API, so ANY model OpenRouter
+serves works — set OPENROUTER_MODEL to its slug (e.g. 'anthropic/claude-opus-4-8',
+'openai/gpt-5', 'x-ai/grok-4', 'google/gemini-2.5-pro'). The model must support
+tool/function calling — that is the mechanism the whole protocol loop relies on.
+"""
 
 from __future__ import annotations
 
 import os
 
-# The model that runs the protocol-engineering loop. Opus 4.8 is the default:
-# adaptive-thinking only, strong scientific reasoning, supports web_search.
-MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
+# --- LLM provider (OpenRouter) ---------------------------------------------
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+OPENROUTER_BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+# Model slug, provider-prefixed. Default to a strong reasoning model; override freely.
+MODEL = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-opus-4-8")
+# Optional attribution headers OpenRouter surfaces on your dashboard.
+OPENROUTER_REFERER = os.environ.get("OPENROUTER_REFERER", "")
+OPENROUTER_TITLE = os.environ.get("OPENROUTER_TITLE", "Methods Gap-Filler")
 
-# Cap on Phase-2 web searches (enforced via the web_search tool's max_uses).
-SEARCH_BUDGET = int(os.environ.get("GAPFILLER_SEARCH_BUDGET", "12"))
-
-# Output token ceiling. Kept under the SDK's non-streaming timeout guard.
+# Output token ceiling per response.
 MAX_TOKENS = int(os.environ.get("GAPFILLER_MAX_TOKENS", "16000"))
+# Per-request HTTP timeout (seconds). Reasoning models can take a while.
+REQUEST_TIMEOUT = float(os.environ.get("GAPFILLER_REQUEST_TIMEOUT", "600"))
+# Reasoning effort, passed as OpenRouter's `reasoning.effort` for models that support
+# it (ignored otherwise). Set to "" to omit the field entirely.
+REASONING_EFFORT = os.environ.get("GAPFILLER_REASONING_EFFORT", "high")
+# Safety valve against a model that loops on tool calls without ever finishing.
+MAX_TOOL_ROUNDS = int(os.environ.get("GAPFILLER_MAX_TOOL_ROUNDS", "16"))
 
-# Reasoning effort for the loop.
-EFFORT = os.environ.get("GAPFILLER_EFFORT", "high")
-
-# The web_search server-tool version with dynamic filtering (Opus 4.6+ / 4.7 / 4.8).
-WEB_SEARCH_TYPE = os.environ.get("GAPFILLER_WEB_SEARCH_TYPE", "web_search_20260209")
-
-# Grounding tools. web_search is Anthropic-run; the others are run by this app
-# against public APIs. Each can be disabled.
-ENABLE_WEB_SEARCH = os.environ.get("GAPFILLER_ENABLE_WEB_SEARCH", "1") != "0"
+# --- Literature grounding (provider-agnostic; run by this app) --------------
+# These are app-run client tools against public APIs — they work regardless of
+# which LLM is behind OpenRouter. Each can be disabled.
 ENABLE_PUBMED = os.environ.get("GAPFILLER_ENABLE_PUBMED", "1") != "0"
 # Europe PMC preprint search (bioRxiv/medRxiv) — no auth.
 ENABLE_PREPRINTS = os.environ.get("GAPFILLER_ENABLE_PREPRINTS", "1") != "0"
@@ -36,6 +45,6 @@ ENABLE_PROTOCOLS_IO = (
     os.environ.get("GAPFILLER_ENABLE_PROTOCOLS_IO", "1") != "0"
 ) and bool(PROTOCOLS_IO_TOKEN)
 
-# Max PubMed searches the agent may run per phase, and max hits per search.
+# Max literature searches the agent may run per phase, and max hits per search.
 PUBMED_BUDGET = int(os.environ.get("GAPFILLER_PUBMED_BUDGET", "12"))
 PUBMED_RETMAX_CAP = int(os.environ.get("GAPFILLER_PUBMED_RETMAX", "8"))
