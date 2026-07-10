@@ -66,7 +66,10 @@ def _client_ip(request: Request) -> str:
     if config.TRUST_PROXY:
         xff = request.headers.get("x-forwarded-for", "")
         if xff:
-            return xff.split(",")[0].strip()
+            # Trust only the rightmost hop — the address our own proxy appended.
+            # The leftmost entries are client-supplied and trivially spoofable, so
+            # keying the rate limiter on them lets an attacker mint unlimited buckets.
+            return xff.split(",")[-1].strip()
     return request.client.host if request.client else "unknown"
 
 
@@ -74,8 +77,7 @@ def _supplied_token(request: Request) -> str:
     auth = request.headers.get("authorization", "")
     if auth.lower().startswith("bearer "):
         return auth[7:].strip()
-    return (request.headers.get("x-api-key", "").strip()
-            or request.query_params.get("t", "").strip())
+    return request.headers.get("x-api-key", "").strip()
 
 
 def require_auth(request: Request) -> None:
@@ -100,14 +102,20 @@ def rate_limit(request: Request) -> None:
                             headers={"Retry-After": "60"})
     bucket.append(now)
     _RATE[ip] = bucket
-    if len(_RATE) > 10000:  # bound memory: drop clients with no recent activity
+    if len(_RATE) > 10000:  # bound memory
+        # Drop clients with no recent activity first.
         for k in [k for k, v in _RATE.items() if not v or v[-1] < cutoff]:
             _RATE.pop(k, None)
+        # If a flood of distinct fresh IPs still blows the cap, hard-evict the
+        # least-recently-active keys so the map can't grow without bound.
+        if len(_RATE) > 10000:
+            for k, _v in sorted(_RATE.items(), key=lambda kv: kv[1][-1])[: len(_RATE) - 10000]:
+                _RATE.pop(k, None)
 
 
 # Dependency bundles applied per route.
 _MUTATING = [Depends(require_auth), Depends(rate_limit)]  # POSTs that drive the model
-_READONLY = [Depends(require_auth)]  # GET downloads (auth via ?t=; cheap, not rate-limited)
+_READONLY = [Depends(require_auth)]  # GET downloads (auth header only; cheap, not rate-limited)
 
 
 @dataclass
@@ -198,13 +206,19 @@ def index() -> FileResponse:
 
 
 @app.get("/healthz")
-def healthz() -> dict:
+def healthz(request: Request) -> dict:
+    auth_required = bool(config.AUTH_TOKEN)
+    # On a locked instance, don't disclose config (model, key state, grounding, session
+    # count) to an unauthenticated caller — just liveness + that a token is needed.
+    supplied = _supplied_token(request)
+    if auth_required and not (supplied and secrets.compare_digest(supplied, config.AUTH_TOKEN)):
+        return {"status": "ok", "auth_required": True}
     return {
         "status": "ok",
         "provider": "openrouter",
         "model": config.MODEL,
         "api_key_set": bool(config.OPENROUTER_API_KEY),
-        "auth_required": bool(config.AUTH_TOKEN),
+        "auth_required": auth_required,
         "grounding": {
             "pubmed": config.ENABLE_PUBMED,
             "preprints": config.ENABLE_PREPRINTS,
@@ -457,7 +471,7 @@ def _explain(exc: Exception) -> str:
     """Client-safe message. Full detail (including any upstream body) is logged
     server-side only — never echoed to the client, which could otherwise leak
     provider/internal error text."""
-    _log.warning("request failed: %s: %s", type(exc).__name__, exc)
+    _log.warning("request failed: %s", type(exc).__name__)
     low = str(exc).lower()
     if "openrouter_api_key" in low or "401" in low or "no auth credentials" in low or (
         "auth" in low and "openrouter" in low

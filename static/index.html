@@ -239,9 +239,26 @@ let HYP = "";
 /* ---------- access token (only when this instance requires one) ---------- */
 let AUTH = localStorage.getItem("gf_token") || "";
 function authHeaders(h) { h = h || {}; if (AUTH) h["X-API-Key"] = AUTH; return h; }
-function withTok(url) {
-  if (!AUTH || !url) return url;
-  return url + (url.includes("?") ? "&" : "?") + "t=" + encodeURIComponent(AUTH);
+// Fetch a download through the auth header (never a ?t= query param, which would land
+// the token in access logs / Referer), then hand the browser a blob to save. Surfaces
+// a 401 through the same auth bar as the rest of the app.
+async function downloadWithAuth(url, fallbackName) {
+  let res;
+  try {
+    res = await fetch(url, { headers: authHeaders({}) });
+  } catch (e) { setStatus("Download failed — network error.", true); return; }
+  if (res.status === 401) { showAuthBar("Access token required or invalid."); return; }
+  if (!res.ok) { setStatus(`Download failed (${res.status}).`, true); return; }
+  let name = fallbackName;
+  const cd = res.headers.get("Content-Disposition") || "";
+  const m = /filename="?([^"]+)"?/.exec(cd);
+  if (m) name = m[1];
+  const blob = await res.blob();
+  const href = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = href; a.download = name || "download";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(href), 4000);
 }
 function showAuthBar(msg) {
   $("#authbar").classList.remove("hidden");
@@ -654,13 +671,13 @@ function toolbar() {
   const wrap = el("div", "noprint");
   const bar = el("div", "toolbar noprint");
   if (MD_URL) {
-    const dl = el("a", "btn", "⬇ Download .md");
-    dl.href = withTok(MD_URL); dl.setAttribute("download", "");
+    const dl = el("button", "btn", "⬇ Download .md");
+    dl.onclick = () => downloadWithAuth(MD_URL, "protocol.md");
     bar.appendChild(dl);
   }
   if (CSV_URL) {
-    const cs = el("a", "btn secondary", "⬇ Materials .csv");
-    cs.href = withTok(CSV_URL); cs.setAttribute("download", "");
+    const cs = el("button", "btn secondary", "⬇ Materials .csv");
+    cs.onclick = () => downloadWithAuth(CSV_URL, "materials.csv");
     cs.title = "The materials table as CSV, with provenance columns.";
     bar.appendChild(cs);
   }

@@ -144,7 +144,7 @@ def test_auth_required_rejects_missing_and_wrong_token():
         _config.AUTH_TOKEN = ""
 
 
-def test_auth_accepts_correct_token_via_header_and_query():
+def test_auth_accepts_correct_token_via_header():
     _config.AUTH_TOKEN = "s3cret"
     try:
         # correct token -> auth passes, so we reach the handler's 400 (empty text), not 401
@@ -153,9 +153,26 @@ def test_auth_accepts_correct_token_via_header_and_query():
         r = client.post("/api/analyze", data={"methods_text": ""},
                         headers={"Authorization": "Bearer s3cret"})
         assert r.status_code == 400
-        # download route accepts the token via ?t= (unknown session -> 404, i.e. auth passed)
+        # download route requires the token via header (no ?t= query param — it would
+        # leak into access logs). Missing -> 401; correct header -> auth passes (404 session).
         assert client.get("/api/protocol/deadbeef.md").status_code == 401
-        assert client.get("/api/protocol/deadbeef.md?t=s3cret").status_code == 404
+        assert client.get("/api/protocol/deadbeef.md?t=s3cret").status_code == 401  # query ignored
+        assert client.get("/api/protocol/deadbeef.md",
+                          headers={"X-API-Key": "s3cret"}).status_code == 404
+    finally:
+        _config.AUTH_TOKEN = ""
+
+
+def test_healthz_minimal_disclosure_when_locked_and_unauthenticated():
+    _config.AUTH_TOKEN = "s3cret"
+    try:
+        # unauthenticated caller on a locked instance sees only liveness + that auth is needed
+        body = client.get("/healthz").json()
+        assert body == {"status": "ok", "auth_required": True}
+        assert "model" not in body and "grounding" not in body and "sessions" not in body
+        # correct token -> full config is disclosed again
+        full = client.get("/healthz", headers={"X-API-Key": "s3cret"}).json()
+        assert "grounding" in full and "model" in full
     finally:
         _config.AUTH_TOKEN = ""
 

@@ -74,6 +74,19 @@ def test_non_2xx_raises():
         assert "429" in str(e)
 
 
+def test_error_body_is_not_leaked():
+    # The provider's response body can echo the prompt/key hints — it must never appear
+    # in the exception (which flows up into client-facing errors). Only the code survives.
+    secret = "SECRET-PROMPT-ECHO-do-not-leak"
+    c = _client(_Resp(403, {"error": secret}))
+    try:
+        c.chat(messages=[{"role": "user", "content": "hi"}])
+        assert False, "expected LLMError"
+    except LLMError as e:
+        assert secret not in str(e)
+        assert "403" in str(e)
+
+
 def test_inline_error_object_raises():
     c = _client(_Resp(200, {"error": {"message": "bad", "code": 400}}))
     try:

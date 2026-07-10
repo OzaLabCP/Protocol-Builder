@@ -21,6 +21,7 @@ Phases:
 from __future__ import annotations
 
 import json
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -131,27 +132,36 @@ def _coerce_content(content: Any) -> Optional[str]:
     if content is None or isinstance(content, str):
         return content
     if isinstance(content, list):
-        return "".join(p.get("text", "") for p in content if isinstance(p, dict))
+        return "".join((p.get("text") or "") for p in content if isinstance(p, dict))
     return str(content)
 
 
 def _normalize_tool_calls(raw: Any) -> list:
-    """Clean the assistant message's tool_calls into a stable shape with guaranteed ids
-    (so the tool responses we echo back line up)."""
+    """Clean the assistant message's tool_calls into a stable shape with guaranteed,
+    unique ids (so the tool responses we echo back line up). Some providers hand back
+    `arguments` as an object rather than a JSON string — stringify it so the turn we
+    re-send is a valid OpenAI assistant message."""
     out = []
-    for i, tc in enumerate(raw or []):
+    for tc in raw or []:
         fn = tc.get("function") or {}
+        args = fn.get("arguments")
+        if isinstance(args, dict):
+            args = json.dumps(args)
+        elif not isinstance(args, str) or not args:
+            args = "{}"
         out.append(
             {
-                "id": tc.get("id") or f"call_{i}",
+                "id": tc.get("id") or f"call_{uuid.uuid4().hex}",
                 "type": "function",
-                "function": {"name": fn.get("name", ""), "arguments": fn.get("arguments") or "{}"},
+                "function": {"name": fn.get("name", ""), "arguments": args},
             }
         )
     return out
 
 
-def _parse_args(arguments: str) -> dict:
+def _parse_args(arguments: Any) -> dict:
+    if isinstance(arguments, dict):
+        return arguments
     try:
         val = json.loads(arguments or "{}")
         return val if isinstance(val, dict) else {}
@@ -216,11 +226,20 @@ class GapFillerAgent:
             )
             try:
                 msg = resp["choices"][0]["message"]
+                if not isinstance(msg, dict):
+                    raise TypeError("message is not an object")
+                raw_calls = msg.get("tool_calls")
+                if raw_calls is not None and not isinstance(raw_calls, list):
+                    raise TypeError("tool_calls is not a list")
             except (KeyError, IndexError, TypeError) as exc:
                 raise AgentError(f"Malformed provider response: {exc}")
 
-            tool_calls = _normalize_tool_calls(msg.get("tool_calls"))
-            assistant: dict = {"role": "assistant", "content": _coerce_content(msg.get("content"))}
+            tool_calls = _normalize_tool_calls(raw_calls)
+            content = _coerce_content(msg.get("content"))
+            # A no-tool-call assistant turn with null content is rejected by strict
+            # providers when re-sent; coerce it to "" so the transcript stays valid.
+            assistant: dict = {"role": "assistant",
+                               "content": content if tool_calls else (content or "")}
             if tool_calls:
                 assistant["tool_calls"] = tool_calls
             messages.append(assistant)

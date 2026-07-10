@@ -71,14 +71,17 @@ class OpenRouterClient:
                 f"{self.base_url}/chat/completions", json=payload, headers=headers
             )
         except httpx.HTTPError as exc:
-            raise LLMError(f"OpenRouter request failed ({type(exc).__name__}): {exc}") from exc
+            raise LLMError(f"OpenRouter request failed ({type(exc).__name__}).") from exc
 
+        # Keep the status code (the host uses it to classify auth failures) but never
+        # surface the provider's response body — it can echo the prompt, key hints, or
+        # internal detail, and it flows up into client-facing 500s.
         if resp.status_code >= 400:
-            raise LLMError(f"OpenRouter returned {resp.status_code}: {resp.text[:600]}")
+            raise LLMError(f"OpenRouter returned HTTP {resp.status_code}.")
         try:
             data = resp.json()
         except ValueError as exc:
-            raise LLMError(f"OpenRouter returned non-JSON body: {resp.text[:300]}") from exc
+            raise LLMError(f"OpenRouter returned a non-JSON body (HTTP {resp.status_code}).") from exc
         if data.get("error"):  # OpenRouter can 200 with an inline error object
-            raise LLMError(f"OpenRouter error: {data['error']}")
+            raise LLMError(f"OpenRouter returned an error response (HTTP {resp.status_code}).")
         return data
