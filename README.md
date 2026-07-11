@@ -84,6 +84,7 @@ liveness, the model, and which grounding sources are enabled. Sessions expire af
 | `LLM_PROVIDER` | `openrouter` | `openrouter` (any model, one key) or `anthropic` (Claude API direct, `sk-ant-…`). Sets the base URL + provider-specific params. |
 | `LLM_API_KEY` | — | Required. Your key for the chosen provider. (Alias: `OPENROUTER_API_KEY`.) |
 | `LLM_MODEL` | provider default | Model id/slug — must support tool calling. Defaults: `anthropic/claude-opus-4-8` (openrouter) · `claude-opus-4-8` (anthropic). (Alias: `OPENROUTER_MODEL`.) |
+| `LLM_MODEL_FAST` | = `LLM_MODEL` | Cheaper/faster model for the light phases (clarifications, assay discovery); the heavy emit stays on `LLM_MODEL`. Spend the top tier only where it earns it. |
 | `LLM_BASE_URL` | provider default | Override the endpoint (e.g. a self-hosted compatible gateway). (Alias: `OPENROUTER_BASE_URL`.) |
 | `GAPFILLER_REASONING_EFFORT` | `high` | Passed as `reasoning.effort` to models that support it; `""` to omit. |
 | `GAPFILLER_SEND_REASONING` | on for `openrouter` | Whether to send the OpenRouter-only `reasoning` field; auto-off for other providers. Set `1`/`0` to force. |
@@ -122,7 +123,7 @@ app/
   render.py       # protocol -> Markdown export
   server.py       # FastAPI endpoints (analyze/resolve/revise/export) + sessions
 static/index.html # paste/PDF UI, provenance render, export + refine controls
-tests/            # 98 tests across validation, grounding, agent loop, render, HTTP
+tests/            # 102 tests across validation, grounding, agent loop, render, HTTP
 Dockerfile        # single-worker container; /healthz healthcheck
 ```
 
@@ -158,13 +159,16 @@ Dockerfile        # single-worker container; /healthz healthcheck
   by the host-side citation/quote verification, which can't be talked past.
 - **Cost & efficiency:** a run is a multi-phase loop (analyze → ground → emit, plus any
   refine/design follow-up), so the stable prefix — system prompt + source text — would be
-  re-billed on every round-trip. Three defaults keep that in check without touching output
-  quality: **prompt caching** (`GAPFILLER_PROMPT_CACHE`) caches that prefix so phases 2…N
-  read it cheap; full-paper PDFs are **trimmed host-side to the Methods section** before the
-  first call (the rest is noise for reconstruction); and bulky grounding-search results are
-  **compacted out of the transcript** for follow-ups (the grounded values live in the emitted
-  protocol). Cheaper model tiers are a one-line `LLM_MODEL` change (Sonnet is plenty for most
-  protocols); Opus only when the reasoning earns it.
+  re-billed on every round-trip. Several defaults keep both tokens and latency down without
+  touching output quality: **prompt caching** (`GAPFILLER_PROMPT_CACHE`) caches that prefix
+  so phases 2…N read it cheap; the system prompt is **scoped per phase** (the asking phase
+  omits the emit rules and vice-versa); full-paper PDFs are **trimmed host-side to the Methods
+  section**; bulky grounding results are **compacted out of the transcript** for follow-ups;
+  multiple grounding searches in one turn run **concurrently**; when no grounding tool applies
+  the terminal is **forced on the first call** (no wasted auto→text→nudge round-trip); and the
+  HTTP client uses **HTTP/2 + a keep-alive pool**. Set `LLM_MODEL_FAST` to run the light phases
+  on a cheaper tier while the emit keeps `LLM_MODEL`; Sonnet is plenty for most protocols, Opus
+  only when the reasoning earns it.
 - **Sessions** are in-memory (single process) — fine for a demo, swap for a store to scale.
 - **Latency:** Phase 2 can run for a minute or two while it searches; the UI shows a
   working state. Streaming the emit call is a reasonable enhancement.

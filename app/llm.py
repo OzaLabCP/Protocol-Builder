@@ -31,8 +31,16 @@ class OpenRouterClient:
         self.base_url = (base_url or config.OPENROUTER_BASE_URL).rstrip("/")
         self.model = model or config.MODEL
         self.timeout = timeout or config.REQUEST_TIMEOUT
-        # trust_env=True lets a deployment's HTTPS_PROXY / CA bundle apply.
-        self._client = httpx.Client(timeout=self.timeout)
+        # HTTP/2 + a keep-alive pool: the loop makes many calls to the same host (model
+        # round-trips + grounding), so reusing connections avoids repeated TLS handshakes.
+        # http2 falls back to 1.1 automatically if the 'h2' package isn't installed.
+        try:
+            self._client = httpx.Client(
+                timeout=self.timeout, http2=True,
+                limits=httpx.Limits(max_keepalive_connections=10, keepalive_expiry=30.0),
+            )
+        except Exception:  # noqa: BLE001 — h2 missing, etc.
+            self._client = httpx.Client(timeout=self.timeout)
 
     def chat(
         self,

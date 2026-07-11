@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -33,6 +35,8 @@ from .prompts import (
     DESIGN_ALIGNMENT_INSTRUCTION,
     DESIGN_REVIEW_INSTRUCTION,
     DISCOVERY_SYSTEM_PROMPT,
+    SYSTEM_ASK,
+    SYSTEM_EMIT,
     SYSTEM_PROMPT,
 )
 from .schemas import (
@@ -84,6 +88,7 @@ class RunState:
 
     session: Session
     searches_left: int
+    lock: Any = field(default_factory=threading.Lock)  # guards budget/log under parallel dispatch
 
 
 @dataclass
@@ -230,10 +235,16 @@ def _compact_grounding(session: Session) -> None:
 
 
 class GapFillerAgent:
-    def __init__(self, client: Optional[OpenRouterClient] = None, model: Optional[str] = None):
+    def __init__(self, client: Optional[OpenRouterClient] = None, model: Optional[str] = None,
+                 model_fast: Optional[str] = None):
         self.client = client or OpenRouterClient()
         self.model = model or config.MODEL
-        self.system_prompt = SYSTEM_PROMPT
+        # Fast tier for the light phases (analyze/clarifications, discovery); falls back
+        # to the main model when unset. The heavy emit always uses the main model.
+        self.model_fast = model_fast or config.MODEL_FAST or self.model
+        self.system_prompt = SYSTEM_PROMPT      # full — design review/alignment, fallback
+        self.system_ask = SYSTEM_ASK            # phase 1 (clarifications): no emit rules
+        self.system_emit = SYSTEM_EMIT          # phase 3 (emit): no asking rules
         self.discovery_prompt = DISCOVERY_SYSTEM_PROMPT
 
     def _client_tool_names(self) -> set:
@@ -244,15 +255,18 @@ class GapFillerAgent:
         enabled = _enabled_client_tools()
         if name not in enabled:
             return f"Unknown or disabled tool: {name}"
-        if state.searches_left <= 0:
-            return (
-                "Search budget exhausted. Do not search again; fill any remaining "
-                "values from best_practice or default_verify and proceed to emit."
-            )
-        state.searches_left -= 1
+        # Reserve budget + record the query atomically (calls in one turn run in parallel);
+        # the network search itself happens outside the lock so searches overlap.
+        with state.lock:
+            if state.searches_left <= 0:
+                return (
+                    "Search budget exhausted. Do not search again; fill any remaining "
+                    "values from best_practice or default_verify and proceed to emit."
+                )
+            state.searches_left -= 1
+            query = str(tool_input.get("query", "")).strip()
+            state.session.grounding_log.append(f"{name}: {query}")
         search_fn, formatter = enabled[name]
-        query = str(tool_input.get("query", "")).strip()
-        state.session.grounding_log.append(f"{name}: {query}")
         try:
             results = search_fn(query, tool_input.get("retmax", 5))
         except Exception as exc:  # noqa: BLE001
@@ -264,25 +278,31 @@ class GapFillerAgent:
 
     # -- one terminal-seeking run -----------------------------------------------
     def _run(self, messages: list, tools: list, terminal_name: str, state: RunState,
-             system: Optional[str] = None, force_terminal: bool = False) -> Optional[_ToolCall]:
+             system: Optional[str] = None, force_terminal: bool = False,
+             model: Optional[str] = None) -> Optional[_ToolCall]:
         """Loop until the model calls `terminal_name`, executing client tools in
         between. Returns the terminal call (parsed), or None if the model ended with
-        plain text. `system` overrides the default prompt; `force_terminal` pins
-        tool_choice to the terminal tool (used for the emit-only nudge)."""
+        plain text. `system` overrides the default prompt; `model` overrides the tier;
+        `force_terminal` pins tool_choice to the terminal tool (used for the emit-only
+        nudge). When no grounding tool is available this round, the terminal is forced on
+        the first call too — there's nothing to search for, so skip the auto→text→nudge
+        round-trip."""
         openai_tools = [as_openai_tool(t) for t in tools]
+        client_names = self._client_tool_names()
+        has_grounding = bool({t.get("name") for t in tools} & client_names)
+        force = force_terminal or not has_grounding
         tool_choice: Any = (
             {"type": "function", "function": {"name": terminal_name}}
-            if force_terminal else "auto"
+            if force else "auto"
         )
         sys_msg = {"role": "system", "content": system or self.system_prompt}
-        client_names = self._client_tool_names()
 
         for _round in range(config.MAX_TOOL_ROUNDS):
             resp = self.client.chat(
                 messages=[sys_msg] + messages,
                 tools=openai_tools,
                 tool_choice=tool_choice,
-                model=self.model,
+                model=model or self.model,
             )
             try:
                 choice = resp["choices"][0]
@@ -317,22 +337,37 @@ class GapFillerAgent:
             if not tool_calls:
                 return None  # ended with plain text — caller decides to nudge/error
 
-            # Answer every non-terminal tool call now; leave the terminal call pending
-            # (a later entrypoint acks it) so exactly one dangling call remains.
+            # Split off the terminal (leave it pending — a later entrypoint acks it) and
+            # answer every other call. Multiple grounding calls in one turn run
+            # concurrently, so N searches cost ~one network round-trip, not N.
             terminal: Optional[_ToolCall] = None
+            pending: list = []
             for tc in tool_calls:
                 name = tc["function"]["name"]
                 if name == terminal_name and terminal is None:
                     terminal = _ToolCall(id=tc["id"], name=name,
                                          input=_parse_args(tc["function"]["arguments"]))
                     continue
+                pending.append(tc)
+
+            def _answer(tc: dict) -> tuple:
+                name = tc["function"]["name"]
                 content = (
                     self._dispatch(name, _parse_args(tc["function"]["arguments"]), state)
                     if name in client_names else f"Unknown or unavailable tool: {name}"
                 )
-                messages.append({"role": "tool", "tool_call_id": tc["id"], "content": content})
+                return tc["id"], name, content
+
+            if len(pending) > 1:
+                with ThreadPoolExecutor(max_workers=min(len(pending), 6)) as ex:
+                    answered = list(ex.map(_answer, pending))
+            else:
+                answered = [_answer(tc) for tc in pending]
+
+            for cid, name, content in answered:  # append in original order
+                messages.append({"role": "tool", "tool_call_id": cid, "content": content})
                 if name in client_names:  # a grounding result — mark it for later compaction
-                    state.session.grounding_call_ids.append(tc["id"])
+                    state.session.grounding_call_ids.append(cid)
 
             if terminal is not None:
                 return terminal
@@ -402,7 +437,8 @@ class GapFillerAgent:
 
         session.messages.append({"role": "user", "content": _cache_text(hyp_preamble + body)})
         tools = _grounding_tools() + [REQUEST_CLARIFICATIONS_TOOL]
-        block = self._run(session.messages, tools, "request_clarifications", state)
+        block = self._run(session.messages, tools, "request_clarifications", state,
+                          system=self.system_ask, model=self.model_fast)
         if block is None:
             raise AgentError("Phase 1 ended without calling request_clarifications.")
         session.request_tool_use_id = block.id
@@ -435,7 +471,7 @@ class GapFillerAgent:
 
         tools = _grounding_tools() + [EMIT_ASSAY_OPTIONS_TOOL]
         block = self._run(session.messages, tools, "emit_assay_options", state,
-                          system=self.discovery_prompt)
+                          system=self.discovery_prompt, model=self.model_fast)
         if block is None:
             raise AgentError("Discovery ended without calling emit_assay_options.")
         session.assay_options = dict(block.input)
@@ -458,7 +494,8 @@ class GapFillerAgent:
             critical_comparison=chosen.get("critical_comparison", ""),
         )
         phase1 = self._followup(session, brief, "request_clarifications",
-                                REQUEST_CLARIFICATIONS_TOOL)
+                                REQUEST_CLARIFICATIONS_TOOL,
+                                system=self.system_ask, model=self.model_fast)
         session.request_tool_use_id = session.pending_tool_use_id
         session.pending_tool_use_id = None
         session.phase1 = phase1
@@ -478,7 +515,8 @@ class GapFillerAgent:
         session.request_tool_use_id = None  # prevent a second answer submission
 
         tools = _grounding_tools() + [EMIT_PROTOCOL_TOOL]
-        block = self._run(session.messages, tools, "emit_protocol", state)
+        block = self._run(session.messages, tools, "emit_protocol", state,
+                          system=self.system_emit, model=self.model)
         if block is not None:
             session.pending_tool_use_id = block.id
             return dict(block.input)
@@ -489,7 +527,7 @@ class GapFillerAgent:
              "with the finalized, provenance-tagged protocol."}
         )
         block = self._run(session.messages, [EMIT_PROTOCOL_TOOL], "emit_protocol", state,
-                          force_terminal=True)
+                          system=self.system_emit, force_terminal=True, model=self.model)
         if block is None:
             raise AgentError("Phase 3 ended without calling emit_protocol.")
         session.pending_tool_use_id = block.id
@@ -497,11 +535,13 @@ class GapFillerAgent:
 
     # -- Continue after an emit (ack the pending tool call) ---------------------
     def _followup(self, session: Session, instruction: str, terminal: str, tool: dict,
-                  compact: bool = False) -> dict:
+                  compact: bool = False, system: Optional[str] = None,
+                  model: Optional[str] = None) -> dict:
         """Ack the last emit (answer its dangling tool call), append an instruction, and
         run to a new terminal tool. Shared by revise/design_review/design_alignment and
         choose_assay — answering whatever call is pending lets these interleave freely.
-        `compact=True` (post-emit follow-ups) trims the bulky raw grounding results first."""
+        `compact=True` (post-emit follow-ups) trims the bulky raw grounding results first.
+        `system`/`model` scope the prompt + tier to the follow-up's kind."""
         if session.pending_tool_use_id is None:
             raise AgentError("Nothing to build on yet — emit a protocol first.")
         if compact:
@@ -512,7 +552,8 @@ class GapFillerAgent:
         )
         session.messages.append({"role": "user", "content": instruction})
         session.pending_tool_use_id = None
-        block = self._run(session.messages, _grounding_tools() + [tool], terminal, state)
+        block = self._run(session.messages, _grounding_tools() + [tool], terminal, state,
+                          system=system, model=model)
         if block is None:
             raise AgentError(f"Model ended without calling {terminal}.")
         session.pending_tool_use_id = block.id
@@ -529,6 +570,8 @@ class GapFillerAgent:
             "emit_protocol",
             EMIT_PROTOCOL_TOOL,
             compact=True,
+            system=self.system_emit,
+            model=self.model,
         )
 
     # -- Design review (teach the experiment around the protocol) ---------------

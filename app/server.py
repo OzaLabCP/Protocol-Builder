@@ -219,6 +219,7 @@ def healthz(request: Request) -> dict:
         "provider": config.LLM_PROVIDER,
         "base_url": config.OPENROUTER_BASE_URL,
         "model": config.MODEL,
+        "model_fast": config.MODEL_FAST or config.MODEL,
         "api_key_set": bool(config.OPENROUTER_API_KEY),
         "prompt_cache": config.PROMPT_CACHE,
         "auth_required": auth_required,

@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import literature  # noqa: E402
 from app.agent import AgentError, GapFillerAgent, RunState, Session  # noqa: E402
-from app.prompts import DISCOVERY_SYSTEM_PROMPT, SYSTEM_PROMPT  # noqa: E402
+from app.prompts import DISCOVERY_SYSTEM_PROMPT, SYSTEM_ASK, SYSTEM_PROMPT  # noqa: E402
 
 
 class FakeLLM:
@@ -25,7 +25,8 @@ class FakeLLM:
         self.calls = []
 
     def chat(self, messages, tools=None, tool_choice=None, model=None):
-        self.calls.append({"messages": messages, "tools": tools, "tool_choice": tool_choice})
+        self.calls.append({"messages": messages, "tools": tools,
+                           "tool_choice": tool_choice, "model": model})
         return self.queue.pop(0)
 
 
@@ -76,8 +77,8 @@ def test_phase1_dispatches_pubmed_then_returns_clarifications():
     assert session.grounding_log == ["search_pubmed: PANOx-SP incubation time"]
     # a tool message answering the search was fed back
     assert any(m.get("role") == "tool" and m.get("tool_call_id") == "s1" for m in session.messages)
-    # the run used the main protocol-engineer system prompt as messages[0]
-    assert agent.client.calls[0]["messages"][0] == {"role": "system", "content": SYSTEM_PROMPT}
+    # phase 1 runs under the scoped ASK prompt (no emitting rules), not the full prompt
+    assert agent.client.calls[0]["messages"][0] == {"role": "system", "content": SYSTEM_ASK}
 
 
 def test_phase2_grounds_then_emits():
@@ -266,7 +267,7 @@ def test_source_message_is_cache_marked_when_enabled():
     assert isinstance(content, list) and content[0]["cache_control"] == {"type": "ephemeral"}
     assert "30 C" in content[0]["text"]
     # the system message is NOT reshaped (the prefix cache covers it): stays a plain string
-    assert agent.client.calls[0]["messages"][0] == {"role": "system", "content": SYSTEM_PROMPT}
+    assert agent.client.calls[0]["messages"][0] == {"role": "system", "content": SYSTEM_ASK}
 
 
 def test_full_paper_trimmed_to_methods_section():
@@ -316,6 +317,62 @@ def test_grounding_results_compacted_on_followup():
     tmsg = [m for m in session.messages if m.get("role") == "tool" and m.get("tool_call_id") == "s1"][0]
     assert "omitted to save tokens" in tmsg["content"]      # bulky hits compacted
     assert len(tmsg["content"]) < len(big)
+
+
+# --- per-phase model + forced-emit + parallel grounding ---------------------
+
+def test_fast_tier_used_for_analyze_main_for_emit():
+    agent = GapFillerAgent(client=FakeLLM([
+        tool_msg(("request_clarifications", {"usable": True, "gaps": []}, "c1"))]),
+        model="main-x", model_fast="fast-x")
+    literature.search_pubmed = lambda q, retmax=5: []
+    agent.analyze("A methods section describing a CFPS reaction at 30 C for 4 h.")
+    assert agent.client.calls[0]["model"] == "fast-x"  # analyze on the fast tier
+
+    agent2 = GapFillerAgent(client=FakeLLM([tool_msg(("emit_protocol", PROTO, "e1"))]),
+                            model="main-x", model_fast="fast-x")
+    sess = Session(messages=[{"role": "user", "content": "seed"}], request_tool_use_id="c1")
+    agent2.continue_with_answers(sess, answers=[])
+    assert agent2.client.calls[-1]["model"] == "main-x"  # emit on the main tier
+
+
+def test_forces_terminal_when_no_grounding_tools():
+    # grounding disabled -> the first emit call is forced (no wasted auto->text->nudge)
+    import app.config as cfg
+    saved = (cfg.ENABLE_PUBMED, cfg.ENABLE_PREPRINTS)
+    cfg.ENABLE_PUBMED = cfg.ENABLE_PREPRINTS = False
+    try:
+        agent = make_agent([tool_msg(("emit_protocol", PROTO, "e1"))], monkeypatch_search=False)
+        sess = Session(messages=[{"role": "user", "content": "seed"}], request_tool_use_id="c1")
+        out = agent.continue_with_answers(sess, answers=[])
+        assert out["title"] == "P"
+        # exactly one model call, and it was forced to the terminal
+        assert len(agent.client.calls) == 1
+        assert agent.client.calls[0]["tool_choice"] == {"type": "function", "function": {"name": "emit_protocol"}}
+    finally:
+        cfg.ENABLE_PUBMED, cfg.ENABLE_PREPRINTS = saved
+
+
+def test_parallel_grounding_answers_all_calls_in_one_turn():
+    calls = []
+    def fake_search(q, retmax=5):
+        calls.append(q)
+        return [{"pmid": "1", "title": "t", "authors": "A", "year": 2020, "doi": None}]
+    literature.search_pubmed = fake_search
+    # one assistant turn emits TWO search calls, then the next turn emits the protocol
+    queue = [
+        tool_msg(("search_pubmed", {"query": "q1"}, "s1"), ("search_pubmed", {"query": "q2"}, "s2")),
+        tool_msg(("emit_protocol", PROTO, "e1")),
+    ]
+    session = Session(messages=[{"role": "user", "content": "seed"}], request_tool_use_id="c1")
+    agent = GapFillerAgent(client=FakeLLM(queue), model="fake")
+    out = agent.continue_with_answers(session, answers=[])
+    assert out["title"] == "P"
+    # both searches ran and both were answered with role:tool messages
+    assert set(calls) == {"q1", "q2"}
+    answered = {m["tool_call_id"] for m in session.messages if m.get("role") == "tool"}
+    assert {"s1", "s2"} <= answered
+    assert set(session.grounding_call_ids) == {"s1", "s2"}
 
 
 if __name__ == "__main__":

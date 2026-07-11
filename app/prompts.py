@@ -363,3 +363,21 @@ request_clarifications (or return usable=false if the input is not a protocol). 
 phase 2 you may call web_search freely; when your research is complete, call
 emit_protocol.
 """
+
+
+def _drop_section(prompt: str, header_prefix: str) -> str:
+    """Return `prompt` with the `## <header_prefix>...` section removed (up to the next
+    `## ` heading or end). Used to build phase-scoped prompts: the asking phase doesn't
+    need the emitting rules and vice-versa, so each phase carries only what it uses. The
+    union of the two variants equals SYSTEM_PROMPT, so no discipline is ever lost."""
+    i = prompt.find(header_prefix)
+    if i < 0:
+        return prompt
+    j = prompt.find("\n## ", i + len(header_prefix))
+    return prompt[:i] + (prompt[j + 1:] if j >= 0 else "")
+
+
+# Phase 1 (clarifications): keep everything except the phase-3 emitting rules.
+SYSTEM_ASK = _drop_section(SYSTEM_PROMPT, "## Emitting discipline")
+# Phase 3 (emit): keep everything except the phase-1 asking rules.
+SYSTEM_EMIT = _drop_section(SYSTEM_PROMPT, "## Asking discipline")

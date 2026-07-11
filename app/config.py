@@ -50,6 +50,11 @@ MODEL = _first(
     os.environ.get("LLM_MODEL", ""), os.environ.get("OPENROUTER_MODEL", ""),
     default=_defaults["model"],
 )
+# Optional cheaper/faster model for the light phases (analyze/clarifications, assay
+# discovery) — the heavy emit stays on LLM_MODEL. Empty -> use LLM_MODEL everywhere.
+# Lets you spend the top tier only where the reasoning earns it.
+MODEL_FAST = os.environ.get("LLM_MODEL_FAST", os.environ.get("OPENROUTER_MODEL_FAST", ""))
+
 # Optional attribution headers OpenRouter surfaces on your dashboard (OpenRouter only).
 OPENROUTER_REFERER = os.environ.get("OPENROUTER_REFERER", "")
 OPENROUTER_TITLE = os.environ.get("OPENROUTER_TITLE", "Methods Gap-Filler")
