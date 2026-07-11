@@ -309,6 +309,27 @@ def test_validate_assay_options():
     assert opts["recommended_assay_id"] == "fp"  # repaired to a real id
 
 
+def test_malformed_entries_are_dropped_not_crashed():
+    # a model can emit a bare string where a material object is expected — must not crash.
+    from app.render import materials_to_csv, protocol_to_markdown
+    p = base_protocol(materials=[
+        "BsaI enzyme",  # malformed: a string, not an object
+        {"name": "T4 ligase", "provenance": "best_practice"},
+    ], steps=[
+        {"number": 1, "title": "Digest", "provenance": "stated",
+         "critical_parameters": ["oops-not-an-object", {"name": "temp", "provenance": "stated"}]},
+        "not-a-step",
+    ])
+    report = validate_and_finalize(p, fake_resolver({}))
+    assert report["malformed_dropped"] == 3  # 1 material + 1 cp + 1 step
+    assert [m["name"] for m in p["materials"]] == ["T4 ligase"]
+    assert len(p["steps"]) == 1 and p["steps"][0]["critical_parameters"][0]["name"] == "temp"
+    # render + csv must also survive the (now-clean) protocol
+    assert "T4 ligase" in protocol_to_markdown(p)
+    assert "T4 ligase" in materials_to_csv(p)
+    assert any("malformed" in q for q in p["open_questions"])
+
+
 def _alignment(**over):
     a = {
         "hypothesis": {"statement": "X increases Y", "prediction_if_true": "up",

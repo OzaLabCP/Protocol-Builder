@@ -130,6 +130,38 @@ def _downgrade(entry: dict, note: str) -> None:
     entry["provenance_note"] = (existing + " " if existing else "") + f"[VALIDATION] {note}"
 
 
+def _sanitize_protocol(protocol: dict) -> int:
+    """Drop non-dict entries the model may emit in list fields (materials, steps, each
+    step's critical_parameters/substeps, assumptions_log) so downstream .get() calls
+    can't crash. Also coerces a non-dict titration_series to None. Mutates in place;
+    returns how many malformed items were removed."""
+    dropped = 0
+    for key in ("materials", "steps", "assumptions_log"):
+        v = protocol.get(key)
+        if isinstance(v, list):
+            clean = [e for e in v if isinstance(e, dict)]
+            dropped += len(v) - len(clean)
+            protocol[key] = clean
+        elif v is not None:
+            dropped += 1
+            protocol[key] = []
+    for step in protocol.get("steps") or []:
+        for sub in ("critical_parameters", "substeps"):
+            v = step.get(sub)
+            if isinstance(v, list):
+                clean = [e for e in v if isinstance(e, dict)]
+                dropped += len(v) - len(clean)
+                step[sub] = clean
+            elif v is not None:
+                dropped += 1
+                step[sub] = []
+    if "titration_series" in protocol and not isinstance(protocol.get("titration_series"), dict):
+        if protocol.get("titration_series") is not None:
+            dropped += 1
+        protocol["titration_series"] = None
+    return dropped
+
+
 def validate_and_finalize(
     protocol: dict,
     resolver: Resolver = resolve_citation,
@@ -152,10 +184,22 @@ def validate_and_finalize(
         "downgraded": [],
         "invariant_fixes": [],
         "stated_downgrades": [],
+        "malformed_dropped": 0,
         "quotes": {"verified": [], "downgraded": [], "unverified": [], "source_checked": False},
         "consistency": {"inline_missing_from_log": [], "log_missing_from_inline": []},
     }
     open_questions = list(protocol.get("open_questions") or [])
+
+    # A model can emit a non-object where a structured entry is expected (e.g. a bare
+    # string in `materials`). Drop those first so the provenance iterators — and the
+    # renderer — never call .get() on a str. This is the untrusted-emit boundary.
+    dropped = _sanitize_protocol(protocol)
+    if dropped:
+        report["malformed_dropped"] = dropped
+        open_questions.append(
+            f"{dropped} malformed protocol item(s) (non-object entries in a list field) were "
+            f"dropped from the model's output; regenerate if the protocol looks incomplete."
+        )
 
     # SECURITY: quote_verified is a HOST-ONLY attestation. Never trust a model-supplied
     # value — strip it from every entry so only the verification pass below can set it.

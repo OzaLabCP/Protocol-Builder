@@ -56,11 +56,15 @@ def protocol_to_markdown(p: dict) -> str:
     # provenance summary
     tiers: Counter = Counter()
     for m in p.get("materials", []):
-        tiers[m.get("provenance")] += 1
+        if isinstance(m, dict):
+            tiers[m.get("provenance")] += 1
     for s in p.get("steps", []):
+        if not isinstance(s, dict):
+            continue
         tiers[s.get("provenance")] += 1
         for cp in s.get("critical_parameters", []):
-            tiers[cp.get("provenance")] += 1
+            if isinstance(cp, dict):
+                tiers[cp.get("provenance")] += 1
     rep = p.get("validation_report") or {}
     verified = len(rep.get("verified", []))
     downgraded = len(rep.get("downgraded", []))
@@ -77,6 +81,8 @@ def protocol_to_markdown(p: dict) -> str:
         out.append("| Reagent | Amount | Grade/vendor | Provenance |")
         out.append("| --- | --- | --- | --- |")
         for m in mats:
+            if not isinstance(m, dict):
+                continue
             amt = " ".join(str(x) for x in [m.get("amount"), m.get("unit")] if x not in (None, ""))
             out.append(
                 f"| {m.get('name','')} | {amt or '—'} | {m.get('vendor_or_grade') or '—'} | "
@@ -92,6 +98,8 @@ def protocol_to_markdown(p: dict) -> str:
 
     out.append("## Procedure\n")
     for s in p.get("steps", []):
+        if not isinstance(s, dict):
+            continue
         out.append(f"### {s.get('number')}. {s.get('title','')} {_tier(s)}{_anchor(s)}\n")
         out.append(s.get("instruction", "") + "\n")
         meta = " · ".join(
@@ -103,10 +111,14 @@ def protocol_to_markdown(p: dict) -> str:
         if meta:
             out.append(meta + "\n")
         for cp in s.get("critical_parameters", []):
+            if not isinstance(cp, dict):
+                continue
             val = " ".join(str(x) for x in [cp.get("value"), cp.get("unit")] if x not in (None, ""))
             note = f" — {cp['provenance_note']}" if cp.get("provenance_note") else ""
             out.append(f"- **{cp.get('name','')}:** {val} {_tier(cp)}{_cite(cp)}{_anchor(cp)}{note}")
         for ss in s.get("substeps", []):
+            if not isinstance(ss, dict):
+                continue
             out.append(f"  - {ss.get('number','')} {ss.get('instruction','')} {_tier(ss)}{_anchor(ss)}")
         for w in s.get("warnings", []):
             out.append(f"> ⚠ {w}")
@@ -226,6 +238,8 @@ def materials_to_csv(p: dict) -> str:
     w.writerow(["reagent", "amount", "unit", "vendor_or_grade",
                 "provenance", "citation_identifier", "citation_verified", "note"])
     for m in p.get("materials") or []:
+        if not isinstance(m, dict):
+            continue
         c = m.get("citation") or {}
         w.writerow([_csv_safe(x) for x in [
             m.get("name", ""),
