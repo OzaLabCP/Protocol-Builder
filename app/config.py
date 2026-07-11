@@ -70,6 +70,16 @@ SEND_REASONING = (
 # Safety valve against a model that loops on tool calls without ever finishing.
 MAX_TOOL_ROUNDS = int(os.environ.get("GAPFILLER_MAX_TOOL_ROUNDS", "16"))
 
+# Prompt caching: mark the stable prefix (system prompt + source text) with a cache
+# breakpoint so the multi-phase loop re-reads it from the provider's prompt cache instead
+# of re-billing it on every round-trip. Well-supported and documented via OpenRouter, so
+# it's on there by default; off for other providers whose OpenAI-compat endpoint may not
+# honor cache_control (toggle with GAPFILLER_PROMPT_CACHE=1/0). Purely a cost optimization
+# — the model sees byte-identical content either way.
+PROMPT_CACHE = (
+    os.environ.get("GAPFILLER_PROMPT_CACHE", "1" if LLM_PROVIDER == "openrouter" else "0") != "0"
+)
+
 # --- Literature grounding (provider-agnostic; run by this app) --------------
 # These are app-run client tools against public APIs — they work regardless of
 # which LLM is behind OpenRouter. Each can be disabled.

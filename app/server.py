@@ -220,6 +220,7 @@ def healthz(request: Request) -> dict:
         "base_url": config.OPENROUTER_BASE_URL,
         "model": config.MODEL,
         "api_key_set": bool(config.OPENROUTER_API_KEY),
+        "prompt_cache": config.PROMPT_CACHE,
         "auth_required": auth_required,
         "grounding": {
             "pubmed": config.ENABLE_PUBMED,

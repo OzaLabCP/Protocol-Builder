@@ -21,6 +21,7 @@ Phases:
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -73,6 +74,7 @@ class Session:
     assay_options: Optional[dict] = None  # validated emit_assay_options payload
     chosen_assay: Optional[dict] = None  # the picked assay dict (for brief + export)
     grounding_log: list = field(default_factory=list)  # queries the app ran
+    grounding_call_ids: list = field(default_factory=list)  # tool_call_ids of grounding results (for compaction)
 
 
 @dataclass
@@ -169,6 +171,64 @@ def _parse_args(arguments: Any) -> dict:
         return {}
 
 
+def _cache_text(text: str) -> Any:
+    """Wrap a large, stable text block as an OpenAI content part carrying a cache
+    breakpoint, so the multi-phase loop re-reads the prefix (system prompt + source) from
+    the provider's prompt cache instead of re-billing it. A breakpoint on the source
+    message caches the whole `[system, source]` prefix. Returns a plain string when
+    caching is off — the model sees identical content either way."""
+    if not config.PROMPT_CACHE:
+        return text
+    return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
+
+
+# Locate a paper's Methods/Materials section so we don't ship the whole PDF every call.
+_METHODS_START_RE = re.compile(
+    r"(?im)^\s*(?:\d+\.?\s*)?(?:materials\s+and\s+methods|methods\s+and\s+materials|"
+    r"materials\s*&\s*methods|experimental\s+(?:procedures|section|methods)|methods)\b.*$"
+)
+_METHODS_END_RE = re.compile(
+    r"(?im)^\s*(?:\d+\.?\s*)?(?:results(?:\s+and\s+discussion)?|discussion|conclusions?|"
+    r"acknowledge?ments?|references|bibliography|supplementary|author\s+contributions|"
+    r"data\s+availability|competing\s+interests)\b.*$"
+)
+
+
+def _extract_methods_section(text: str) -> Optional[str]:
+    """Best-effort trim of extracted full-paper text down to just its Methods/Materials
+    section, so the abstract/intro/results/references aren't shipped to the model on every
+    call. Conservative — returns None (caller falls back to full text) unless it finds a
+    Methods heading at a line start, a plausible end heading after it, and the slice is
+    both non-trivial and materially smaller than the whole (so a false match can't quietly
+    drop most of the paper). Removes noise, not signal: the reconstruction only uses this
+    section, and host-side quote verification then runs against exactly what the model read."""
+    m = _METHODS_START_RE.search(text)
+    if not m:
+        return None
+    start = m.start()
+    end_m = _METHODS_END_RE.search(text, m.end())
+    end = end_m.start() if end_m else len(text)
+    section = text[start:end].strip()
+    if len(section) < 200 or len(section) > 0.9 * len(text):
+        return None
+    return section
+
+
+def _compact_grounding(session: Session) -> None:
+    """Once a protocol exists, replace the bulky raw grounding-search results carried in
+    the transcript with a short placeholder. Follow-ups (revise/design/align) don't re-read
+    raw hits — the grounded values and their citations are already in the emitted protocol
+    — so this trims their input cost without changing what the model can use."""
+    ids = set(session.grounding_call_ids)
+    if not ids:
+        return
+    for msg in session.messages:
+        if (msg.get("role") == "tool" and msg.get("tool_call_id") in ids
+                and isinstance(msg.get("content"), str) and len(msg["content"]) > 400):
+            msg["content"] = ("[earlier grounding-search results omitted to save tokens; "
+                              "the grounded values and their citations are in the protocol above]")
+
+
 class GapFillerAgent:
     def __init__(self, client: Optional[OpenRouterClient] = None, model: Optional[str] = None):
         self.client = client or OpenRouterClient()
@@ -225,7 +285,9 @@ class GapFillerAgent:
                 model=self.model,
             )
             try:
-                msg = resp["choices"][0]["message"]
+                choice = resp["choices"][0]
+                finish = choice.get("finish_reason")
+                msg = choice["message"]
                 if not isinstance(msg, dict):
                     raise TypeError("message is not an object")
                 raw_calls = msg.get("tool_calls")
@@ -233,6 +295,14 @@ class GapFillerAgent:
                     raise TypeError("tool_calls is not a list")
             except (KeyError, IndexError, TypeError) as exc:
                 raise AgentError(f"Malformed provider response: {exc}")
+
+            # A truncated response means an incomplete tool call (broken JSON) — fail loud
+            # with an actionable message instead of an opaque "never called the terminal".
+            if finish == "length":
+                raise AgentError(
+                    "The model hit the max_tokens output limit before finishing its "
+                    "response. Raise GAPFILLER_MAX_TOKENS — protocol emits are large."
+                )
 
             tool_calls = _normalize_tool_calls(raw_calls)
             content = _coerce_content(msg.get("content"))
@@ -261,6 +331,8 @@ class GapFillerAgent:
                     if name in client_names else f"Unknown or unavailable tool: {name}"
                 )
                 messages.append({"role": "tool", "tool_call_id": tc["id"], "content": content})
+                if name in client_names:  # a grounding result — mark it for later compaction
+                    state.session.grounding_call_ids.append(tc["id"])
 
             if terminal is not None:
                 return terminal
@@ -286,8 +358,14 @@ class GapFillerAgent:
             raise AgentError("analyze() needs methods_text.")
         session = Session()
         session.hypothesis = (hypothesis or "").strip() or None
-        session.source_text = text
-        session.source_exact = not is_full_paper  # PDF-extracted text is lossy vs the paper
+
+        # For a PDF (full paper), trim host-side to just the Methods section when we can
+        # find it, so the abstract/intro/results/references aren't shipped on every call.
+        # Falls back to the whole text if the section can't be confidently located.
+        extracted_methods = _extract_methods_section(text) if is_full_paper else None
+        effective_text = extracted_methods or text
+        session.source_text = effective_text  # verify quotes against exactly what the model read
+        session.source_exact = not is_full_paper  # PDF-derived text is lossy vs the paper
         state = RunState(session=session, searches_left=config.PUBMED_BUDGET)
 
         hyp_preamble = (
@@ -296,7 +374,7 @@ class GapFillerAgent:
             "testing this hypothesis.\n\n"
             if session.hypothesis else ""
         )
-        if is_full_paper:
+        if is_full_paper and not extracted_methods:
             body = (
                 "The text below is the FULL TEXT of a research paper (extracted from a "
                 "PDF). Locate its experimental Methods / Materials-and-Methods section "
@@ -304,16 +382,25 @@ class GapFillerAgent:
                 "protocol from that section, classify every parameter, scope ambiguous "
                 "gaps with a light literature search, then call request_clarifications. "
                 "If the paper has no experimental methods section (e.g. a review), "
-                "return usable=false.\n\n=== PAPER TEXT ===\n" + text
+                "return usable=false.\n\n=== PAPER TEXT ===\n" + effective_text
+            )
+        elif is_full_paper:
+            body = (
+                "The text below is the Methods / Materials-and-Methods section extracted "
+                "from a research paper's PDF (the surrounding sections were trimmed out "
+                "host-side, so wording may be slightly lossy). Reconstruct the protocol, "
+                "classify every parameter, scope ambiguous gaps with a light literature "
+                "search, then call request_clarifications.\n\n=== METHODS (extracted) ===\n"
+                + effective_text
             )
         else:
             body = (
                 "Here is a published Methods section. Reconstruct the protocol, classify "
                 "every parameter, scope any ambiguous gaps with a light literature "
-                "search, then call request_clarifications.\n\n=== METHODS ===\n" + text
+                "search, then call request_clarifications.\n\n=== METHODS ===\n" + effective_text
             )
 
-        session.messages.append({"role": "user", "content": hyp_preamble + body})
+        session.messages.append({"role": "user", "content": _cache_text(hyp_preamble + body)})
         tools = _grounding_tools() + [REQUEST_CLARIFICATIONS_TOOL]
         block = self._run(session.messages, tools, "request_clarifications", state)
         if block is None:
@@ -344,7 +431,7 @@ class GapFillerAgent:
             parts.append("Constraints to weight the recommendation toward:")
             for k, v in con.items():
                 parts.append(f"- {k}: {v}")
-        session.messages.append({"role": "user", "content": "\n".join(parts)})
+        session.messages.append({"role": "user", "content": _cache_text("\n".join(parts))})
 
         tools = _grounding_tools() + [EMIT_ASSAY_OPTIONS_TOOL]
         block = self._run(session.messages, tools, "emit_assay_options", state,
@@ -409,12 +496,16 @@ class GapFillerAgent:
         return dict(block.input)
 
     # -- Continue after an emit (ack the pending tool call) ---------------------
-    def _followup(self, session: Session, instruction: str, terminal: str, tool: dict) -> dict:
+    def _followup(self, session: Session, instruction: str, terminal: str, tool: dict,
+                  compact: bool = False) -> dict:
         """Ack the last emit (answer its dangling tool call), append an instruction, and
         run to a new terminal tool. Shared by revise/design_review/design_alignment and
-        choose_assay — answering whatever call is pending lets these interleave freely."""
+        choose_assay — answering whatever call is pending lets these interleave freely.
+        `compact=True` (post-emit follow-ups) trims the bulky raw grounding results first."""
         if session.pending_tool_use_id is None:
             raise AgentError("Nothing to build on yet — emit a protocol first.")
+        if compact:
+            _compact_grounding(session)
         state = RunState(session=session, searches_left=config.PUBMED_BUDGET)
         session.messages.append(
             {"role": "tool", "tool_call_id": session.pending_tool_use_id, "content": "Received."}
@@ -437,13 +528,14 @@ class GapFillerAgent:
             "values):\n\n" + instruction.strip(),
             "emit_protocol",
             EMIT_PROTOCOL_TOOL,
+            compact=True,
         )
 
     # -- Design review (teach the experiment around the protocol) ---------------
     def design_review(self, session: Session) -> dict:
         """Produce an experiment-design review of the emitted protocol."""
         return self._followup(session, DESIGN_REVIEW_INSTRUCTION, "emit_design_review",
-                               EMIT_DESIGN_REVIEW_TOOL)
+                               EMIT_DESIGN_REVIEW_TOOL, compact=True)
 
     # -- Design alignment (does it directly test the hypothesis?) ---------------
     def design_alignment(self, session: Session, hypothesis: Optional[str] = None) -> dict:
@@ -460,4 +552,4 @@ class GapFillerAgent:
                 + instruction
             )
         return self._followup(session, instruction, "emit_design_alignment",
-                               EMIT_DESIGN_ALIGNMENT_TOOL)
+                               EMIT_DESIGN_ALIGNMENT_TOOL, compact=True)
