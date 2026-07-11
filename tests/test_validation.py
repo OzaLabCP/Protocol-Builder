@@ -12,6 +12,7 @@ from app.resolvers import ResolvedCitation, classify_identifier, resolve_doi  # 
 from app.validation import (  # noqa: E402
     validate_and_finalize,
     validate_assay_options,
+    validate_design_alignment,
     validate_design_review,
 )
 
@@ -306,6 +307,77 @@ def test_validate_assay_options():
     assert std["citation"] is None  # stray citation stripped from a best_practice assay
     assert report["recommended_repaired"] is True
     assert opts["recommended_assay_id"] == "fp"  # repaired to a real id
+
+
+def _alignment(**over):
+    a = {
+        "hypothesis": {"statement": "X increases Y", "prediction_if_true": "up",
+                       "prediction_if_false": "flat"},
+        "inferred": False,
+        "directly_tests": {"verdict": "yes", "rationale": "r"},
+        "critical_comparison": "X vs no-X",
+        "alignment_gaps": [],
+        "confounds": [],
+        "recommended_changes": [],
+        "summary": "ok",
+    }
+    a.update(over)
+    return a
+
+
+def test_alignment_inferred_set_from_host_truth_not_model():
+    # model claims the student stated it; the host knows none was supplied -> corrected.
+    a = _alignment(inferred=False)
+    report = validate_design_alignment(a, hypothesis_supplied=False)
+    assert a["inferred"] is True
+    assert report["inferred_corrected"] is True
+    # and the reverse: a supplied hypothesis is never labelled inferred
+    b = _alignment(inferred=True)
+    r2 = validate_design_alignment(b, hypothesis_supplied=True)
+    assert b["inferred"] is False and r2["inferred_corrected"] is True
+
+
+def test_alignment_verdict_enum_coerced():
+    a = _alignment(directly_tests={"verdict": "maybe", "rationale": "r"},
+                   alignment_gaps=[{"gap": "g", "why_it_breaks_the_test": "w"}])
+    report = validate_design_alignment(a, hypothesis_supplied=True)
+    assert a["directly_tests"]["verdict"] == "partial"
+    assert any("verdict" in n for n in report["normalized"])
+
+
+def test_alignment_change_type_enum_coerced():
+    a = _alignment(recommended_changes=[{"change": "do X", "addresses": "g", "type": "bogus"}])
+    validate_design_alignment(a, hypothesis_supplied=True)
+    assert a["recommended_changes"][0]["type"] == "other"
+
+
+def test_alignment_flags_nonpassing_verdict_with_no_gaps():
+    a = _alignment(directly_tests={"verdict": "no", "rationale": "r"}, alignment_gaps=[])
+    report = validate_design_alignment(a, hypothesis_supplied=True)
+    assert any("no alignment_gaps" in s for s in report["inconsistencies"])
+
+
+def test_alignment_flags_yes_verdict_that_still_lists_problems():
+    a = _alignment(
+        directly_tests={"verdict": "yes", "rationale": "r"},
+        alignment_gaps=[{"gap": "g", "why_it_breaks_the_test": "w"}],
+        confounds=[{"confound": "c", "makes_result_ambiguous": "m", "mitigation": None}],
+    )
+    report = validate_design_alignment(a, hypothesis_supplied=True)
+    assert any("verdict 'yes'" in s for s in report["inconsistencies"])
+
+
+def test_alignment_clean_yes_has_no_inconsistencies():
+    a = _alignment()  # verdict yes, no gaps, no confounds
+    report = validate_design_alignment(a, hypothesis_supplied=True)
+    assert report["inconsistencies"] == [] and report["normalized"] == []
+
+
+def test_alignment_defensive_list_coercion():
+    a = _alignment(alignment_gaps=None, confounds="oops", recommended_changes=None,
+                   directly_tests={"verdict": "yes", "rationale": "r"})
+    validate_design_alignment(a, hypothesis_supplied=True)
+    assert a["alignment_gaps"] == [] and a["confounds"] == [] and a["recommended_changes"] == []
 
 
 if __name__ == "__main__":

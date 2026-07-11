@@ -426,6 +426,81 @@ def validate_design_review(review: dict, resolver: Resolver = resolve_citation) 
     return report
 
 
+_ALIGN_VERDICTS = {"yes", "partial", "no"}
+_CHANGE_TYPES = {
+    "add_control", "add_condition", "add_comparison",
+    "change_readout", "increase_replication", "other",
+}
+
+
+def validate_design_alignment(alignment: dict, *, hypothesis_supplied: bool = False) -> dict:
+    """Host-side integrity pass for a hypothesis-alignment assessment.
+
+    Unlike the protocol/review/assay passes there are no citations to resolve here, so
+    this normalizes the model's structured claims instead of trusting them verbatim:
+      - `inferred` is set from HOST truth (did the caller actually supply a hypothesis?),
+        never from the model — it drives the "(inferred)" label the student sees, so the
+        model must not be able to pass a student-stated hypothesis off as inferred, or
+        vice versa.
+      - enum fields (the verdict, each change's `type`) are coerced to allowed values so a
+        stray token can't leak into the export or the one-click-apply control.
+      - internal contradictions (a non-passing verdict that names no gaps; a "yes" verdict
+        that still lists gaps or unmitigated confounds) are surfaced, not silently kept.
+
+    Mutates `alignment`; returns a small report (also attached as validation_report)."""
+    report = {"normalized": [], "inconsistencies": [], "inferred_corrected": False}
+
+    # Host-truth `inferred`: the model doesn't get to decide this.
+    truth = not hypothesis_supplied
+    if bool(alignment.get("inferred")) != truth:
+        report["inferred_corrected"] = True
+    alignment["inferred"] = truth
+
+    # Verdict enum -> coerce an out-of-range value to the conservative "partial".
+    dt = alignment.get("directly_tests")
+    if not isinstance(dt, dict):
+        dt = {}
+        alignment["directly_tests"] = dt
+    verdict = dt.get("verdict")
+    if verdict not in _ALIGN_VERDICTS:
+        dt["verdict"] = "partial"
+        report["normalized"].append(f"directly_tests.verdict '{verdict}' -> 'partial'")
+        verdict = "partial"
+
+    # Defensive list coercion + change-type enum.
+    for key in ("alignment_gaps", "confounds", "recommended_changes"):
+        if not isinstance(alignment.get(key), list):
+            alignment[key] = []
+    for i, ch in enumerate(alignment["recommended_changes"]):
+        if not isinstance(ch, dict):
+            continue
+        t = ch.get("type")
+        if t is not None and t not in _CHANGE_TYPES:
+            ch["type"] = "other"
+            report["normalized"].append(f"recommended_changes[{i}].type '{t}' -> 'other'")
+
+    # Consistency: a non-passing verdict should name what's missing; a passing one
+    # shouldn't simultaneously list unresolved problems.
+    gaps = alignment["alignment_gaps"]
+    unmitigated = [
+        c for c in alignment["confounds"]
+        if isinstance(c, dict) and not str(c.get("mitigation") or "").strip()
+    ]
+    if verdict in ("no", "partial") and not gaps:
+        report["inconsistencies"].append(f"verdict '{verdict}' but no alignment_gaps are listed.")
+    if verdict == "yes" and (gaps or unmitigated):
+        bits = [
+            f"{len(gaps)} alignment gap(s)" if gaps else "",
+            f"{len(unmitigated)} unmitigated confound(s)" if unmitigated else "",
+        ]
+        report["inconsistencies"].append(
+            "verdict 'yes' but the assessment still lists " + ", ".join(b for b in bits if b) + "."
+        )
+
+    alignment["validation_report"] = report
+    return report
+
+
 def validate_assay_options(opts: dict, resolver: Resolver = resolve_citation) -> dict:
     """Verify the citation on each candidate assay (hypothesis-first discovery). Keeps
     verified literature_grounded assays (with a canonical url), downgrades unverifiable

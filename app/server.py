@@ -41,6 +41,7 @@ from .render import (
 from .validation import (
     validate_and_finalize,
     validate_assay_options,
+    validate_design_alignment,
     validate_design_review,
 )
 
@@ -328,8 +329,13 @@ def align(req: AlignRequest) -> dict:
         raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(500, _explain(exc))
+    # design_alignment() sets session.hypothesis when the caller supplied one, so a
+    # truthy value here (now or from analyze/discover) is the host truth for `inferred`.
+    report = validate_design_alignment(
+        alignment, hypothesis_supplied=bool(store.session.hypothesis))
     store.design_alignment = alignment
-    return {"session_id": req.session_id, "design_alignment": alignment}
+    return {"session_id": req.session_id, "design_alignment": alignment,
+            "validation_report": report}
 
 
 @app.post("/api/discover", dependencies=_MUTATING)
