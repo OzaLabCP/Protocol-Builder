@@ -6,9 +6,12 @@ that actually matter**, searches the literature to ground the values it fills, t
 emits an executable, protocols.io-style protocol where **every value is
 provenance-tagged and every citation is verified against a real database.**
 
-Model-agnostic: the agentic tool-use loop runs through **OpenRouter**, so any model
-OpenRouter serves works (Claude, GPT, Gemini, Grok, Llama, …) via a single
-`OPENROUTER_MODEL` slug — the only requirement is tool/function calling. Design
+Model-agnostic: the agentic tool-use loop speaks the **OpenAI-compatible
+chat-completions** protocol, so it works with any provider that does. Set
+`LLM_PROVIDER=openrouter` for one key + any model OpenRouter serves (Claude, GPT,
+Gemini, Grok, Llama, …), or `LLM_PROVIDER=anthropic` to talk to the **Claude API
+directly** with an `sk-ant-…` key. Switching is a change of `LLM_PROVIDER` +
+`LLM_API_KEY` (+ `LLM_MODEL`); the only requirement is tool/function calling. Design
 rationale lives in [`methods-gap-filler-spec.md`](./methods-gap-filler-spec.md).
 
 ## Why it's trustworthy
@@ -35,16 +38,27 @@ call is impossible.)
 
 ## Run it
 
-Requires Python 3.10+ and an OpenRouter API key (<https://openrouter.ai/keys>).
+Requires Python 3.10+ and an API key for one provider.
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-export OPENROUTER_API_KEY=sk-or-...         # or: cp .env.example .env  &&  edit
-# export OPENROUTER_MODEL=openai/gpt-5      # optional; defaults to anthropic/claude-opus-4-8
-uvicorn app.server:app --reload --port 8000
+# Option A — OpenRouter (one key, any model):
+export LLM_PROVIDER=openrouter
+export LLM_API_KEY=sk-or-...                 # https://openrouter.ai/keys
+# export LLM_MODEL=openai/gpt-5              # optional; defaults to anthropic/claude-opus-4-8
+
+# Option B — Claude API directly (use your sk-ant-… key):
+# export LLM_PROVIDER=anthropic
+# export LLM_API_KEY=sk-ant-...
+# export LLM_MODEL=claude-opus-4-8           # bare Anthropic id, no "anthropic/" prefix
+
+uvicorn app.server:app --reload --port 8000   # or: cp .env.example .env  &&  edit
 ```
+
+(The older `OPENROUTER_API_KEY` / `OPENROUTER_MODEL` / `OPENROUTER_BASE_URL` names still
+work as aliases for the `LLM_*` ones.)
 
 Open <http://localhost:8000>, then either **paste a Methods section** (or click
 **Load example (CFPS)**) **or upload the paper as a PDF** — the text is extracted
@@ -67,10 +81,12 @@ liveness, the model, and which grounding sources are enabled. Sessions expire af
 
 | Env var | Default | Purpose |
 |---------|---------|---------|
-| `OPENROUTER_API_KEY` | — | Required. |
-| `OPENROUTER_MODEL` | `anthropic/claude-opus-4-8` | Any OpenRouter model slug (must support tool calling). |
-| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Point at a compatible gateway if you self-host one. |
+| `LLM_PROVIDER` | `openrouter` | `openrouter` (any model, one key) or `anthropic` (Claude API direct, `sk-ant-…`). Sets the base URL + provider-specific params. |
+| `LLM_API_KEY` | — | Required. Your key for the chosen provider. (Alias: `OPENROUTER_API_KEY`.) |
+| `LLM_MODEL` | provider default | Model id/slug — must support tool calling. Defaults: `anthropic/claude-opus-4-8` (openrouter) · `claude-opus-4-8` (anthropic). (Alias: `OPENROUTER_MODEL`.) |
+| `LLM_BASE_URL` | provider default | Override the endpoint (e.g. a self-hosted compatible gateway). (Alias: `OPENROUTER_BASE_URL`.) |
 | `GAPFILLER_REASONING_EFFORT` | `high` | Passed as `reasoning.effort` to models that support it; `""` to omit. |
+| `GAPFILLER_SEND_REASONING` | on for `openrouter` | Whether to send the OpenRouter-only `reasoning` field; auto-off for other providers. Set `1`/`0` to force. |
 | `GAPFILLER_MAX_TOKENS` | `16000` | Output token ceiling. |
 | `GAPFILLER_REQUEST_TIMEOUT` | `600` | Per-request HTTP timeout (seconds). |
 | `GAPFILLER_PUBMED_BUDGET` | `12` | Max literature searches per phase. |
@@ -104,7 +120,7 @@ app/
   render.py       # protocol -> Markdown export
   server.py       # FastAPI endpoints (analyze/resolve/revise/export) + sessions
 static/index.html # paste/PDF UI, provenance render, export + refine controls
-tests/            # 92 tests across validation, grounding, agent loop, render, HTTP
+tests/            # 94 tests across validation, grounding, agent loop, render, HTTP
 Dockerfile        # single-worker container; /healthz healthcheck
 ```
 
@@ -121,10 +137,12 @@ Dockerfile        # single-worker container; /healthz healthcheck
 
 ## Notes & next steps
 
-- **Provider:** the loop runs through OpenRouter (`app/llm.py`), so switching models
-  is a one-line `OPENROUTER_MODEL` change with no code edits — the only requirement is
-  tool/function calling. PDFs are read by extracting text host-side, so image-only
-  PDFs must be pasted as text.
+- **Provider:** the loop speaks OpenAI-compatible chat-completions (`app/llm.py`), so it
+  runs on OpenRouter (any model, one key) or the Claude API directly — pick with
+  `LLM_PROVIDER`, switch with a one-line env change and no code edits. The only
+  requirement is tool/function calling. OpenRouter-only params (`reasoning.effort`,
+  attribution headers) are auto-suppressed on other providers. PDFs are read by
+  extracting text host-side, so image-only PDFs must be pasted as text.
 - **Grounding sources:** `search_pubmed` (NCBI), `search_preprints` (bioRxiv/medRxiv
   via Europe PMC), and `search_protocols` (protocols.io, token-gated) — all app-run, so
   grounding behaves identically across providers. Validation resolves DOIs via Crossref then DataCite

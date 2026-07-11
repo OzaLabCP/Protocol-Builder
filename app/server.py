@@ -216,7 +216,8 @@ def healthz(request: Request) -> dict:
         return {"status": "ok", "auth_required": True}
     return {
         "status": "ok",
-        "provider": "openrouter",
+        "provider": config.LLM_PROVIDER,
+        "base_url": config.OPENROUTER_BASE_URL,
         "model": config.MODEL,
         "api_key_set": bool(config.OPENROUTER_API_KEY),
         "auth_required": auth_required,

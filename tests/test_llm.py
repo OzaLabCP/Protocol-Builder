@@ -58,8 +58,8 @@ def test_payload_and_headers_shape():
     assert body["messages"] == [{"role": "user", "content": "hi"}]
     assert body["tools"] == tools and body["tool_choice"] == "auto"
     assert body["max_tokens"] == config.MAX_TOKENS
-    # reasoning.effort is included when configured
-    if config.REASONING_EFFORT:
+    # reasoning.effort is included when configured AND the provider accepts it
+    if config.SEND_REASONING and config.REASONING_EFFORT:
         assert body["reasoning"] == {"effort": config.REASONING_EFFORT}
     assert req["headers"]["Authorization"] == "Bearer sk-or-test"
     assert out["choices"][0]["message"]["content"] == "ok"
@@ -94,6 +94,54 @@ def test_inline_error_object_raises():
         assert False, "expected LLMError"
     except LLMError as e:
         assert "error" in str(e).lower()
+
+
+def test_reasoning_omitted_when_provider_disables_it():
+    # e.g. Anthropic-direct: the OpenRouter-only reasoning field must not be sent.
+    orig = config.SEND_REASONING
+    config.SEND_REASONING = False
+    try:
+        c = _client(_Resp(200, {"choices": [{"message": {"role": "assistant", "content": "ok"}}]}))
+        c.chat(messages=[{"role": "user", "content": "hi"}])
+        assert "reasoning" not in c._client.last["json"]
+    finally:
+        config.SEND_REASONING = orig
+
+
+def test_provider_config_resolution_and_aliases():
+    import importlib
+
+    import app.config as cfg
+    orig_env = dict(os.environ)
+    keys = ("LLM_PROVIDER", "LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL",
+            "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "OPENROUTER_MODEL",
+            "GAPFILLER_SEND_REASONING")
+    try:
+        for k in keys:
+            os.environ.pop(k, None)
+        # anthropic-direct: base_url + model default to Anthropic; reasoning gated off.
+        os.environ["LLM_PROVIDER"] = "anthropic"
+        os.environ["LLM_API_KEY"] = "sk-ant-xyz"
+        importlib.reload(cfg)
+        assert cfg.LLM_PROVIDER == "anthropic"
+        assert cfg.OPENROUTER_BASE_URL == "https://api.anthropic.com/v1"
+        assert cfg.MODEL == "claude-opus-4-8"
+        assert cfg.OPENROUTER_API_KEY == "sk-ant-xyz"  # LLM_API_KEY resolves the canonical attr
+        assert cfg.SEND_REASONING is False
+        # openrouter: defaults restore, OPENROUTER_* alias still resolves, reasoning on.
+        for k in keys:
+            os.environ.pop(k, None)
+        os.environ["LLM_PROVIDER"] = "openrouter"
+        os.environ["OPENROUTER_API_KEY"] = "sk-or-abc"  # legacy alias
+        importlib.reload(cfg)
+        assert cfg.OPENROUTER_BASE_URL == "https://openrouter.ai/api/v1"
+        assert cfg.MODEL == "anthropic/claude-opus-4-8"
+        assert cfg.OPENROUTER_API_KEY == "sk-or-abc"
+        assert cfg.SEND_REASONING is True
+    finally:
+        os.environ.clear()
+        os.environ.update(orig_env)
+        importlib.reload(cfg)
 
 
 if __name__ == "__main__":

@@ -53,18 +53,21 @@ class OpenRouterClient:
             payload["tool_choice"] = tool_choice
         if config.MAX_TOKENS:
             payload["max_tokens"] = config.MAX_TOKENS
-        if config.REASONING_EFFORT:
-            # Honored by reasoning-capable models; silently ignored by the rest.
+        if config.SEND_REASONING and config.REASONING_EFFORT:
+            # OpenRouter's reasoning.effort — honored by reasoning-capable models there.
+            # Gated off for providers whose compat endpoint would reject the unknown field.
             payload["reasoning"] = {"effort": config.REASONING_EFFORT}
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-        if config.OPENROUTER_REFERER:
-            headers["HTTP-Referer"] = config.OPENROUTER_REFERER
-        if config.OPENROUTER_TITLE:
-            headers["X-Title"] = config.OPENROUTER_TITLE
+        # Attribution headers are an OpenRouter nicety; don't send them elsewhere.
+        if config.LLM_PROVIDER == "openrouter":
+            if config.OPENROUTER_REFERER:
+                headers["HTTP-Referer"] = config.OPENROUTER_REFERER
+            if config.OPENROUTER_TITLE:
+                headers["X-Title"] = config.OPENROUTER_TITLE
 
         try:
             resp = self._client.post(

@@ -1,21 +1,56 @@
 """Runtime configuration, read from the environment with sensible defaults.
 
-The model runs through OpenRouter's OpenAI-compatible API, so ANY model OpenRouter
-serves works — set OPENROUTER_MODEL to its slug (e.g. 'anthropic/claude-opus-4-8',
-'openai/gpt-5', 'x-ai/grok-4', 'google/gemini-2.5-pro'). The model must support
-tool/function calling — that is the mechanism the whole protocol loop relies on.
+The model runs over the OpenAI-compatible chat-completions protocol, so the app works
+with **any provider that speaks it** — pick one with `LLM_PROVIDER`:
+
+- `openrouter` (default): one key, any model OpenRouter serves — set `LLM_MODEL` to its
+  slug ('anthropic/claude-opus-4-8', 'openai/gpt-5', 'x-ai/grok-4', 'google/gemini-2.5-pro').
+- `anthropic`: talk to the Claude API directly with an `sk-ant-…` key (its OpenAI-compat
+  endpoint), e.g. `LLM_MODEL=claude-opus-4-8`.
+
+Configure with the provider-neutral `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL`
+(the older `OPENROUTER_*` names still work as aliases). Whatever the provider, the model
+must support tool/function calling — that is the mechanism the whole protocol loop relies
+on. Switching providers is a change of `LLM_PROVIDER` + `LLM_API_KEY` (+ `LLM_MODEL`);
+the base URL and provider-specific params follow automatically.
 """
 
 from __future__ import annotations
 
 import os
 
-# --- LLM provider (OpenRouter) ---------------------------------------------
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
-OPENROUTER_BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-# Model slug, provider-prefixed. Default to a strong reasoning model; override freely.
-MODEL = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-opus-4-8")
-# Optional attribution headers OpenRouter surfaces on your dashboard.
+
+def _first(*vals: str, default: str = "") -> str:
+    """First non-empty value (provider-neutral name, then OPENROUTER_* alias, then default)."""
+    for v in vals:
+        if v:
+            return v
+    return default
+
+
+# --- LLM provider ----------------------------------------------------------
+# Which OpenAI-compatible provider to talk to. Extend _PROVIDER_DEFAULTS to add more.
+LLM_PROVIDER = (os.environ.get("LLM_PROVIDER", "openrouter").strip().lower() or "openrouter")
+
+_PROVIDER_DEFAULTS = {
+    "openrouter": {"base_url": "https://openrouter.ai/api/v1", "model": "anthropic/claude-opus-4-8"},
+    "anthropic": {"base_url": "https://api.anthropic.com/v1", "model": "claude-opus-4-8"},
+}
+_defaults = _PROVIDER_DEFAULTS.get(LLM_PROVIDER, _PROVIDER_DEFAULTS["openrouter"])
+
+# Canonical attrs keep the OPENROUTER_* names (referenced across the app), but resolve
+# from the provider-neutral LLM_* names first, then the OPENROUTER_* aliases, then the
+# selected provider's default.
+OPENROUTER_API_KEY = _first(os.environ.get("LLM_API_KEY", ""), os.environ.get("OPENROUTER_API_KEY", ""))
+OPENROUTER_BASE_URL = _first(
+    os.environ.get("LLM_BASE_URL", ""), os.environ.get("OPENROUTER_BASE_URL", ""),
+    default=_defaults["base_url"],
+)
+MODEL = _first(
+    os.environ.get("LLM_MODEL", ""), os.environ.get("OPENROUTER_MODEL", ""),
+    default=_defaults["model"],
+)
+# Optional attribution headers OpenRouter surfaces on your dashboard (OpenRouter only).
 OPENROUTER_REFERER = os.environ.get("OPENROUTER_REFERER", "")
 OPENROUTER_TITLE = os.environ.get("OPENROUTER_TITLE", "Methods Gap-Filler")
 
@@ -26,6 +61,12 @@ REQUEST_TIMEOUT = float(os.environ.get("GAPFILLER_REQUEST_TIMEOUT", "600"))
 # Reasoning effort, passed as OpenRouter's `reasoning.effort` for models that support
 # it (ignored otherwise). Set to "" to omit the field entirely.
 REASONING_EFFORT = os.environ.get("GAPFILLER_REASONING_EFFORT", "high")
+# `reasoning.effort` is an OpenRouter extension; other providers' compat endpoints (e.g.
+# Anthropic's) can reject an unknown field, so only send it on OpenRouter by default.
+# Override with GAPFILLER_SEND_REASONING=1/0 if your gateway differs.
+SEND_REASONING = (
+    os.environ.get("GAPFILLER_SEND_REASONING", "1" if LLM_PROVIDER == "openrouter" else "0") != "0"
+)
 # Safety valve against a model that loops on tool calls without ever finishing.
 MAX_TOOL_ROUNDS = int(os.environ.get("GAPFILLER_MAX_TOOL_ROUNDS", "16"))
 
