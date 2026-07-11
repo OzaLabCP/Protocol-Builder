@@ -340,6 +340,26 @@ def critique(req: DesignRequest) -> dict:
     return {"session_id": req.session_id, "correctness_review": review, "validation_report": report}
 
 
+@app.post("/api/apply_fixes", dependencies=_MUTATING)
+def apply_fixes(req: DesignRequest) -> dict:
+    """Close the loop: apply the correctness review's fixes and rebuild the protocol."""
+    store = _get(req.session_id)
+    if store.protocol is None:
+        raise HTTPException(409, "Generate a protocol first, then run a correctness review.")
+    findings = (store.correctness_review or {}).get("findings") or []
+    if not any(isinstance(f, dict) and f.get("fix") for f in findings):
+        raise HTTPException(409, "Run a correctness review that finds fixable issues first.")
+    agent = get_agent()
+    try:
+        protocol = agent.apply_correctness_fixes(store.session, findings)
+    except AgentError as exc:
+        raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, _explain(exc))
+    store.correctness_review = None  # the review is stale against the rebuilt protocol
+    return _finish(req.session_id, store, protocol)
+
+
 @app.post("/api/align", dependencies=_MUTATING)
 def align(req: AlignRequest) -> dict:
     store = _get(req.session_id)

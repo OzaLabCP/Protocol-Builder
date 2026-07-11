@@ -606,3 +606,31 @@ class GapFillerAgent:
         host-verified. Runs on the main model — this is reasoning-heavy."""
         return self._followup(session, CORRECTNESS_REVIEW_INSTRUCTION, "emit_correctness_review",
                               EMIT_CORRECTNESS_REVIEW_TOOL, compact=True)
+
+    def apply_correctness_fixes(self, session: Session, findings: list) -> dict:
+        """Close the loop: feed the correctness review's fixes back in and re-emit a
+        CORRECTED protocol. Keeps everything already right, preserves provenance, grounds
+        any newly filled values. Returns the new protocol (host-validated by the caller)."""
+        lines = []
+        for f in findings or []:
+            if not isinstance(f, dict):
+                continue
+            fix = str(f.get("fix") or "").strip()
+            if not fix:
+                continue
+            loc = str(f.get("location") or "").strip()
+            prob = str(f.get("problem") or "").strip()
+            head = f"- [{f.get('severity', '')}] {loc + ': ' if loc else ''}{fix}"
+            lines.append(head + (f"  (fixes: {prob})" if prob else ""))
+        if not lines:
+            raise AgentError("No applicable fixes in the correctness review.")
+        instruction = (
+            "A correctness review of the protocol above found the issues listed below. "
+            "Apply EVERY fix and call emit_protocol again with the full, corrected protocol: "
+            "keep everything that was already right, preserve the provenance discipline "
+            "(quotes for stated values, real citations for literature_grounded), ground any "
+            "newly introduced values, and do not reintroduce the problems. Note the "
+            "corrections in the relevant provenance_note / open_questions.\n\n" + "\n".join(lines)
+        )
+        return self._followup(session, instruction, "emit_protocol", EMIT_PROTOCOL_TOOL,
+                              compact=True, system=self.system_emit, model=self.model)

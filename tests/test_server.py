@@ -301,6 +301,36 @@ def test_discover_autopick_runs_full_flow():
         srv._agent = None
 
 
+def test_apply_fixes_without_review_is_409():
+    sid = "nofixrev"
+    srv._SESSIONS[sid] = srv.Store(session=Session(), created=_time.time(), protocol={"title": "X"})
+    try:
+        assert client.post("/api/apply_fixes", json={"session_id": sid}).status_code == 409
+    finally:
+        srv._SESSIONS.pop(sid, None)
+
+
+def test_apply_fixes_rebuilds_protocol():
+    proto = {"title": "Fixed", "summary": "s", "estimated_duration": "1 h",
+             "materials": [], "steps": [], "assumptions_log": []}
+    _install_agent([_tool_msg("emit_protocol", proto, "e2")])
+    sid = "applyfix"
+    srv._SESSIONS[sid] = srv.Store(
+        session=Session(source_kind="paper", pending_tool_use_id="e1",
+                        messages=[{"role": "user", "content": "seed"}]),
+        created=_time.time(), protocol={"title": "Old"},
+        correctness_review={"verdict": "issues_found", "findings": [
+            {"severity": "critical", "category": "ordering", "problem": "p", "fix": "add buffer first"}]})
+    try:
+        r = client.post("/api/apply_fixes", json={"session_id": sid})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["phase"] == "complete" and body["protocol"]["title"] == "Fixed"
+        assert srv._SESSIONS[sid].correctness_review is None  # stale review cleared
+    finally:
+        srv._SESSIONS.pop(sid, None); srv._agent = None
+
+
 def test_discover_rejected_flow_returns_rejected():
     _install_agent([_tool_msg("emit_assay_options", {"usable": False, "reason": "not testable"}, "a1")])
     try:

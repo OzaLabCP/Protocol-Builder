@@ -72,7 +72,9 @@ depends on your setup and wasn't already clarified). Three review follow-ups sit
 the protocol: **Design review** (the experiment around it), **Correctness review** (an
 adversarial audit that attacks the protocol for logic/value/unit/ordering/missing-control
 errors, ranked by severity — clearly labeled model-generated, with any cited evidence
-host-verified), and **Test a hypothesis** (does it directly test your hypothesis).
+host-verified, and a one-click **Apply fixes & rebuild** that feeds the fixes back in and
+regenerates a corrected protocol), and **Test a hypothesis** (does it directly test your
+hypothesis).
 
 ### Deploy (Docker)
 
@@ -131,7 +133,7 @@ app/
   render.py       # protocol -> Markdown export
   server.py       # FastAPI endpoints (analyze/resolve/revise/export) + sessions
 static/index.html # paste/PDF UI, provenance render, export + refine controls
-tests/            # 110 tests across validation, grounding, agent loop, render, HTTP
+tests/            # 114 tests across validation, grounding, agent loop, render, HTTP
 Dockerfile        # single-worker container; /healthz healthcheck
 ```
 
@@ -146,6 +148,7 @@ Dockerfile        # single-worker container; /healthz healthcheck
 | `POST` | `/api/revise` | apply a correction and re-emit |
 | `POST` | `/api/design` | experiment-design review (controls, variables, readout, replication) |
 | `POST` | `/api/critique` | adversarial correctness review (logic/value/ordering/control errors) |
+| `POST` | `/api/apply_fixes` | apply the correctness review's fixes and rebuild the protocol |
 | `POST` | `/api/align` | does the protocol directly test the hypothesis? |
 | `GET` | `/api/protocol/{id}.md` | download the protocol as Markdown |
 

@@ -149,6 +149,29 @@ def test_correctness_review_emits():
     assert session.pending_tool_use_id == "cr1"
 
 
+def test_apply_correctness_fixes_reemits():
+    session = Session(messages=[{"role": "user", "content": "seed"}], pending_tool_use_id="e1")
+    findings = [{"severity": "critical", "category": "ordering", "location": "step 3",
+                 "problem": "enzyme before buffer", "fix": "add buffer before enzyme"},
+                {"severity": "minor", "problem": "no fix here"}]  # skipped (no fix)
+    agent = make_agent([tool_msg(("emit_protocol", dict(PROTO, title="Fixed"), "e2"))])
+    out = agent.apply_correctness_fixes(session, findings)
+    assert out["title"] == "Fixed"
+    instr = [m for m in session.messages if m["role"] == "user"][-1]["content"]
+    assert "add buffer before enzyme" in instr and "Apply EVERY fix" in instr
+    assert session.pending_tool_use_id == "e2"
+
+
+def test_apply_correctness_fixes_no_fixes_raises():
+    session = Session(messages=[{"role": "user", "content": "seed"}], pending_tool_use_id="e1")
+    agent = make_agent([])  # raises before any model call
+    try:
+        agent.apply_correctness_fixes(session, [{"severity": "minor", "problem": "x"}])
+        assert False, "expected AgentError"
+    except AgentError:
+        pass
+
+
 def test_discover_emits_assay_options():
     opts = {"usable": True, "hypothesis_restated": "H",
             "assays": [{"id": "fp", "name": "FP", "measures": "m", "why_tests_hypothesis": "w",
