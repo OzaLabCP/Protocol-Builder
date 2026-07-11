@@ -545,6 +545,53 @@ def validate_design_alignment(alignment: dict, *, hypothesis_supplied: bool = Fa
     return report
 
 
+_CORRECTNESS_SEVERITY = {"critical": 0, "major": 1, "minor": 2}
+
+
+def validate_correctness_review(review: dict, resolver: Resolver = resolve_citation) -> dict:
+    """Normalize the adversarial correctness review and verify any citations its findings
+    cite (a finding may back an "out-of-range value" claim with a paper). Coerces the
+    verdict/severity enums, drops malformed findings, resolves cited evidence (unverifiable
+    citations are nulled but the finding stays — the concern still stands), and sorts
+    most-severe first. Mutates `review`; returns a small report. The review itself is
+    model-generated reasoning, not a host guarantee."""
+    report = {"citations_checked": 0, "verified": [], "downgraded": []}
+    findings = review.get("findings")
+    if not isinstance(findings, list):
+        findings = []
+    clean = []
+    for f in findings:
+        if not isinstance(f, dict):
+            continue
+        if f.get("severity") not in _CORRECTNESS_SEVERITY:
+            f["severity"] = "major"
+        cit = f.get("citation")
+        if cit:
+            report["citations_checked"] += 1
+            ok, resolved, reason = check_citation(cit, resolver)
+            loc = f.get("location") or (f.get("problem", "?")[:40])
+            if ok:
+                f["citation_verified"] = True
+                f["citation"]["url"] = cit.get("url") or (_canonical_url(resolved) if resolved else None)
+                report["verified"].append(loc)
+            else:
+                f["citation"] = None
+                f["citation_verified"] = False
+                report["downgraded"].append({"location": loc, "reason": reason})
+        clean.append(f)
+    clean.sort(key=lambda x: _CORRECTNESS_SEVERITY.get(x.get("severity"), 1))
+    review["findings"] = clean
+    # Keep the verdict honest against what actually survived.
+    if review.get("verdict") not in ("sound", "issues_found", "serious_issues"):
+        review["verdict"] = "issues_found" if clean else "sound"
+    if not clean:
+        review["verdict"] = "sound"
+    elif any(f.get("severity") == "critical" for f in clean) and review["verdict"] == "sound":
+        review["verdict"] = "serious_issues"
+    review["validation_report"] = report
+    return report
+
+
 def validate_assay_options(opts: dict, resolver: Resolver = resolve_citation) -> dict:
     """Verify the citation on each candidate assay (hypothesis-first discovery). Keeps
     verified literature_grounded assays (with a canonical url), downgrades unverifiable

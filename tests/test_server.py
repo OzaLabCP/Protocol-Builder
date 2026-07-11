@@ -67,6 +67,25 @@ def test_align_unknown_session_is_404():
     assert r.status_code == 404
 
 
+def test_critique_unknown_session_is_404():
+    r = client.post("/api/critique", json={"session_id": "nope"})
+    assert r.status_code == 404
+
+
+def test_critique_without_protocol_is_409():
+    import time as _t
+
+    from app.agent import Session
+    from app.server import Store, _SESSIONS
+    sid = "critnoproto"
+    _SESSIONS[sid] = Store(session=Session(), created=_t.time())  # no protocol yet
+    try:
+        r = client.post("/api/critique", json={"session_id": sid})
+        assert r.status_code == 409
+    finally:
+        _SESSIONS.pop(sid, None)
+
+
 def test_discover_short_is_400():
     r = client.post("/api/discover", json={"hypothesis": "too short"})
     assert r.status_code == 400

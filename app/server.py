@@ -32,6 +32,7 @@ from . import config
 from .agent import AgentError, GapFillerAgent, Session, _pdf_text
 from .render import (
     assay_selection_to_markdown,
+    correctness_review_to_markdown,
     design_alignment_to_markdown,
     design_review_to_markdown,
     grounding_log_to_markdown,
@@ -41,6 +42,7 @@ from .render import (
 from .validation import (
     validate_and_finalize,
     validate_assay_options,
+    validate_correctness_review,
     validate_design_alignment,
     validate_design_review,
 )
@@ -126,6 +128,7 @@ class Store:
     protocol: Optional[dict] = None
     design_review: Optional[dict] = None
     design_alignment: Optional[dict] = None
+    correctness_review: Optional[dict] = None
     assay_options: Optional[dict] = None
     chosen_assay: Optional[dict] = None
 
@@ -320,6 +323,23 @@ def design(req: DesignRequest) -> dict:
     return {"session_id": req.session_id, "design_review": review, "validation_report": report}
 
 
+@app.post("/api/critique", dependencies=_MUTATING)
+def critique(req: DesignRequest) -> dict:
+    store = _get(req.session_id)
+    if store.protocol is None:
+        raise HTTPException(409, "Generate a protocol first, then run a correctness review.")
+    agent = get_agent()
+    try:
+        review = agent.correctness_review(store.session)
+    except AgentError as exc:
+        raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, _explain(exc))
+    report = validate_correctness_review(review)
+    store.correctness_review = review
+    return {"session_id": req.session_id, "correctness_review": review, "validation_report": report}
+
+
 @app.post("/api/align", dependencies=_MUTATING)
 def align(req: AlignRequest) -> dict:
     store = _get(req.session_id)
@@ -411,6 +431,8 @@ def download_markdown(session_id: str) -> PlainTextResponse:
         md += "\n\n" + design_alignment_to_markdown(store.design_alignment)
     if store.design_review is not None:
         md += "\n\n" + design_review_to_markdown(store.design_review)
+    if store.correctness_review is not None:
+        md += "\n\n" + correctness_review_to_markdown(store.correctness_review)
     log_md = grounding_log_to_markdown(store.session.grounding_log)
     if log_md:
         md += "\n\n" + log_md

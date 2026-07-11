@@ -66,6 +66,14 @@ host-side and the tool locates the Methods section itself. Answer the questions,
 the protocol, then **download it as Markdown**, **print / save as PDF**, or **refine
 it** ("use 150 µL wells and drop to 2 replicates") to rebuild with full context.
 
+Every value is also flagged inline for how to *read* it: 🎛 **flexible** (has latitude,
+with the range) versus load-bearing, and 👤 **needs your input** (a decision that still
+depends on your setup and wasn't already clarified). Three review follow-ups sit next to
+the protocol: **Design review** (the experiment around it), **Correctness review** (an
+adversarial audit that attacks the protocol for logic/value/unit/ordering/missing-control
+errors, ranked by severity — clearly labeled model-generated, with any cited evidence
+host-verified), and **Test a hypothesis** (does it directly test your hypothesis).
+
 ### Deploy (Docker)
 
 ```bash
@@ -123,7 +131,7 @@ app/
   render.py       # protocol -> Markdown export
   server.py       # FastAPI endpoints (analyze/resolve/revise/export) + sessions
 static/index.html # paste/PDF UI, provenance render, export + refine controls
-tests/            # 102 tests across validation, grounding, agent loop, render, HTTP
+tests/            # 110 tests across validation, grounding, agent loop, render, HTTP
 Dockerfile        # single-worker container; /healthz healthcheck
 ```
 
@@ -136,6 +144,9 @@ Dockerfile        # single-worker container; /healthz healthcheck
 | `POST` | `/api/analyze` | Phase 1 (multipart: `methods_text` field or PDF `file`) |
 | `POST` | `/api/resolve` | Phase 2 + 3 + validation |
 | `POST` | `/api/revise` | apply a correction and re-emit |
+| `POST` | `/api/design` | experiment-design review (controls, variables, readout, replication) |
+| `POST` | `/api/critique` | adversarial correctness review (logic/value/ordering/control errors) |
+| `POST` | `/api/align` | does the protocol directly test the hypothesis? |
 | `GET` | `/api/protocol/{id}.md` | download the protocol as Markdown |
 
 ## Notes & next steps

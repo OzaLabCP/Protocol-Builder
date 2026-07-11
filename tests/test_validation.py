@@ -330,6 +330,34 @@ def test_malformed_entries_are_dropped_not_crashed():
     assert any("malformed" in q for q in p["open_questions"])
 
 
+def test_validate_correctness_review_normalizes_and_verifies():
+    from app.validation import validate_correctness_review
+    review = {
+        "verdict": "sound",  # inconsistent: findings present -> must be corrected
+        "summary": "s",
+        "findings": [
+            {"severity": "minor", "category": "logic", "problem": "p1", "fix": "f1"},
+            {"severity": "bogus", "category": "ordering", "problem": "p2", "fix": "f2"},  # -> major
+            {"severity": "critical", "category": "unit_or_scaling", "problem": "p3", "fix": "f3",
+             "citation": cite("99999999")},  # unresolvable -> citation nulled, finding kept
+            "not-a-dict",  # dropped
+        ],
+    }
+    report = validate_correctness_review(review, fake_resolver({}))
+    sev = [f["severity"] for f in review["findings"]]
+    assert sev == ["critical", "major", "minor"]  # sorted, bogus coerced to major
+    assert review["findings"][0]["citation"] is None and review["findings"][0]["citation_verified"] is False
+    assert review["verdict"] == "serious_issues"  # has a critical -> upgraded from bogus "sound"
+    assert report["citations_checked"] == 1 and len(report["downgraded"]) == 1
+
+
+def test_validate_correctness_review_sound_when_empty():
+    from app.validation import validate_correctness_review
+    review = {"verdict": "issues_found", "summary": "s", "findings": []}
+    validate_correctness_review(review, fake_resolver({}))
+    assert review["verdict"] == "sound"
+
+
 def _alignment(**over):
     a = {
         "hypothesis": {"statement": "X increases Y", "prediction_if_true": "up",

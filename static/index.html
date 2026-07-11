@@ -86,6 +86,15 @@
     border: 0; border-radius: 8px; padding: 9px 14px; font-weight: 600; font-size: 13.5px; cursor: pointer; text-decoration: none; }
   .btn.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--line); }
   .design { margin: 18px 0; padding: 4px 18px 16px; border: 1px solid var(--line); border-left: 3px solid var(--best); border-radius: 10px; background: var(--panel2); }
+  .finding { margin: 10px 0; padding: 8px 12px; border: 1px solid var(--line); border-left: 3px solid var(--line); border-radius: 8px; }
+  .finding-head { font-weight: 700; margin-bottom: 4px; }
+  .finding p { margin: 3px 0; }
+  .finding.sev-critical { border-left-color: #e5484d; }
+  .finding.sev-major { border-left-color: #f5a623; }
+  .finding.sev-minor { border-left-color: #d9c313; }
+  .flag { display: inline-block; font-size: 0.82em; padding: 0 6px; border-radius: 6px; border: 1px solid var(--line); white-space: nowrap; }
+  .flag-user { color: var(--verify); font-weight: 700; }
+  .flag-flex { color: var(--muted); }
   .design h2 { color: var(--best); }
   .align { margin: 18px 0; padding: 4px 18px 16px; border: 1px solid var(--line); border-left: 3px solid var(--user); border-radius: 10px; background: var(--panel2); }
   .align h2 { color: var(--user); }
@@ -565,6 +574,7 @@ function renderProtocol(p) {
   P.appendChild(toolbar());
   P.appendChild(el("div", null, "")).id = "align-anchor";
   P.appendChild(el("div", null, "")).id = "design-anchor";
+  P.appendChild(el("div", null, "")).id = "critique-anchor";
   const changes = protocolDiff(PREV_PROTOCOL, p);
   if (changes.length) P.appendChild(diffBox(changes));
   P.appendChild(validationSummary(p.validation_report));
@@ -602,11 +612,11 @@ function renderProtocol(p) {
     const meta = [s.duration ? "⏱ " + esc(s.duration) : "", s.temperature ? "🌡 " + esc(s.temperature) : ""].filter(Boolean).join(" · ");
     if (meta) d.appendChild(el("div", "cp", meta));
     (s.critical_parameters || []).forEach((cp) => {
-      const line = el("div", "cp", `${esc(cp.name)}: <b>${esc([cp.value, cp.unit].filter(Boolean).join(" "))}</b> ${tierPill(cp.provenance)} ${citeInline(cp)}${anchorInline(cp)}`);
+      const line = el("div", "cp", `${esc(cp.name)}: <b>${esc([cp.value, cp.unit].filter(Boolean).join(" "))}</b> ${tierPill(cp.provenance)} ${citeInline(cp)}${anchorInline(cp)}${flagInline(cp)}`);
       if (cp.provenance_note) line.appendChild(el("div", "pnote", esc(cp.provenance_note)));
       d.appendChild(line);
     });
-    (s.substeps || []).forEach((ss) => d.appendChild(el("div", "cp", `${esc(ss.number)} ${esc(ss.instruction)} ${tierPill(ss.provenance)}${anchorInline(ss)}`)));
+    (s.substeps || []).forEach((ss) => d.appendChild(el("div", "cp", `${esc(ss.number)} ${esc(ss.instruction)} ${tierPill(ss.provenance)}${anchorInline(ss)}${flagInline(ss)}`)));
     (s.warnings || []).forEach((w) => d.appendChild(el("div", "warn", "⚠ " + esc(w))));
     steps.appendChild(d);
   });
@@ -685,6 +695,10 @@ function toolbar() {
   dr.title = "Reason about the experiment around this protocol: controls, variables, readout, replication, pitfalls.";
   dr.onclick = () => requestDesign(dr);
   bar.appendChild(dr);
+  const cr = el("button", "btn", "🔍 Correctness review");
+  cr.title = "Adversarial audit: attack the protocol for logic, value, unit/scaling, ordering, and missing-control errors. Model-generated, findings ranked by severity.";
+  cr.onclick = () => requestCritique(cr);
+  bar.appendChild(cr);
   const al = el("button", "btn", HYP ? "🎯 Test my hypothesis" : "🎯 Test a hypothesis");
   al.title = HYP
     ? "Does this protocol directly test your hypothesis? Get a verdict, the critical comparison, confounds, and one-click protocol fixes."
@@ -696,7 +710,7 @@ function toolbar() {
   bar.appendChild(pr);
   wrap.appendChild(bar);
   wrap.appendChild(el("p", "hint noprint",
-    "New to designing this? Start with <b>Design review</b> to sanity-check the experiment, then <b>Test a hypothesis</b> to confirm it's directly tested."));
+    "New to designing this? Start with <b>Design review</b> to sanity-check the experiment, run <b>Correctness review</b> to catch logic/value/ordering errors, then <b>Test a hypothesis</b> to confirm it's directly tested."));
   return wrap;
 }
 
@@ -708,6 +722,63 @@ async function requestDesign(btn) {
     setStatus("");
   } catch (e) { setStatus(e.message, true); }
   btn.disabled = false;
+}
+
+async function requestCritique(btn) {
+  btn.disabled = true; setStatus("Running an adversarial correctness review… (this can take a minute)");
+  try {
+    const r = await postJSON("/api/critique", { session_id: SESSION });
+    renderCritique(r.correctness_review);
+    setStatus("");
+  } catch (e) { setStatus(e.message, true); }
+  btn.disabled = false;
+}
+
+const _SEV_META = {
+  critical: { label: "🔴 Critical", cls: "sev-critical" },
+  major: { label: "🟠 Major", cls: "sev-major" },
+  minor: { label: "🟡 Minor", cls: "sev-minor" },
+};
+const _VERDICT_META = {
+  sound: '<span class="badge-ok">✅ Sound — no correctness defects found</span>',
+  issues_found: '<span class="badge-warn">⚠️ Issues found</span>',
+  serious_issues: '<span class="badge-warn">🛑 Serious issues</span>',
+};
+
+function renderCritique(r) {
+  r = r || {};
+  const host = $("#critique-anchor");
+  host.innerHTML = "";
+  const box = el("div", "design");
+  box.appendChild(el("h2", null, "🔍 Correctness review (adversarial)"));
+  box.appendChild(el("p", "muted small", "A skeptical audit for logic, value, unit/scaling, ordering, and missing-control errors. This is <b>model-generated reasoning, not a host-verified guarantee</b> — only cited evidence is checked against a database."));
+  box.appendChild(el("p", null, _VERDICT_META[r.verdict] || esc(r.verdict || "")));
+  if (r.summary) box.appendChild(el("p", null, esc(r.summary)));
+
+  const findings = r.findings || [];
+  if (findings.length) {
+    findings.forEach((f) => {
+      const meta = _SEV_META[f.severity] || { label: esc(f.severity || ""), cls: "" };
+      const card = el("div", "finding " + meta.cls);
+      const head = [meta.label, f.location ? esc(f.location) : "", f.category ? `<span class="muted small">(${esc(f.category)})</span>` : ""].filter(Boolean).join(" — ");
+      card.appendChild(el("div", "finding-head", head));
+      card.appendChild(el("p", null, `<b>Problem.</b> ${esc(f.problem || "")}`));
+      card.appendChild(el("p", null, `<b>Fix.</b> ${esc(f.fix || "")}`));
+      if (f.citation) card.appendChild(el("p", "muted small", "Evidence: " + esc(f.citation.identifier || "") + (f.citation_verified ? " ✓" : "")));
+      box.appendChild(card);
+    });
+  } else {
+    box.appendChild(el("p", "muted", "No correctness defects found in this audit."));
+  }
+
+  if ((r.strengths || []).length) {
+    box.appendChild(el("h3", null, "Strengths"));
+    const ul = el("ul");
+    r.strengths.forEach((s) => ul.appendChild(el("li", null, esc(s))));
+    box.appendChild(ul);
+  }
+  host.appendChild(box);
+  box.scrollIntoView({ behavior: "smooth" });
 }
 
 function requestAlignment(btn) {
@@ -989,11 +1060,19 @@ function anchorInline(entry) {
   return `<div class="cite">📌 “${esc(entry.source_quote)}” <span class="badge-ok">source-anchored</span></div>`;
 }
 
+function flagInline(e) {
+  const bits = [];
+  if (e.needs_user_input) bits.push('<span class="flag flag-user" title="Depends on your setup/goal and was not already clarified — you still need to decide this">👤 needs your input</span>');
+  const fx = (e.flexibility || "").trim();
+  if (fx) bits.push(`<span class="flag flag-flex" title="This value has latitude — you can tune it in this range">🎛 flexible: ${esc(fx)}</span>`);
+  return bits.length ? " " + bits.join(" ") : "";
+}
+
 function provCell(entry) {
   const td = el("td");
   td.innerHTML = tierPill(entry.provenance);
   if (entry.provenance_note) td.appendChild(el("div", "pnote", esc(entry.provenance_note)));
-  td.insertAdjacentHTML("beforeend", citeInline(entry) + anchorInline(entry));
+  td.insertAdjacentHTML("beforeend", citeInline(entry) + anchorInline(entry) + flagInline(entry));
   return td;
 }
 

@@ -594,6 +594,23 @@ REQUEST_CLARIFICATIONS_TOOL = {
 # Schema 2 — emit_protocol (phase 3 output)
 # ---------------------------------------------------------------------------
 
+# Two inline flags, additive to the provenance system, that tell the student how to READ
+# each value: whether it has latitude, and whether it still needs a decision from them.
+_FLEXIBILITY = {
+    "type": ["string", "null"],
+    "description": "If the value has real latitude, state the acceptable range or how much "
+    "it can vary (e.g. '10-50 uL; scales linearly', 'anywhere 20-30 min'), so the user "
+    "knows what is tunable vs. load-bearing. Null/omit for values that are fixed or "
+    "outcome-critical (where changing it changes the result).",
+}
+_NEEDS_USER_INPUT = {
+    "type": "boolean",
+    "description": "True when this value genuinely depends on the user's own setup, scale, "
+    "or goal and was NOT resolved by a phase-1 clarification — flagging a decision the user "
+    "still needs to make. Distinct from a value they should merely verify: a filled default "
+    "the user only needs to sanity-check is default_verify with this false.",
+}
+
 _MATERIAL = {
     "type": "object",
     "properties": {
@@ -608,6 +625,8 @@ _MATERIAL = {
             "description": "Basis/standard named; scaling math if scaled; verify "
             "note for defaults.",
         },
+        "flexibility": _FLEXIBILITY,
+        "needs_user_input": _NEEDS_USER_INPUT,
         "source_quote": _SOURCE_QUOTE,
         "citation": CITATION_SCHEMA,
     },
@@ -623,6 +642,8 @@ _CRITICAL_PARAMETER = {
         "provenance": _PROVENANCE_ENUM,
         "selected_by_user": _SELECTED_BY_USER,
         "provenance_note": {"type": ["string", "null"]},
+        "flexibility": _FLEXIBILITY,
+        "needs_user_input": _NEEDS_USER_INPUT,
         "source_quote": _SOURCE_QUOTE,
         "citation": CITATION_SCHEMA,
     },
@@ -636,6 +657,8 @@ _SUBSTEP = {
         "instruction": {"type": "string"},
         "provenance": _PROVENANCE_ENUM,
         "provenance_note": {"type": ["string", "null"]},
+        "flexibility": _FLEXIBILITY,
+        "needs_user_input": _NEEDS_USER_INPUT,
         "source_quote": _SOURCE_QUOTE,
     },
     "required": ["number", "instruction", "provenance"],
@@ -769,5 +792,64 @@ EMIT_PROTOCOL_TOOL = {
             "steps",
             "assumptions_log",
         ],
+    },
+}
+
+
+EMIT_CORRECTNESS_REVIEW_TOOL = {
+    "name": "emit_correctness_review",
+    "description": (
+        "Report an adversarial CORRECTNESS audit of the emitted protocol: the specific "
+        "things that would make the experiment fail, produce wrong or uninterpretable "
+        "results, or be impossible to execute as written. Findings only — this is a "
+        "skeptical review, not a rewrite."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "verdict": {
+                "type": "string",
+                "enum": ["sound", "issues_found", "serious_issues"],
+                "description": "sound = no correctness defects; serious_issues = at least "
+                "one critical finding that would ruin the experiment.",
+            },
+            "summary": {"type": "string", "description": "One-sentence bottom line."},
+            "findings": {
+                "type": "array",
+                "description": "Concrete defects, most severe first. EMPTY if the protocol "
+                "is sound — do not manufacture issues.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "severity": {
+                            "type": "string",
+                            "enum": ["critical", "major", "minor"],
+                            "description": "critical = will fail or give wrong results; "
+                            "major = likely problem; minor = suboptimal.",
+                        },
+                        "category": {
+                            "type": "string",
+                            "enum": ["missing_control", "implausible_value", "unit_or_scaling",
+                                     "ordering", "logic", "internal_contradiction",
+                                     "ambiguous_instruction", "readout_mismatch", "safety", "other"],
+                        },
+                        "location": {"type": "string",
+                                     "description": "The exact step/material/parameter at fault."},
+                        "problem": {"type": "string",
+                                    "description": "What is wrong and why it breaks the experiment."},
+                        "fix": {"type": "string",
+                                "description": "A concrete, directly-applicable correction."},
+                        "citation": CITATION_SCHEMA,
+                    },
+                    "required": ["severity", "category", "problem", "fix"],
+                },
+            },
+            "strengths": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "What the protocol gets right (brief; for balance).",
+            },
+        },
+        "required": ["verdict", "summary", "findings"],
     },
 }

@@ -43,6 +43,34 @@ def _anchor(entry: dict) -> str:
     return f' 📌 “{q}”'
 
 
+def _flex_note(entry: dict) -> str:
+    fx = entry.get("flexibility") if isinstance(entry, dict) else None
+    return fx.strip() if isinstance(fx, str) and fx.strip() else ""
+
+
+def _flag_suffix(entry: dict) -> str:
+    """Inline readability flags for a bullet-rendered value: what needs a user decision
+    and what has latitude. Rendered on its own indented line so it stands out."""
+    bits = []
+    if isinstance(entry, dict) and entry.get("needs_user_input"):
+        bits.append("👤 needs your input")
+    fx = _flex_note(entry)
+    if fx:
+        bits.append(f"🎛 flexible: {fx}")
+    return ("  \n  " + " · ".join(bits)) if bits else ""
+
+
+def _mat_flags(m: dict) -> str:
+    """Compact single-line flags for a value inside a Markdown table cell."""
+    s = ""
+    if m.get("needs_user_input"):
+        s += " 👤"
+    fx = _flex_note(m)
+    if fx:
+        s += f" 🎛 {fx.replace('|', chr(92) + '|')}"
+    return s
+
+
 def protocol_to_markdown(p: dict) -> str:
     out: list[str] = []
     out.append(f"# {p.get('title', 'Protocol')}\n")
@@ -70,6 +98,18 @@ def protocol_to_markdown(p: dict) -> str:
     downgraded = len(rep.get("downgraded", []))
     summary_bits = ", ".join(f"{v} {k}" for k, v in tiers.items() if k)
     out.append(f"> **Provenance:** {summary_bits}.")
+    n_user = n_flex = 0
+    for m in p.get("materials", []):
+        if isinstance(m, dict):
+            n_user += bool(m.get("needs_user_input")); n_flex += bool(_flex_note(m))
+    for s in p.get("steps", []):
+        if not isinstance(s, dict):
+            continue
+        for e in list(s.get("critical_parameters", [])) + list(s.get("substeps", [])):
+            if isinstance(e, dict):
+                n_user += bool(e.get("needs_user_input")); n_flex += bool(_flex_note(e))
+    if n_user or n_flex:
+        out.append(f"> 👤 {n_user} value(s) need your input · 🎛 {n_flex} flexible.")
     if rep:
         out.append(f"> **Citations:** {verified} verified, {downgraded} downgraded (unverifiable).\n")
     else:
@@ -86,7 +126,7 @@ def protocol_to_markdown(p: dict) -> str:
             amt = " ".join(str(x) for x in [m.get("amount"), m.get("unit")] if x not in (None, ""))
             out.append(
                 f"| {m.get('name','')} | {amt or '—'} | {m.get('vendor_or_grade') or '—'} | "
-                f"{_tier(m)}{_cite(m)}{_anchor(m)} |"
+                f"{_tier(m)}{_cite(m)}{_anchor(m)}{_mat_flags(m)} |"
             )
         out.append("")
 
@@ -115,11 +155,11 @@ def protocol_to_markdown(p: dict) -> str:
                 continue
             val = " ".join(str(x) for x in [cp.get("value"), cp.get("unit")] if x not in (None, ""))
             note = f" — {cp['provenance_note']}" if cp.get("provenance_note") else ""
-            out.append(f"- **{cp.get('name','')}:** {val} {_tier(cp)}{_cite(cp)}{_anchor(cp)}{note}")
+            out.append(f"- **{cp.get('name','')}:** {val} {_tier(cp)}{_cite(cp)}{_anchor(cp)}{note}{_flag_suffix(cp)}")
         for ss in s.get("substeps", []):
             if not isinstance(ss, dict):
                 continue
-            out.append(f"  - {ss.get('number','')} {ss.get('instruction','')} {_tier(ss)}{_anchor(ss)}")
+            out.append(f"  - {ss.get('number','')} {ss.get('instruction','')} {_tier(ss)}{_anchor(ss)}{_flag_suffix(ss)}")
         for w in s.get("warnings", []):
             out.append(f"> ⚠ {w}")
         out.append("")
@@ -306,6 +346,56 @@ def design_alignment_to_markdown(a: dict) -> str:
 
     if a.get("summary"):
         out.append(f"**Bottom line:** {a['summary']}")
+    return "\n".join(out)
+
+
+_CORRECTNESS_VERDICT = {
+    "sound": "✅ Sound — no correctness defects found",
+    "issues_found": "⚠️ Issues found",
+    "serious_issues": "🛑 Serious issues",
+}
+_CORRECTNESS_SEV = {"critical": "🔴 Critical", "major": "🟠 Major", "minor": "🟡 Minor"}
+
+
+def correctness_review_to_markdown(r: dict) -> str:
+    out: list[str] = ["# Correctness review (adversarial)\n"]
+    out.append("_Model-generated audit — a skeptical pass for logic, value, ordering, and "
+               "control errors. This is reasoning, not a host-verified guarantee; only the "
+               "cited evidence below is checked against a database._\n")
+    out.append(f"**Verdict:** {_CORRECTNESS_VERDICT.get(r.get('verdict'), r.get('verdict', ''))}")
+    if r.get("summary"):
+        out.append(f"> {r['summary']}")
+    out.append("")
+
+    findings = r.get("findings") or []
+    if findings:
+        out.append("## Findings (most severe first)\n")
+        for f in findings:
+            if not isinstance(f, dict):
+                continue
+            sev = _CORRECTNESS_SEV.get(f.get("severity"), f.get("severity", ""))
+            loc = f.get("location")
+            cat = f.get("category")
+            head = f"### {sev}" + (f" — {loc}" if loc else "")
+            if cat:
+                head += f"  _({cat})_"
+            out.append(head)
+            out.append(f"- **Problem:** {f.get('problem','')}")
+            out.append(f"- **Fix:** {f.get('fix','')}")
+            c = f.get("citation")
+            if c:
+                badge = " ✓" if f.get("citation_verified") else ""
+                out.append(f"- **Evidence:** {c.get('identifier','')}{badge}")
+            out.append("")
+    else:
+        out.append("_No correctness defects found in this audit._\n")
+
+    strengths = r.get("strengths") or []
+    if strengths:
+        out.append("## Strengths\n")
+        for s in strengths:
+            out.append(f"- {s}")
+        out.append("")
     return "\n".join(out)
 
 

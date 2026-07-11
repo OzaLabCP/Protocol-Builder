@@ -136,6 +136,19 @@ def test_design_review_emits():
     assert session.pending_tool_use_id == "d1"  # can chain further follow-ups
 
 
+def test_correctness_review_emits():
+    review = {"verdict": "issues_found", "summary": "one issue",
+              "findings": [{"severity": "critical", "category": "ordering",
+                            "problem": "enzyme before buffer", "fix": "add buffer first"}],
+              "strengths": []}
+    session = Session(messages=[{"role": "user", "content": "seed"}], pending_tool_use_id="e1")
+    agent = make_agent([tool_msg(("emit_correctness_review", review, "cr1"))])
+    out = agent.correctness_review(session)
+    assert out["verdict"] == "issues_found"
+    assert out["findings"][0]["category"] == "ordering"
+    assert session.pending_tool_use_id == "cr1"
+
+
 def test_discover_emits_assay_options():
     opts = {"usable": True, "hypothesis_restated": "H",
             "assays": [{"id": "fp", "name": "FP", "measures": "m", "why_tests_hypothesis": "w",

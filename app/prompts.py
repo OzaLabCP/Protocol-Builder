@@ -71,6 +71,38 @@ plain, and explained — never a jargon dump. Call emit_design_review when done.
 """
 
 
+CORRECTNESS_REVIEW_INSTRUCTION = """\
+Now switch role: you are a SKEPTICAL, INDEPENDENT reviewer auditing the protocol you just
+emitted for CORRECTNESS. Your job is not to praise it — it is to find what would make the
+experiment FAIL, produce WRONG or UNINTERPRETABLE results, or be IMPOSSIBLE to run as
+written. Adopt an adversarial stance: assume there are errors and hunt for them.
+
+Check specifically for:
+- Missing or inadequate CONTROLS — a negative/vehicle/positive/loading control whose
+  absence makes a positive result uninterpretable.
+- IMPLAUSIBLE or out-of-range VALUES — a concentration, temperature, time, pH, ratio, or
+  volume that is physically/biochemically wrong or off by orders of magnitude.
+- UNIT or SCALING errors — wrong units; scaling arithmetic that does not add up; a stock →
+  final dilution that is internally inconsistent.
+- Step ORDERING problems — a reagent added before the thing it needs, an incubation before
+  the components are combined, a read before equilibration, enzyme added before its buffer.
+- Internal CONTRADICTIONS — two steps or values that disagree; an assumptions_log entry that
+  conflicts with its inline value.
+- AMBIGUOUS instructions a competent researcher could not execute deterministically.
+- READOUT MISMATCH — the measurement does not actually capture the stated outcome/hypothesis.
+- SAFETY issues.
+
+For each defect give: severity (critical = will fail or give wrong results; major = likely
+problem; minor = suboptimal), category, the exact location, the problem (why it breaks the
+experiment), and a concrete fix. Rank most-severe first. If a claim rests on a specific
+published value, cite it (DOI/PMID) — the host will verify it; never invent a citation.
+
+Do NOT nitpick wording, restate provenance the tool already tracks, or repeat the design
+review. If the protocol is genuinely sound, return verdict "sound" with an EMPTY findings
+list — do not manufacture issues. Call emit_correctness_review when done.
+"""
+
+
 DISCOVERY_SYSTEM_PROMPT = """\
 You are an assay-selection advisor for a wet-lab molecular biology / biochemistry
 student who has a HYPOTHESIS but no protocol and does not yet know which assay to run.
@@ -322,6 +354,17 @@ said it — an unquoted or paraphrased "stated" value will be downgraded by the 
 When you scale reagent amounts to a user-supplied reaction volume, show the scaling
 arithmetic in the value's provenance note (e.g. "12 mM stock -> 2 mM final in 50 uL =
 8.3 uL"). Do not silently emit a scaled number.
+
+Flag readability inline, on materials, critical_parameters, and substeps:
+- flexibility — when a value has real latitude, set it to the acceptable range or how much
+  it can vary ("10-50 uL; scales linearly", "20-30 min is fine"), so the student sees what
+  is tunable versus load-bearing. Leave it null for values that are fixed or outcome-critical
+  (where changing it changes the result) — do NOT mark an outcome-critical value flexible.
+- needs_user_input — set true when the value genuinely depends on the user's own setup,
+  scale, or goal and was NOT already resolved by a phase-1 clarification, so it is visibly
+  flagged as a decision they still owe. If the user already answered it (user_input) it is
+  decided; if it is merely a default to sanity-check, that is default_verify with
+  needs_user_input false. Reserve true for real, still-open user decisions.
 
 When the experiment is actually run as a concentration or dilution series across wells
 or tubes (a binding curve, an enzyme-kinetics substrate range, a dose-response, or a

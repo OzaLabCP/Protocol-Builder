@@ -32,6 +32,7 @@ from . import config, literature
 from .llm import OpenRouterClient
 from .prompts import (
     CHOOSE_ASSAY_INSTRUCTION,
+    CORRECTNESS_REVIEW_INSTRUCTION,
     DESIGN_ALIGNMENT_INSTRUCTION,
     DESIGN_REVIEW_INSTRUCTION,
     DISCOVERY_SYSTEM_PROMPT,
@@ -41,6 +42,7 @@ from .prompts import (
 )
 from .schemas import (
     EMIT_ASSAY_OPTIONS_TOOL,
+    EMIT_CORRECTNESS_REVIEW_TOOL,
     EMIT_DESIGN_ALIGNMENT_TOOL,
     EMIT_DESIGN_REVIEW_TOOL,
     EMIT_PROTOCOL_TOOL,
@@ -596,3 +598,11 @@ class GapFillerAgent:
             )
         return self._followup(session, instruction, "emit_design_alignment",
                                EMIT_DESIGN_ALIGNMENT_TOOL, compact=True)
+
+    # -- Adversarial correctness review (attack the emitted protocol) -----------
+    def correctness_review(self, session: Session) -> dict:
+        """Skeptical, independent audit of the emitted protocol for logic/value/ordering/
+        control errors. Model-generated reasoning (not a host guarantee); its citations are
+        host-verified. Runs on the main model — this is reasoning-heavy."""
+        return self._followup(session, CORRECTNESS_REVIEW_INSTRUCTION, "emit_correctness_review",
+                              EMIT_CORRECTNESS_REVIEW_TOOL, compact=True)

@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.render import (  # noqa: E402
     assay_selection_to_markdown,
+    correctness_review_to_markdown,
     design_alignment_to_markdown,
     design_review_to_markdown,
     grounding_log_to_markdown,
@@ -214,6 +215,44 @@ def test_grounding_log_appendix():
     md = grounding_log_to_markdown(["search_pubmed: Mg2+ optimum", "search_preprints: CyDisCo"])
     assert "Appendix: grounding search trail" in md
     assert "Mg2+ optimum" in md
+
+
+def test_inline_flags_render():
+    proto = {
+        "title": "T", "summary": "s", "estimated_duration": "1 h",
+        "materials": [{"name": "Buffer", "amount": 50, "unit": "uL", "provenance": "best_practice",
+                       "flexibility": "10-50 uL", "needs_user_input": False}],
+        "steps": [{"number": 1, "title": "Mix", "instruction": "combine", "provenance": "best_practice",
+                   "critical_parameters": [
+                       {"name": "Replicates", "value": "3", "provenance": "default_verify",
+                        "needs_user_input": True},
+                       {"name": "Temp", "value": "25", "unit": "C", "provenance": "best_practice",
+                        "flexibility": "20-30 C"}]}],
+        "assumptions_log": [],
+    }
+    md = protocol_to_markdown(proto)
+    assert "👤" in md and "🎛" in md
+    assert "needs your input" in md and "flexible: 20-30 C" in md
+    assert "🎛 10-50 uL" in md  # material table cell marker
+    assert "value(s) need your input" in md  # summary line
+
+
+def test_correctness_review_render():
+    r = {"verdict": "serious_issues", "summary": "critical ordering bug",
+         "findings": [{"severity": "critical", "category": "ordering", "location": "step 3",
+                       "problem": "enzyme before buffer", "fix": "add buffer first",
+                       "citation": {"identifier": "12345678"}, "citation_verified": True}],
+         "strengths": ["good controls"]}
+    md = correctness_review_to_markdown(r)
+    assert "Correctness review" in md and "Model-generated" in md
+    assert "🛑 Serious issues" in md and "🔴 Critical" in md
+    assert "enzyme before buffer" in md and "add buffer first" in md
+    assert "12345678 ✓" in md and "good controls" in md
+
+
+def test_correctness_review_render_sound():
+    md = correctness_review_to_markdown({"verdict": "sound", "summary": "ok", "findings": []})
+    assert "✅ Sound" in md and "No correctness defects" in md
 
 
 if __name__ == "__main__":
