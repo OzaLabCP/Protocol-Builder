@@ -1,5 +1,7 @@
 # Methods Gap-Filler
 
+![CI](https://github.com/OzaLabCP/Protocol-Builder/actions/workflows/ci.yml/badge.svg)
+
 Paste a paper's **Methods** section. The tool reconstructs the protocol, classifies
 every parameter by how well the source specifies it, **asks you only about the gaps
 that actually matter**, searches the literature to ground the values it fills, then
