@@ -303,33 +303,46 @@ class GapFillerAgent:
         )
         sys_msg = {"role": "system", "content": system or self.system_prompt}
 
+        budget = config.MAX_TOKENS or 0  # escalates on truncation; growth persists across rounds
         for _round in range(config.MAX_TOOL_ROUNDS):
-            resp = self.client.chat(
-                messages=[sys_msg] + messages,
-                tools=openai_tools,
-                tool_choice=tool_choice,
-                model=model or self.model,
-                effort=effort,
-            )
-            try:
-                choice = resp["choices"][0]
-                finish = choice.get("finish_reason")
-                msg = choice["message"]
-                if not isinstance(msg, dict):
-                    raise TypeError("message is not an object")
-                raw_calls = msg.get("tool_calls")
-                if raw_calls is not None and not isinstance(raw_calls, list):
-                    raise TypeError("tool_calls is not a list")
-            except (KeyError, IndexError, TypeError) as exc:
-                raise AgentError(f"Malformed provider response: {exc}")
-
-            # A truncated response means an incomplete tool call (broken JSON) — fail loud
-            # with an actionable message instead of an opaque "never called the terminal".
-            if finish == "length":
-                raise AgentError(
-                    "The model hit the max_tokens output limit before finishing its "
-                    "response. Raise GAPFILLER_MAX_TOKENS — protocol emits are large."
+            # A truncated response is an incomplete (broken-JSON) tool call. Rather than
+            # hard-failing — a 502 telling the user to raise an env var they can't reach
+            # mid-run — retry the SAME call with a doubled output budget up to MAX_TOKENS_CAP.
+            # Normal emits fit the base budget and never escalate; only oversized protocols do.
+            while True:
+                resp = self.client.chat(
+                    messages=[sys_msg] + messages,
+                    tools=openai_tools,
+                    tool_choice=tool_choice,
+                    model=model or self.model,
+                    effort=effort,
+                    max_tokens=budget or None,
                 )
+                try:
+                    choice = resp["choices"][0]
+                    finish = choice.get("finish_reason")
+                    msg = choice["message"]
+                    if not isinstance(msg, dict):
+                        raise TypeError("message is not an object")
+                    raw_calls = msg.get("tool_calls")
+                    if raw_calls is not None and not isinstance(raw_calls, list):
+                        raise TypeError("tool_calls is not a list")
+                except (KeyError, IndexError, TypeError) as exc:
+                    raise AgentError(f"Malformed provider response: {exc}")
+
+                if finish == "length" and budget and budget < config.MAX_TOKENS_CAP:
+                    budget = min(budget * 2, config.MAX_TOKENS_CAP)
+                    state.session.grounding_log.append(
+                        f"output truncated — retrying with max_tokens={budget}")
+                    continue
+                if finish == "length":
+                    # Even at the cap the response didn't fit — fail loud and actionable.
+                    raise AgentError(
+                        "The model hit the max_tokens output limit before finishing, even at "
+                        f"the maximum budget ({config.MAX_TOKENS_CAP}). The protocol may be "
+                        "unusually large; narrow the request or raise GAPFILLER_MAX_TOKENS_CAP."
+                    )
+                break
 
             tool_calls = _normalize_tool_calls(raw_calls)
             content = _coerce_content(msg.get("content"))

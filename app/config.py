@@ -61,6 +61,11 @@ OPENROUTER_TITLE = os.environ.get("OPENROUTER_TITLE", "Methods Gap-Filler")
 
 # Output token ceiling per response.
 MAX_TOKENS = int(os.environ.get("GAPFILLER_MAX_TOKENS", "16000"))
+# A large protocol emit can exceed MAX_TOKENS and truncate. Rather than hard-failing,
+# the agent retries the same call with a doubled budget up to this cap (so normal emits
+# stay cheap and only oversized ones escalate). Set to MAX_TOKENS to disable escalation.
+MAX_TOKENS_CAP = max(
+    MAX_TOKENS, int(os.environ.get("GAPFILLER_MAX_TOKENS_CAP", "32000")))
 # Per-request HTTP timeout (seconds). Reasoning models can take a while.
 REQUEST_TIMEOUT = float(os.environ.get("GAPFILLER_REQUEST_TIMEOUT", "600"))
 # Reasoning effort for the heavy phases (protocol emit, reviews, fixes), passed as

@@ -231,8 +231,9 @@ class _FakeLLM:
     def __init__(self, queue):
         self.queue = list(queue); self.calls = []
 
-    def chat(self, messages, tools=None, tool_choice=None, model=None, effort=None):
-        self.calls.append({"tool_choice": tool_choice, "model": model, "effort": effort})
+    def chat(self, messages, tools=None, tool_choice=None, model=None, effort=None, max_tokens=None):
+        self.calls.append({"tool_choice": tool_choice, "model": model, "effort": effort,
+                           "max_tokens": max_tokens})
         return self.queue.pop(0)
 
 

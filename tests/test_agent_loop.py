@@ -12,7 +12,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import literature  # noqa: E402
+from app import config, literature  # noqa: E402
 from app.agent import AgentError, GapFillerAgent, RunState, Session  # noqa: E402
 from app.prompts import DISCOVERY_SYSTEM_PROMPT, SYSTEM_ASK, SYSTEM_PROMPT  # noqa: E402
 
@@ -24,9 +24,10 @@ class FakeLLM:
         self.queue = list(queue)
         self.calls = []
 
-    def chat(self, messages, tools=None, tool_choice=None, model=None, effort=None):
+    def chat(self, messages, tools=None, tool_choice=None, model=None, effort=None, max_tokens=None):
         self.calls.append({"messages": messages, "tools": tools,
-                           "tool_choice": tool_choice, "model": model, "effort": effort})
+                           "tool_choice": tool_choice, "model": model, "effort": effort,
+                           "max_tokens": max_tokens})
         return self.queue.pop(0)
 
 
@@ -326,13 +327,27 @@ def test_full_paper_trimmed_to_methods_section():
     assert "Introduction" not in session.source_text
 
 
-def test_truncation_raises_actionable_error():
-    trunc = {"choices": [{"finish_reason": "length",
-                          "message": {"role": "assistant", "content": "half a proto"}}]}
-    agent = make_agent([trunc])
+def _trunc():
+    return {"choices": [{"finish_reason": "length",
+                         "message": {"role": "assistant", "content": "half a proto"}}]}
+
+
+def test_truncation_escalates_budget_then_succeeds():
+    # A first truncation shouldn't hard-fail: retry the same call with a doubled budget.
+    queue = [_trunc(), tool_msg(("request_clarifications", {"usable": True, "gaps": []}, "c1"))]
+    agent = make_agent(queue)
+    session = agent.analyze("A methods section describing a reaction incubated at 30 C for 4 h.")
+    assert (session.phase1 or {}).get("usable") is True          # completed after the retry
+    assert agent.client.calls[0]["max_tokens"] == config.MAX_TOKENS      # first try: base budget
+    assert agent.client.calls[1]["max_tokens"] == config.MAX_TOKENS_CAP  # retry: doubled (to cap)
+
+
+def test_truncation_raises_actionable_error_at_cap():
+    # If it still truncates at the cap, fail loud with an actionable message.
+    agent = make_agent([_trunc(), _trunc()])
     try:
         agent.analyze("A methods section describing a reaction incubated at 30 C for 4 h.")
-        assert False, "expected AgentError on truncation"
+        assert False, "expected AgentError when truncation persists to the cap"
     except AgentError as e:
         assert "MAX_TOKENS" in str(e)
 
