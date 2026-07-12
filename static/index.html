@@ -374,15 +374,21 @@ function discoverBody(autoPick) {
     },
   };
 }
+function newPid() {
+  try { return crypto.randomUUID(); } catch (e) { return "p" + Date.now() + Math.floor(Math.random() * 1e6); }
+}
 async function runDiscover(autoPick) {
   const body = discoverBody(autoPick);
   if (body.hypothesis.length < 12) { discStatus("State a hypothesis or goal (a sentence).", true); return; }
+  const pid = newPid(); body.progress_id = pid;
   discLock(true, autoPick ? "Finding and picking the best assay…" : "Searching the literature for the best assays to test this… (this can take a minute)");
+  startProgress(pid);
   try {
     const r = await postJSON("/api/discover", body);
     handlePhase(r);
   } catch (e) { discStatus(e.message, true); }
   discLock(false);
+  stopProgress();
 }
 $("#discover").onclick = () => runDiscover(false);
 $("#autopick").onclick = () => runDiscover(true);
@@ -393,18 +399,22 @@ $("#analyze").onclick = async () => {
   const file = $("#pdf").files[0];
   const text = $("#methods").value.trim();
   if (!file && text.length < 40) { setStatus("Paste a Methods section or choose a PDF.", true); return; }
+  const pid = newPid();
   lock(true, file ? "Reading the PDF and scoping gaps… (this can take a minute or two)"
                   : "Reading the methods and scoping gaps… (this can take a minute)");
+  startProgress(pid);
   try {
     const fd = new FormData();
     if (file) fd.append("file", file); else fd.append("methods_text", text);
     const hyp = $("#hypothesis").value.trim();
     if (hyp) fd.append("hypothesis", hyp);
+    fd.append("progress_id", pid);
     HYP = hyp;
     const r = await postForm("/api/analyze", fd);
     handlePhase(r);
   } catch (e) { setStatus(e.message, true); }
   lock(false);
+  stopProgress();
 };
 
 function handlePhase(r) {

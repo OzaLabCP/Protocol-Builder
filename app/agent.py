@@ -407,6 +407,7 @@ class GapFillerAgent:
         methods_text: Optional[str] = None,
         hypothesis: Optional[str] = None,
         is_full_paper: bool = False,
+        progress: Optional[Any] = None,
     ) -> Session:
         """Reconstruct a protocol from a Methods section (pasted) or the full text of a
         paper (extracted from a PDF host-side — `is_full_paper=True`, in which case the
@@ -425,7 +426,7 @@ class GapFillerAgent:
         effective_text = extracted_methods or text
         session.source_text = effective_text  # verify quotes against exactly what the model read
         session.source_exact = not is_full_paper  # PDF-derived text is lossy vs the paper
-        state = RunState(session=session, searches_left=config.PUBMED_BUDGET)
+        state = RunState(session=session, searches_left=config.PUBMED_BUDGET, progress=progress)
 
         hyp_preamble = (
             f"The student's hypothesis (what they want to test) is:\n{session.hypothesis}\n\n"
@@ -470,13 +471,14 @@ class GapFillerAgent:
         return session
 
     # -- Phase 0 (hypothesis-first): discover candidate assays -------------------
-    def discover(self, hypothesis: str, constraints: Optional[dict] = None) -> Session:
+    def discover(self, hypothesis: str, constraints: Optional[dict] = None,
+                 progress: Optional[Any] = None) -> Session:
         """Hypothesis-first entry: recommend literature-grounded candidate assays.
         Runs under the discovery prompt so the paper-first Methods-section input guard
         cannot misfire. Parks the emitted call so choose_assay can ack it via _followup."""
         session = Session(source_kind="hypothesis")
         session.hypothesis = (hypothesis or "").strip() or None
-        state = RunState(session=session, searches_left=config.PUBMED_BUDGET)
+        state = RunState(session=session, searches_left=config.PUBMED_BUDGET, progress=progress)
 
         parts = [
             "A student wants to test a hypothesis but has no protocol and does not know "

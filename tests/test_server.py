@@ -306,6 +306,27 @@ def test_progress_feed_accumulates_and_filters():
         srv._SESSIONS.pop(sid, None); srv._agent = None
 
 
+def test_discover_progress_feed_pre_session():
+    opts = {"usable": True, "hypothesis_restated": "H",
+            "assays": [{"id": "fp", "name": "FP", "measures": "m", "why_tests_hypothesis": "w",
+                        "critical_comparison": "c", "throughput": "high", "difficulty": "low",
+                        "materials_burden": "cheap", "key_limitation": "k", "provenance": "best_practice"}],
+            "recommended_assay_id": "fp", "recommendation_rationale": "r"}
+    _install_agent([_tool_msg("emit_assay_options", opts, "a1")])
+    pid = "pid-abc"
+    try:
+        assert client.get(f"/api/progress/{pid}").json() == {"steps": []}  # nothing before the call
+        r = client.post("/api/discover", json={"hypothesis": "Does X increase Y binding?",
+                                               "progress_id": pid})
+        assert r.status_code == 200
+        steps = client.get(f"/api/progress/{pid}").json()["steps"]
+        assert any("candidate assays" in s["msg"] for s in steps)  # pre-session stage note recorded
+        assert [s["seq"] for s in steps] == list(range(1, len(steps) + 1))
+    finally:
+        srv._agent = None
+        srv._PRE.pop(pid, None)
+
+
 def test_discover_autopick_runs_full_flow():
     opts = {"usable": True, "hypothesis_restated": "H",
             "assays": [{"id": "fp", "name": "FP", "measures": "m", "why_tests_hypothesis": "w",

@@ -156,6 +156,38 @@ class Store:
 _SESSIONS: dict[str, Store] = {}
 _agent: Optional[GapFillerAgent] = None
 
+# Pre-session activity feeds: discover/analyze mint their session mid-call, so the client
+# can't key progress on a session id yet. It supplies a short-lived progress_id instead, and
+# these functions back a feed the same shape the client already polls. Bounded by count.
+_PRE: dict[str, dict] = {}
+_PRE_LOCK = threading.Lock()
+_MAX_PRE = 200
+
+
+def _pre_start(pid: str) -> None:
+    if not pid:
+        return
+    with _PRE_LOCK:
+        _PRE[pid] = {"steps": [], "created": time.time()}
+        if len(_PRE) > _MAX_PRE:  # evict oldest feeds
+            for k, _v in sorted(_PRE.items(), key=lambda kv: kv[1]["created"])[: len(_PRE) - _MAX_PRE]:
+                _PRE.pop(k, None)
+
+
+def _pre_note(pid: str, msg: str) -> None:
+    if not pid:
+        return
+    with _PRE_LOCK:
+        buf = _PRE.get(pid)
+        if buf is not None:
+            buf["steps"].append({"seq": len(buf["steps"]) + 1, "msg": str(msg)})
+
+
+def _pre_steps(pid: str, after: int) -> list:
+    with _PRE_LOCK:
+        buf = _PRE.get(pid)
+        return [s for s in buf["steps"] if s["seq"] > after] if buf else []
+
 
 def get_agent() -> GapFillerAgent:
     global _agent
@@ -222,6 +254,7 @@ class DiscoverRequest(BaseModel):
     hypothesis: str
     constraints: Optional[dict] = None
     auto_pick: bool = False
+    progress_id: Optional[str] = None  # client-supplied key for the pre-session activity feed
 
 
 class ChooseAssayRequest(BaseModel):
@@ -266,6 +299,7 @@ def healthz(request: Request) -> dict:
 def analyze(
     methods_text: str = Form(default=""),
     hypothesis: str = Form(default=""),
+    progress_id: str = Form(default=""),
     file: Optional[UploadFile] = File(default=None),
 ) -> dict:
     _prune()
@@ -294,8 +328,14 @@ def analyze(
             raise HTTPException(400, f"That's very long (> {MAX_TEXT_CHARS} chars). Paste just the Methods section, or upload the PDF.")
 
     hyp = (hypothesis or "").strip() or None
+    pid = (progress_id or "").strip()
+    _pre_start(pid)
+    note = (lambda m: _pre_note(pid, m)) if pid else None
+    if note:
+        note("Reading the methods and reconstructing the protocol…")
     try:
-        session = agent.analyze(methods_text=text, hypothesis=hyp, is_full_paper=is_full_paper)
+        session = agent.analyze(methods_text=text, hypothesis=hyp,
+                                is_full_paper=is_full_paper, progress=note)
     except AgentError as exc:
         raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
     except Exception as exc:  # noqa: BLE001
@@ -441,8 +481,13 @@ def discover(req: DiscoverRequest) -> dict:
     if len(hyp) < 12:
         raise HTTPException(400, "State a hypothesis or goal to test (a sentence).")
     agent = get_agent()
+    pid = (req.progress_id or "").strip()
+    _pre_start(pid)
+    note = (lambda m: _pre_note(pid, m)) if pid else None
+    if note:
+        note("Searching the literature for candidate assays…")
     try:
-        session = agent.discover(hyp, req.constraints)
+        session = agent.discover(hyp, req.constraints, progress=note)
     except AgentError as exc:
         raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
     except Exception as exc:  # noqa: BLE001
@@ -479,11 +524,14 @@ def choose_assay(req: ChooseAssayRequest) -> dict:
 
 @app.get("/api/progress/{session_id}", dependencies=_READONLY)
 def progress(session_id: str, after: int = 0) -> dict:
-    """Live activity feed for the in-flight long op on this session. Polled by the client
-    (concurrently with the blocking POST, which runs in a Starlette worker thread). Returns
-    only steps newer than `after`. Unknown/expired session -> empty (a poll shouldn't 404)."""
+    """Live activity feed for the in-flight long op, keyed by session id (build phases) or a
+    client-supplied progress_id (pre-session discover/analyze). Polled concurrently with the
+    blocking POST, which runs in a Starlette worker thread. Returns only steps newer than
+    `after`. Unknown/expired key -> empty (a poll shouldn't 404)."""
     store = _SESSIONS.get(session_id)
-    return {"steps": store.steps_after(after) if store is not None else []}
+    if store is not None:
+        return {"steps": store.steps_after(after)}
+    return {"steps": _pre_steps(session_id, after)}
 
 
 def _choose(session_id: str, assay_id: str) -> dict:
