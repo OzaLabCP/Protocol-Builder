@@ -230,6 +230,7 @@ def healthz(request: Request) -> dict:
         "model_fast": config.MODEL_FAST or config.MODEL,
         "api_key_set": bool(config.OPENROUTER_API_KEY),
         "prompt_cache": config.PROMPT_CACHE,
+        "auto_review": config.AUTO_REVIEW,
         "auth_required": auth_required,
         "grounding": {
             "pubmed": config.ENABLE_PUBMED,
@@ -509,7 +510,39 @@ def _resolve(session_id: str, answers: list) -> dict:
         raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(500, _explain(exc))
-    return _finish(session_id, store, protocol)
+    result = _finish(session_id, store, protocol)
+    if config.AUTO_REVIEW:
+        result = _auto_review(session_id, store, result)
+    return result
+
+
+def _auto_review(session_id: str, store: Store, result: dict) -> dict:
+    """Pipeline stage: adversarially audit the just-emitted protocol for correctness AND
+    practicality and apply the fixes automatically, so the user receives an already-corrected
+    protocol with the findings attached (transparency). Never lets the audit break delivery —
+    any failure falls back to the un-audited-but-valid protocol."""
+    agent = get_agent()
+    try:
+        review = agent.correctness_review(store.session)
+        validate_correctness_review(review)
+    except Exception as exc:  # noqa: BLE001 — audit is best-effort; never block the protocol
+        _log.warning("auto-review skipped: %s", type(exc).__name__)
+        return result
+    findings = review.get("findings") or []
+    fixable = [f for f in findings if isinstance(f, dict) and f.get("fix")]
+    applied = 0
+    if fixable:
+        try:
+            fixed = agent.apply_correctness_fixes(store.session, findings)
+            result = _finish(session_id, store, fixed)  # re-validate + replace with corrected
+            applied = len(fixable)
+            store.correctness_review = None  # applied — stale against the corrected protocol
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("auto-fix skipped: %s", type(exc).__name__)
+            store.correctness_review = review  # keep for a manual apply
+    else:
+        store.correctness_review = review
+    return {**result, "correctness_review": review, "auto_review": True, "fixes_applied": applied}
 
 
 def _finish(session_id: str, store: Store, protocol: dict) -> dict:

@@ -75,6 +75,12 @@ SEND_REASONING = (
 # Safety valve against a model that loops on tool calls without ever finishing.
 MAX_TOOL_ROUNDS = int(os.environ.get("GAPFILLER_MAX_TOOL_ROUNDS", "16"))
 
+# Auto-review: after the protocol is emitted, run the adversarial correctness + practicality
+# audit and apply its fixes automatically, before the user ever sees it — the audit is part
+# of the pipeline, not a button. Adds ~2 model calls per generation (audit + re-emit); set
+# GAPFILLER_AUTO_REVIEW=0 to make it a manual step instead (the button still works either way).
+AUTO_REVIEW = os.environ.get("GAPFILLER_AUTO_REVIEW", "1") != "0"
+
 # Prompt caching: mark the stable prefix (system prompt + source text) with a cache
 # breakpoint so the multi-phase loop re-reads it from the provider's prompt cache instead
 # of re-billing it on every round-trip. Well-supported and documented via OpenRouter, so

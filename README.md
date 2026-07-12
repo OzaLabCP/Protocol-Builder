@@ -68,13 +68,15 @@ it** ("use 150 µL wells and drop to 2 replicates") to rebuild with full context
 
 Every value is also flagged inline for how to *read* it: 🎛 **flexible** (has latitude,
 with the range) versus load-bearing, and 👤 **needs your input** (a decision that still
-depends on your setup and wasn't already clarified). Three review follow-ups sit next to
-the protocol: **Design review** (the experiment around it), **Review & fix** (an adversarial
-audit of both **correctness** — logic/value/unit/ordering/missing-control errors — and
-**practicality** — missing detail, unclear or impractical steps; ranked by severity, clearly
-labeled model-generated with any cited evidence host-verified, and in **one step** it applies
-the fixes and hands back a corrected protocol with a diff), and **Test a hypothesis** (does it
-directly test your hypothesis).
+depends on your setup and wasn't already clarified). An **adversarial correctness + practicality audit runs automatically as part of the pipeline**
+(`GAPFILLER_AUTO_REVIEW`, on by default): after the protocol is emitted, a skeptical pass
+attacks it for both **correctness** (logic/value/unit/ordering/missing-control errors) and
+**practicality** (missing detail, unclear or impractical steps), and its fixes are applied
+before you ever see it — so you receive an already-corrected protocol with the findings shown
+for transparency (clearly labeled model-generated; any cited evidence host-verified). Then two
+review follow-ups sit next to the protocol: **Design review** (the experiment around it) and
+**Test a hypothesis** (does it directly test your hypothesis); **Re-review & fix** re-runs the
+audit on demand (e.g. after a manual refine).
 
 ### Deploy (Docker)
 
@@ -98,9 +100,9 @@ liveness, the model, and which grounding sources are enabled. Sessions expire af
 | `LLM_BASE_URL` | provider default | Override the endpoint (e.g. a self-hosted compatible gateway). (Alias: `OPENROUTER_BASE_URL`.) |
 | `GAPFILLER_REASONING_EFFORT` | `high` | Passed as `reasoning.effort` to models that support it; `""` to omit. |
 | `GAPFILLER_SEND_REASONING` | on for `openrouter` | Whether to send the OpenRouter-only `reasoning` field; auto-off for other providers. Set `1`/`0` to force. |
+| `GAPFILLER_AUTO_REVIEW` | `1` (on) | Run the adversarial correctness + practicality audit and auto-apply its fixes as part of every generation, so the user receives an already-corrected protocol. Adds ~2 model calls per run; set `0` to make it the manual "Re-review & fix" button instead. |
 | `GAPFILLER_PROMPT_CACHE` | on for `openrouter` | Cache the stable prefix (system prompt + source text) so multi-phase runs re-read it instead of re-billing it. Big input saving, identical output. Off by default for non-OpenRouter providers whose compat endpoint may not honor `cache_control`. |
 | `GAPFILLER_MAX_TOKENS` | `16000` | Output ceiling. Keep it generous — too low truncates the (large) protocol emit and forces a wasteful re-run. You only pay for tokens actually generated. |
-| `GAPFILLER_MAX_TOKENS` | `16000` | Output token ceiling. |
 | `GAPFILLER_REQUEST_TIMEOUT` | `600` | Per-request HTTP timeout (seconds). |
 | `GAPFILLER_PUBMED_BUDGET` | `12` | Max literature searches per phase. |
 | `GAPFILLER_ENABLE_PUBMED` | `1` | Set `0` to disable the PubMed grounding tool. |
@@ -133,7 +135,7 @@ app/
   render.py       # protocol -> Markdown export
   server.py       # FastAPI endpoints (analyze/resolve/revise/export) + sessions
 static/index.html # paste/PDF UI, provenance render, export + refine controls
-tests/            # 116 tests across validation, grounding, agent loop, render, HTTP
+tests/            # 118 tests across validation, grounding, agent loop, render, HTTP
 Dockerfile        # single-worker container; /healthz healthcheck
 ```
 

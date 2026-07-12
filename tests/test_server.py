@@ -331,6 +331,54 @@ def test_apply_fixes_rebuilds_protocol():
         srv._SESSIONS.pop(sid, None); srv._agent = None
 
 
+def test_resolve_auto_reviews_and_fixes_in_pipeline():
+    # AUTO_REVIEW is on by default: /api/resolve emits, then audits + fixes behind the scenes
+    assert _config.AUTO_REVIEW is True
+    proto = {"title": "Draft", "summary": "s", "estimated_duration": "1 h",
+             "materials": [], "steps": [], "assumptions_log": []}
+    review = {"verdict": "issues_found", "summary": "s", "findings": [
+        {"severity": "major", "category": "missing_detail", "problem": "no vol", "fix": "specify 20 uL"}]}
+    fixed = {"title": "Corrected", "summary": "s", "estimated_duration": "1 h",
+             "materials": [], "steps": [], "assumptions_log": []}
+    _install_agent([_tool_msg("emit_protocol", proto, "e1"),
+                    _tool_msg("emit_correctness_review", review, "cr1"),
+                    _tool_msg("emit_protocol", fixed, "e2")])
+    sid = "autorev"
+    srv._SESSIONS[sid] = srv.Store(
+        session=Session(source_kind="paper", request_tool_use_id="c1",
+                        messages=[{"role": "user", "content": "seed"}]),
+        created=_time.time())
+    try:
+        r = client.post("/api/resolve", json={"session_id": sid, "answers": []})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["auto_review"] is True and body["fixes_applied"] == 1
+        assert body["protocol"]["title"] == "Corrected"  # already-corrected protocol delivered
+        assert body["correctness_review"]["findings"][0]["category"] == "missing_detail"
+    finally:
+        srv._SESSIONS.pop(sid, None); srv._agent = None
+
+
+def test_resolve_auto_review_can_be_disabled():
+    proto = {"title": "Draft", "summary": "s", "estimated_duration": "1 h",
+             "materials": [], "steps": [], "assumptions_log": []}
+    _install_agent([_tool_msg("emit_protocol", proto, "e1")])  # only the emit — no audit call
+    _config.AUTO_REVIEW = False
+    sid = "noauto"
+    srv._SESSIONS[sid] = srv.Store(
+        session=Session(source_kind="paper", request_tool_use_id="c1",
+                        messages=[{"role": "user", "content": "seed"}]),
+        created=_time.time())
+    try:
+        r = client.post("/api/resolve", json={"session_id": sid, "answers": []})
+        assert r.status_code == 200
+        body = r.json()
+        assert "auto_review" not in body and body["protocol"]["title"] == "Draft"
+    finally:
+        _config.AUTO_REVIEW = True
+        srv._SESSIONS.pop(sid, None); srv._agent = None
+
+
 def test_critique_apply_audits_and_rebuilds_in_one_step():
     review = {"verdict": "issues_found", "summary": "s", "findings": [
         {"severity": "major", "category": "missing_detail", "problem": "no volume", "fix": "specify 20 uL"}]}

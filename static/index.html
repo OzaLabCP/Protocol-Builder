@@ -437,6 +437,8 @@ function renderResult(r) {
   CSV_URL = r.materials_csv_url || null;
   GLOG = r.grounding_log || [];
   renderProtocol(r.protocol);
+  // The audit runs in the pipeline; if this result carries one, show what it caught/fixed.
+  if (r.correctness_review) renderCritique(r.correctness_review, !!r.auto_review && (r.fixes_applied || 0) > 0, r.fixes_applied || 0);
 }
 
 function renderQuestions(p1) {
@@ -695,8 +697,8 @@ function toolbar() {
   dr.title = "Reason about the experiment around this protocol: controls, variables, readout, replication, pitfalls.";
   dr.onclick = () => requestDesign(dr);
   bar.appendChild(dr);
-  const cr = el("button", "btn", "🔍 Review & fix");
-  cr.title = "Adversarial audit of correctness AND practicality (logic, values, units, ordering, missing controls, missing detail, impractical steps) — then auto-applies the fixes and rebuilds a corrected protocol. Model-generated; findings ranked by severity.";
+  const cr = el("button", "btn", "🔍 Re-review & fix");
+  cr.title = "The correctness + practicality audit already ran automatically when this protocol was generated. Click to run it again (e.g. after a manual refine): it re-audits and auto-applies any new fixes. Model-generated; findings ranked by severity.";
   cr.onclick = () => requestCritique(cr);
   bar.appendChild(cr);
   const al = el("button", "btn", HYP ? "🎯 Test my hypothesis" : "🎯 Test a hypothesis");
@@ -710,7 +712,7 @@ function toolbar() {
   bar.appendChild(pr);
   wrap.appendChild(bar);
   wrap.appendChild(el("p", "hint noprint",
-    "New to designing this? Start with <b>Design review</b> to sanity-check the experiment, run <b>Review & fix</b> to catch and correct logic/value/ordering and practicality issues, then <b>Test a hypothesis</b> to confirm it's directly tested."));
+    "A correctness &amp; practicality audit already ran automatically and any fixes were applied (shown above). Use <b>Design review</b> to reason about the experiment, <b>Re-review &amp; fix</b> to re-audit after edits, and <b>Test a hypothesis</b> to confirm it's directly tested."));
   return wrap;
 }
 
@@ -726,11 +728,11 @@ async function requestDesign(btn) {
 
 async function requestCritique(btn) {
   btn.disabled = true;
-  setStatus("Auditing correctness & practicality, then applying fixes… (this can take a couple of minutes)");
+  setStatus("Re-auditing correctness & practicality, then applying any fixes… (this can take a couple of minutes)");
   try {
     const r = await postJSON("/api/critique", { session_id: SESSION, apply: true });
-    renderCritique(r.correctness_review, r.applied, r.fixes_applied || 0);
-    if (r.applied && r.protocol) renderResult(r);  // corrected protocol + diff below
+    if (r.applied && r.protocol) renderResult(r);  // renderResult also renders the audit
+    else renderCritique(r.correctness_review, false, 0);  // sound / nothing to apply
     setStatus("");
   } catch (e) { setStatus(e.message, true); }
   btn.disabled = false;
