@@ -24,9 +24,9 @@ class FakeLLM:
         self.queue = list(queue)
         self.calls = []
 
-    def chat(self, messages, tools=None, tool_choice=None, model=None):
+    def chat(self, messages, tools=None, tool_choice=None, model=None, effort=None):
         self.calls.append({"messages": messages, "tools": tools,
-                           "tool_choice": tool_choice, "model": model})
+                           "tool_choice": tool_choice, "model": model, "effort": effort})
         return self.queue.pop(0)
 
 
@@ -361,15 +361,19 @@ def test_fast_tier_used_for_analyze_main_for_emit():
     agent = GapFillerAgent(client=FakeLLM([
         tool_msg(("request_clarifications", {"usable": True, "gaps": []}, "c1"))]),
         model="main-x", model_fast="fast-x")
+    agent.effort, agent.effort_fast = "high", "low"
     literature.search_pubmed = lambda q, retmax=5: []
     agent.analyze("A methods section describing a CFPS reaction at 30 C for 4 h.")
     assert agent.client.calls[0]["model"] == "fast-x"  # analyze on the fast tier
+    assert agent.client.calls[0]["effort"] == "low"    # and low reasoning effort
 
     agent2 = GapFillerAgent(client=FakeLLM([tool_msg(("emit_protocol", PROTO, "e1"))]),
                             model="main-x", model_fast="fast-x")
+    agent2.effort, agent2.effort_fast = "high", "low"
     sess = Session(messages=[{"role": "user", "content": "seed"}], request_tool_use_id="c1")
     agent2.continue_with_answers(sess, answers=[])
-    assert agent2.client.calls[-1]["model"] == "main-x"  # emit on the main tier
+    assert agent2.client.calls[-1]["model"] == "main-x"   # emit on the main tier
+    assert agent2.client.calls[-1]["effort"] == "high"    # and full reasoning effort
 
 
 def test_forces_terminal_when_no_grounding_tools():

@@ -98,7 +98,8 @@ liveness, the model, and which grounding sources are enabled. Sessions expire af
 | `LLM_MODEL` | provider default | Model id/slug — must support tool calling. Defaults: `anthropic/claude-opus-4-8` (openrouter) · `claude-opus-4-8` (anthropic). (Alias: `OPENROUTER_MODEL`.) |
 | `LLM_MODEL_FAST` | = `LLM_MODEL` | Cheaper/faster model for the light phases (clarifications, assay discovery); the heavy emit stays on `LLM_MODEL`. Spend the top tier only where it earns it. |
 | `LLM_BASE_URL` | provider default | Override the endpoint (e.g. a self-hosted compatible gateway). (Alias: `OPENROUTER_BASE_URL`.) |
-| `GAPFILLER_REASONING_EFFORT` | `high` | Passed as `reasoning.effort` to models that support it; `""` to omit. |
+| `GAPFILLER_REASONING_EFFORT` | `high` | `reasoning.effort` for the **heavy** phases (emit, reviews, fixes) on models that support it; `""` to omit. |
+| `GAPFILLER_REASONING_EFFORT_FAST` | `low` | `reasoning.effort` for the **light** phases (clarifications, assay discovery) — spend thinking tokens only where they add value; `""` to omit reasoning there. |
 | `GAPFILLER_SEND_REASONING` | on for `openrouter` | Whether to send the OpenRouter-only `reasoning` field; auto-off for other providers. Set `1`/`0` to force. |
 | `GAPFILLER_AUTO_REVIEW` | `1` (on) | Run the adversarial correctness + practicality audit and auto-apply its fixes as part of every generation, so the user receives an already-corrected protocol. Adds ~2 model calls per run; set `0` to make it the manual "Re-review & fix" button instead. |
 | `GAPFILLER_PROMPT_CACHE` | on for `openrouter` | Cache the stable prefix (system prompt + source text) so multi-phase runs re-read it instead of re-billing it. Big input saving, identical output. Off by default for non-OpenRouter providers whose compat endpoint may not honor `cache_control`. |
@@ -135,7 +136,7 @@ app/
   render.py       # protocol -> Markdown export
   server.py       # FastAPI endpoints (analyze/resolve/revise/export) + sessions
 static/index.html # paste/PDF UI, provenance render, export + refine controls
-tests/            # 118 tests across validation, grounding, agent loop, render, HTTP
+tests/            # 119 tests across validation, grounding, agent loop, render, HTTP
 Dockerfile        # single-worker container; /healthz healthcheck
 ```
 

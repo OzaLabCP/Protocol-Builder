@@ -244,6 +244,10 @@ class GapFillerAgent:
         # Fast tier for the light phases (analyze/clarifications, discovery); falls back
         # to the main model when unset. The heavy emit always uses the main model.
         self.model_fast = model_fast or config.MODEL_FAST or self.model
+        # Reasoning effort: full on the heavy phases, lower on the light ones — spend
+        # expensive thinking tokens only where they add value.
+        self.effort = config.REASONING_EFFORT          # heavy phases (None -> this default)
+        self.effort_fast = config.REASONING_EFFORT_FAST  # light phases
         self.system_prompt = SYSTEM_PROMPT      # full — design review/alignment, fallback
         self.system_ask = SYSTEM_ASK            # phase 1 (clarifications): no emit rules
         self.system_emit = SYSTEM_EMIT          # phase 3 (emit): no asking rules
@@ -281,7 +285,7 @@ class GapFillerAgent:
     # -- one terminal-seeking run -----------------------------------------------
     def _run(self, messages: list, tools: list, terminal_name: str, state: RunState,
              system: Optional[str] = None, force_terminal: bool = False,
-             model: Optional[str] = None) -> Optional[_ToolCall]:
+             model: Optional[str] = None, effort: Optional[str] = None) -> Optional[_ToolCall]:
         """Loop until the model calls `terminal_name`, executing client tools in
         between. Returns the terminal call (parsed), or None if the model ended with
         plain text. `system` overrides the default prompt; `model` overrides the tier;
@@ -305,6 +309,7 @@ class GapFillerAgent:
                 tools=openai_tools,
                 tool_choice=tool_choice,
                 model=model or self.model,
+                effort=effort,
             )
             try:
                 choice = resp["choices"][0]
@@ -440,7 +445,7 @@ class GapFillerAgent:
         session.messages.append({"role": "user", "content": _cache_text(hyp_preamble + body)})
         tools = _grounding_tools() + [REQUEST_CLARIFICATIONS_TOOL]
         block = self._run(session.messages, tools, "request_clarifications", state,
-                          system=self.system_ask, model=self.model_fast)
+                          system=self.system_ask, model=self.model_fast, effort=self.effort_fast)
         if block is None:
             raise AgentError("Phase 1 ended without calling request_clarifications.")
         session.request_tool_use_id = block.id
@@ -473,7 +478,7 @@ class GapFillerAgent:
 
         tools = _grounding_tools() + [EMIT_ASSAY_OPTIONS_TOOL]
         block = self._run(session.messages, tools, "emit_assay_options", state,
-                          system=self.discovery_prompt, model=self.model_fast)
+                          system=self.discovery_prompt, model=self.model_fast, effort=self.effort_fast)
         if block is None:
             raise AgentError("Discovery ended without calling emit_assay_options.")
         session.assay_options = dict(block.input)
@@ -497,7 +502,8 @@ class GapFillerAgent:
         )
         phase1 = self._followup(session, brief, "request_clarifications",
                                 REQUEST_CLARIFICATIONS_TOOL,
-                                system=self.system_ask, model=self.model_fast)
+                                system=self.system_ask, model=self.model_fast,
+                                effort=self.effort_fast)
         session.request_tool_use_id = session.pending_tool_use_id
         session.pending_tool_use_id = None
         session.phase1 = phase1
@@ -518,7 +524,7 @@ class GapFillerAgent:
 
         tools = _grounding_tools() + [EMIT_PROTOCOL_TOOL]
         block = self._run(session.messages, tools, "emit_protocol", state,
-                          system=self.system_emit, model=self.model)
+                          system=self.system_emit, model=self.model, effort=self.effort)
         if block is not None:
             session.pending_tool_use_id = block.id
             return dict(block.input)
@@ -529,7 +535,8 @@ class GapFillerAgent:
              "with the finalized, provenance-tagged protocol."}
         )
         block = self._run(session.messages, [EMIT_PROTOCOL_TOOL], "emit_protocol", state,
-                          system=self.system_emit, force_terminal=True, model=self.model)
+                          system=self.system_emit, force_terminal=True, model=self.model,
+                          effort=self.effort)
         if block is None:
             raise AgentError("Phase 3 ended without calling emit_protocol.")
         session.pending_tool_use_id = block.id
@@ -538,7 +545,7 @@ class GapFillerAgent:
     # -- Continue after an emit (ack the pending tool call) ---------------------
     def _followup(self, session: Session, instruction: str, terminal: str, tool: dict,
                   compact: bool = False, system: Optional[str] = None,
-                  model: Optional[str] = None) -> dict:
+                  model: Optional[str] = None, effort: Optional[str] = None) -> dict:
         """Ack the last emit (answer its dangling tool call), append an instruction, and
         run to a new terminal tool. Shared by revise/design_review/design_alignment and
         choose_assay — answering whatever call is pending lets these interleave freely.
@@ -555,7 +562,7 @@ class GapFillerAgent:
         session.messages.append({"role": "user", "content": instruction})
         session.pending_tool_use_id = None
         block = self._run(session.messages, _grounding_tools() + [tool], terminal, state,
-                          system=system, model=model)
+                          system=system, model=model, effort=effort)
         if block is None:
             raise AgentError(f"Model ended without calling {terminal}.")
         session.pending_tool_use_id = block.id
@@ -574,6 +581,7 @@ class GapFillerAgent:
             compact=True,
             system=self.system_emit,
             model=self.model,
+            effort=self.effort,
         )
 
     # -- Design review (teach the experiment around the protocol) ---------------
@@ -633,4 +641,5 @@ class GapFillerAgent:
             "corrections in the relevant provenance_note / open_questions.\n\n" + "\n".join(lines)
         )
         return self._followup(session, instruction, "emit_protocol", EMIT_PROTOCOL_TOOL,
-                              compact=True, system=self.system_emit, model=self.model)
+                              compact=True, system=self.system_emit, model=self.model,
+                              effort=self.effort)

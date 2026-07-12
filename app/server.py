@@ -230,6 +230,7 @@ def healthz(request: Request) -> dict:
         "model_fast": config.MODEL_FAST or config.MODEL,
         "api_key_set": bool(config.OPENROUTER_API_KEY),
         "prompt_cache": config.PROMPT_CACHE,
+        "reasoning_effort": {"heavy": config.REASONING_EFFORT, "light": config.REASONING_EFFORT_FAST},
         "auto_review": config.AUTO_REVIEW,
         "auth_required": auth_required,
         "grounding": {

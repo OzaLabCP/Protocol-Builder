@@ -63,9 +63,12 @@ OPENROUTER_TITLE = os.environ.get("OPENROUTER_TITLE", "Methods Gap-Filler")
 MAX_TOKENS = int(os.environ.get("GAPFILLER_MAX_TOKENS", "16000"))
 # Per-request HTTP timeout (seconds). Reasoning models can take a while.
 REQUEST_TIMEOUT = float(os.environ.get("GAPFILLER_REQUEST_TIMEOUT", "600"))
-# Reasoning effort, passed as OpenRouter's `reasoning.effort` for models that support
-# it (ignored otherwise). Set to "" to omit the field entirely.
+# Reasoning effort for the heavy phases (protocol emit, reviews, fixes), passed as
+# OpenRouter's `reasoning.effort` for models that support it (ignored otherwise). "" omits it.
 REASONING_EFFORT = os.environ.get("GAPFILLER_REASONING_EFFORT", "high")
+# Lower effort for the light phases (clarifications, assay discovery) — spend expensive
+# thinking tokens only where they add value. "" omits reasoning entirely for those phases.
+REASONING_EFFORT_FAST = os.environ.get("GAPFILLER_REASONING_EFFORT_FAST", "low")
 # `reasoning.effort` is an OpenRouter extension; other providers' compat endpoints (e.g.
 # Anthropic's) can reject an unknown field, so only send it on OpenRouter by default.
 # Override with GAPFILLER_SEND_REASONING=1/0 if your gateway differs.

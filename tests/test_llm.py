@@ -96,6 +96,16 @@ def test_inline_error_object_raises():
         assert "error" in str(e).lower()
 
 
+def test_effort_override_per_call():
+    # explicit effort overrides the global; "" omits reasoning for that call
+    c = _client(_Resp(200, {"choices": [{"message": {"role": "assistant", "content": "ok"}}]}))
+    if config.SEND_REASONING:
+        c.chat(messages=[{"role": "user", "content": "hi"}], effort="low")
+        assert c._client.last["json"]["reasoning"] == {"effort": "low"}
+        c.chat(messages=[{"role": "user", "content": "hi"}], effort="")
+        assert "reasoning" not in c._client.last["json"]  # empty effort -> omitted
+
+
 def test_reasoning_omitted_when_provider_disables_it():
     # e.g. Anthropic-direct: the OpenRouter-only reasoning field must not be sent.
     orig = config.SEND_REASONING
