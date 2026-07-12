@@ -695,8 +695,8 @@ function toolbar() {
   dr.title = "Reason about the experiment around this protocol: controls, variables, readout, replication, pitfalls.";
   dr.onclick = () => requestDesign(dr);
   bar.appendChild(dr);
-  const cr = el("button", "btn", "🔍 Correctness review");
-  cr.title = "Adversarial audit: attack the protocol for logic, value, unit/scaling, ordering, and missing-control errors. Model-generated, findings ranked by severity.";
+  const cr = el("button", "btn", "🔍 Review & fix");
+  cr.title = "Adversarial audit of correctness AND practicality (logic, values, units, ordering, missing controls, missing detail, impractical steps) — then auto-applies the fixes and rebuilds a corrected protocol. Model-generated; findings ranked by severity.";
   cr.onclick = () => requestCritique(cr);
   bar.appendChild(cr);
   const al = el("button", "btn", HYP ? "🎯 Test my hypothesis" : "🎯 Test a hypothesis");
@@ -710,7 +710,7 @@ function toolbar() {
   bar.appendChild(pr);
   wrap.appendChild(bar);
   wrap.appendChild(el("p", "hint noprint",
-    "New to designing this? Start with <b>Design review</b> to sanity-check the experiment, run <b>Correctness review</b> to catch logic/value/ordering errors, then <b>Test a hypothesis</b> to confirm it's directly tested."));
+    "New to designing this? Start with <b>Design review</b> to sanity-check the experiment, run <b>Review & fix</b> to catch and correct logic/value/ordering and practicality issues, then <b>Test a hypothesis</b> to confirm it's directly tested."));
   return wrap;
 }
 
@@ -725,10 +725,12 @@ async function requestDesign(btn) {
 }
 
 async function requestCritique(btn) {
-  btn.disabled = true; setStatus("Running an adversarial correctness review… (this can take a minute)");
+  btn.disabled = true;
+  setStatus("Auditing correctness & practicality, then applying fixes… (this can take a couple of minutes)");
   try {
-    const r = await postJSON("/api/critique", { session_id: SESSION });
-    renderCritique(r.correctness_review);
+    const r = await postJSON("/api/critique", { session_id: SESSION, apply: true });
+    renderCritique(r.correctness_review, r.applied, r.fixes_applied || 0);
+    if (r.applied && r.protocol) renderResult(r);  // corrected protocol + diff below
     setStatus("");
   } catch (e) { setStatus(e.message, true); }
   btn.disabled = false;
@@ -745,58 +747,34 @@ const _VERDICT_META = {
   serious_issues: '<span class="badge-warn">🛑 Serious issues</span>',
 };
 
-function renderCritique(r) {
+function renderCritique(r, applied, count) {
   r = r || {};
   const host = $("#critique-anchor");
   host.innerHTML = "";
   const box = el("div", "design");
-  box.appendChild(el("h2", null, "🔍 Correctness review (adversarial)"));
-  box.appendChild(el("p", "muted small", "A skeptical audit for logic, value, unit/scaling, ordering, and missing-control errors. This is <b>model-generated reasoning, not a host-verified guarantee</b> — only cited evidence is checked against a database."));
+  box.appendChild(el("h2", null, "🔍 Correctness & practicality review (adversarial)"));
+  box.appendChild(el("p", "muted small", "A skeptical audit for logic, value, unit/scaling, ordering, and missing-control errors <b>and</b> for practicality — missing detail, unclear steps, impractical logistics. This is <b>model-generated reasoning, not a host-verified guarantee</b>; only cited evidence is checked against a database."));
   box.appendChild(el("p", null, _VERDICT_META[r.verdict] || esc(r.verdict || "")));
   if (r.summary) box.appendChild(el("p", null, esc(r.summary)));
+  if (applied && count) {
+    box.appendChild(el("p", "badge-ok", `🛠 ${count} fix${count > 1 ? "es" : ""} applied — corrected protocol below. Re-run the review to confirm they hold.`));
+  }
 
   const findings = (r.findings || []).filter((f) => f && typeof f === "object");
-  const fixable = findings.filter((f) => (f.fix || "").trim());
   if (findings.length) {
-    if (fixable.length) {
-      const applyAll = el("button", "btn apply noprint", `🛠 Apply ${fixable.length} fix${fixable.length > 1 ? "es" : ""} & rebuild`);
-      applyAll.title = "Feed every fix back in and regenerate a corrected protocol.";
-      applyAll.onclick = async () => {
-        applyAll.disabled = true; setStatus("Applying the fixes and rebuilding the protocol… (this can take a minute)");
-        try {
-          const r2 = await postJSON("/api/apply_fixes", { session_id: SESSION });
-          applyAll.textContent = "✓ Fixes applied — corrected protocol below";
-          renderResult(r2);
-          setStatus("");
-        } catch (e) { setStatus(e.message, true); applyAll.disabled = false; }
-      };
-      box.appendChild(applyAll);
-      box.appendChild(el("p", "muted small noprint", "Applies all fixes at once. Re-run <b>Correctness review</b> afterward to confirm they're resolved. Or apply individually below."));
-    }
     findings.forEach((f) => {
       const meta = _SEV_META[f.severity] || { label: esc(f.severity || ""), cls: "" };
       const card = el("div", "finding " + meta.cls);
-      const head = [meta.label, f.location ? esc(f.location) : "", f.category ? `<span class="muted small">(${esc(f.category)})</span>` : ""].filter(Boolean).join(" — ");
+      const fixedTag = applied && (f.fix || "").trim() ? ' <span class="badge-ok">✓ fixed</span>' : "";
+      const head = [meta.label, f.location ? esc(f.location) : "", f.category ? `<span class="muted small">(${esc(f.category)})</span>` : ""].filter(Boolean).join(" — ") + fixedTag;
       card.appendChild(el("div", "finding-head", head));
       card.appendChild(el("p", null, `<b>Problem.</b> ${esc(f.problem || "")}`));
       card.appendChild(el("p", null, `<b>Fix.</b> ${esc(f.fix || "")}`));
       if (f.citation) card.appendChild(el("p", "muted small", "Evidence: " + esc(f.citation.identifier || "") + (f.citation_verified ? " ✓" : "")));
-      if ((f.fix || "").trim()) {
-        const one = el("button", "btn apply noprint", "Apply this fix");
-        one.onclick = async () => {
-          one.disabled = true; setStatus("Applying the fix and rebuilding the protocol…");
-          try {
-            const r2 = await postJSON("/api/revise", { session_id: SESSION, instruction: f.fix });
-            card.classList.add("applied"); one.textContent = "✓ Applied — protocol rebuilt below";
-            renderResult(r2); setStatus("");
-          } catch (e) { setStatus(e.message, true); one.disabled = false; }
-        };
-        card.appendChild(one);
-      }
       box.appendChild(card);
     });
   } else {
-    box.appendChild(el("p", "muted", "No correctness defects found in this audit."));
+    box.appendChild(el("p", "muted", "No correctness or practicality defects found in this audit."));
   }
 
   if ((r.strengths || []).length) {

@@ -799,10 +799,10 @@ EMIT_PROTOCOL_TOOL = {
 EMIT_CORRECTNESS_REVIEW_TOOL = {
     "name": "emit_correctness_review",
     "description": (
-        "Report an adversarial CORRECTNESS audit of the emitted protocol: the specific "
-        "things that would make the experiment fail, produce wrong or uninterpretable "
-        "results, or be impossible to execute as written. Findings only — this is a "
-        "skeptical review, not a rewrite."
+        "Report an adversarial CORRECTNESS AND PRACTICALITY audit of the emitted protocol: "
+        "the specific things that would make the experiment fail, give wrong/uninterpretable "
+        "results, OR make it hard to actually run at the bench (missing detail, unclear "
+        "steps, impractical logistics). Findings only — a skeptical review, not a rewrite."
     ),
     "input_schema": {
         "type": "object",
@@ -831,7 +831,8 @@ EMIT_CORRECTNESS_REVIEW_TOOL = {
                             "type": "string",
                             "enum": ["missing_control", "implausible_value", "unit_or_scaling",
                                      "ordering", "logic", "internal_contradiction",
-                                     "ambiguous_instruction", "readout_mismatch", "safety", "other"],
+                                     "ambiguous_instruction", "readout_mismatch", "safety",
+                                     "missing_detail", "impractical", "other"],
                         },
                         "location": {"type": "string",
                                      "description": "The exact step/material/parameter at fault."},

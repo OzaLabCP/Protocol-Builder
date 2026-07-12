@@ -69,12 +69,12 @@ it** ("use 150 µL wells and drop to 2 replicates") to rebuild with full context
 Every value is also flagged inline for how to *read* it: 🎛 **flexible** (has latitude,
 with the range) versus load-bearing, and 👤 **needs your input** (a decision that still
 depends on your setup and wasn't already clarified). Three review follow-ups sit next to
-the protocol: **Design review** (the experiment around it), **Correctness review** (an
-adversarial audit that attacks the protocol for logic/value/unit/ordering/missing-control
-errors, ranked by severity — clearly labeled model-generated, with any cited evidence
-host-verified, and a one-click **Apply fixes & rebuild** that feeds the fixes back in and
-regenerates a corrected protocol), and **Test a hypothesis** (does it directly test your
-hypothesis).
+the protocol: **Design review** (the experiment around it), **Review & fix** (an adversarial
+audit of both **correctness** — logic/value/unit/ordering/missing-control errors — and
+**practicality** — missing detail, unclear or impractical steps; ranked by severity, clearly
+labeled model-generated with any cited evidence host-verified, and in **one step** it applies
+the fixes and hands back a corrected protocol with a diff), and **Test a hypothesis** (does it
+directly test your hypothesis).
 
 ### Deploy (Docker)
 
@@ -133,7 +133,7 @@ app/
   render.py       # protocol -> Markdown export
   server.py       # FastAPI endpoints (analyze/resolve/revise/export) + sessions
 static/index.html # paste/PDF UI, provenance render, export + refine controls
-tests/            # 114 tests across validation, grounding, agent loop, render, HTTP
+tests/            # 116 tests across validation, grounding, agent loop, render, HTTP
 Dockerfile        # single-worker container; /healthz healthcheck
 ```
 
@@ -147,8 +147,8 @@ Dockerfile        # single-worker container; /healthz healthcheck
 | `POST` | `/api/resolve` | Phase 2 + 3 + validation |
 | `POST` | `/api/revise` | apply a correction and re-emit |
 | `POST` | `/api/design` | experiment-design review (controls, variables, readout, replication) |
-| `POST` | `/api/critique` | adversarial correctness review (logic/value/ordering/control errors) |
-| `POST` | `/api/apply_fixes` | apply the correctness review's fixes and rebuild the protocol |
+| `POST` | `/api/critique` | adversarial correctness + practicality audit; `apply:true` also fixes and rebuilds in one step |
+| `POST` | `/api/apply_fixes` | (granular) apply a prior review's fixes and rebuild the protocol |
 | `POST` | `/api/align` | does the protocol directly test the hypothesis? |
 | `GET` | `/api/protocol/{id}.md` | download the protocol as Markdown |
 

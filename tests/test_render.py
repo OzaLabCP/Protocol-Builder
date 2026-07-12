@@ -244,7 +244,7 @@ def test_correctness_review_render():
                        "citation": {"identifier": "12345678"}, "citation_verified": True}],
          "strengths": ["good controls"]}
     md = correctness_review_to_markdown(r)
-    assert "Correctness review" in md and "Model-generated" in md
+    assert "Correctness & practicality review" in md and "Model-generated" in md
     assert "🛑 Serious issues" in md and "🔴 Critical" in md
     assert "enzyme before buffer" in md and "add buffer first" in md
     assert "12345678 ✓" in md and "good controls" in md

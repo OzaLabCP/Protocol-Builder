@@ -331,6 +331,49 @@ def test_apply_fixes_rebuilds_protocol():
         srv._SESSIONS.pop(sid, None); srv._agent = None
 
 
+def test_critique_apply_audits_and_rebuilds_in_one_step():
+    review = {"verdict": "issues_found", "summary": "s", "findings": [
+        {"severity": "major", "category": "missing_detail", "problem": "no volume", "fix": "specify 20 uL"}]}
+    proto = {"title": "Fixed", "summary": "s", "estimated_duration": "1 h",
+             "materials": [], "steps": [], "assumptions_log": []}
+    _install_agent([_tool_msg("emit_correctness_review", review, "cr1"),
+                    _tool_msg("emit_protocol", proto, "e2")])
+    sid = "revfix"
+    srv._SESSIONS[sid] = srv.Store(
+        session=Session(source_kind="paper", pending_tool_use_id="e1",
+                        messages=[{"role": "user", "content": "seed"}]),
+        created=_time.time(), protocol={"title": "Old"})
+    try:
+        r = client.post("/api/critique", json={"session_id": sid, "apply": True})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["applied"] is True and body["fixes_applied"] == 1
+        assert body["protocol"]["title"] == "Fixed"  # corrected protocol returned
+        assert body["correctness_review"]["findings"][0]["category"] == "missing_detail"
+        assert srv._SESSIONS[sid].correctness_review is None  # stale review cleared
+    finally:
+        srv._SESSIONS.pop(sid, None); srv._agent = None
+
+
+def test_critique_review_only_when_apply_false():
+    review = {"verdict": "issues_found", "summary": "s", "findings": [
+        {"severity": "minor", "category": "logic", "problem": "p", "fix": "f"}]}
+    _install_agent([_tool_msg("emit_correctness_review", review, "cr1")])
+    sid = "revonly"
+    srv._SESSIONS[sid] = srv.Store(
+        session=Session(source_kind="paper", pending_tool_use_id="e1",
+                        messages=[{"role": "user", "content": "seed"}]),
+        created=_time.time(), protocol={"title": "Old"})
+    try:
+        r = client.post("/api/critique", json={"session_id": sid})  # apply defaults False
+        assert r.status_code == 200
+        body = r.json()
+        assert body["applied"] is False and "protocol" not in body
+        assert srv._SESSIONS[sid].correctness_review is not None  # stored for a later apply
+    finally:
+        srv._SESSIONS.pop(sid, None); srv._agent = None
+
+
 def test_discover_rejected_flow_returns_rejected():
     _install_agent([_tool_msg("emit_assay_options", {"usable": False, "reason": "not testable"}, "a1")])
     try:

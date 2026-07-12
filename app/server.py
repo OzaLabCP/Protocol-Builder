@@ -188,6 +188,11 @@ class DesignRequest(BaseModel):
     session_id: str
 
 
+class CritiqueRequest(BaseModel):
+    session_id: str
+    apply: bool = False  # True: audit, then auto-apply the fixes and return the rebuilt protocol
+
+
 class AlignRequest(BaseModel):
     session_id: str
     hypothesis: Optional[str] = None
@@ -324,7 +329,7 @@ def design(req: DesignRequest) -> dict:
 
 
 @app.post("/api/critique", dependencies=_MUTATING)
-def critique(req: DesignRequest) -> dict:
+def critique(req: CritiqueRequest) -> dict:
     store = _get(req.session_id)
     if store.protocol is None:
         raise HTTPException(409, "Generate a protocol first, then run a correctness review.")
@@ -336,8 +341,25 @@ def critique(req: DesignRequest) -> dict:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(500, _explain(exc))
     report = validate_correctness_review(review)
+    findings = review.get("findings") or []
+    fixable = [f for f in findings if isinstance(f, dict) and f.get("fix")]
+
+    # One-step mode: audit AND apply, returning the findings + the corrected protocol.
+    if req.apply and fixable:
+        try:
+            protocol = agent.apply_correctness_fixes(store.session, findings)
+        except AgentError as exc:
+            raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(500, _explain(exc))
+        result = _finish(req.session_id, store, protocol)  # validates + replaces + returns
+        store.correctness_review = None  # the review is stale against the rebuilt protocol
+        return {**result, "correctness_review": review, "review_validation_report": report,
+                "applied": True, "fixes_applied": len(fixable)}
+
     store.correctness_review = review
-    return {"session_id": req.session_id, "correctness_review": review, "validation_report": report}
+    return {"session_id": req.session_id, "correctness_review": review,
+            "validation_report": report, "applied": False}
 
 
 @app.post("/api/apply_fixes", dependencies=_MUTATING)

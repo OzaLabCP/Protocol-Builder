@@ -358,10 +358,11 @@ _CORRECTNESS_SEV = {"critical": "🔴 Critical", "major": "🟠 Major", "minor":
 
 
 def correctness_review_to_markdown(r: dict) -> str:
-    out: list[str] = ["# Correctness review (adversarial)\n"]
+    out: list[str] = ["# Correctness & practicality review (adversarial)\n"]
     out.append("_Model-generated audit — a skeptical pass for logic, value, ordering, and "
-               "control errors. This is reasoning, not a host-verified guarantee; only the "
-               "cited evidence below is checked against a database._\n")
+               "control errors, and for practicality (missing detail, unclear or impractical "
+               "steps). This is reasoning, not a host-verified guarantee; only the cited "
+               "evidence below is checked against a database._\n")
     out.append(f"**Verdict:** {_CORRECTNESS_VERDICT.get(r.get('verdict'), r.get('verdict', ''))}")
     if r.get("summary"):
         out.append(f"> {r['summary']}")

@@ -92,10 +92,24 @@ Check specifically for:
 - READOUT MISMATCH — the measurement does not actually capture the stated outcome/hypothesis.
 - SAFETY issues.
 
+Also audit PRACTICALITY — a correct protocol is worthless if a bench scientist cannot
+actually run it. Flag anything that hurts executability, and make the fix improve how
+runnable the protocol is (not just whether it is correct):
+- MISSING_DETAIL — a quantity, time, temperature, speed/g-force, pH, concentration, or
+  volume a competent researcher needs but that is absent or vague; unspecified reagent
+  preparation (how to make a stock/buffer); no per-well worklist for a titration/series.
+- IMPRACTICAL — logistics that are hard or impossible as written: steps requiring
+  impossible simultaneity, unrealistic timing or hands-on load, an implied piece of
+  equipment not listed, dead-volume/pipetting infeasibility, no stopping/hold points for a
+  long protocol, or transitions between steps that are unclear about what carries over.
+- AMBIGUOUS_INSTRUCTION — "as needed", "appropriate amount", "until done" and similar
+  language a researcher cannot execute deterministically.
+
 For each defect give: severity (critical = will fail or give wrong results; major = likely
-problem; minor = suboptimal), category, the exact location, the problem (why it breaks the
-experiment), and a concrete fix. Rank most-severe first. If a claim rests on a specific
-published value, cite it (DOI/PMID) — the host will verify it; never invent a citation.
+problem or a real barrier to running it; minor = suboptimal), category, the exact location,
+the problem (why it breaks or impedes the experiment), and a concrete fix that makes the
+protocol correct AND practical to run. Rank most-severe first. If a claim rests on a
+specific published value, cite it (DOI/PMID) — the host will verify it; never invent one.
 
 Do NOT nitpick wording, restate provenance the tool already tracks, or repeat the design
 review. If the protocol is genuinely sound, return verdict "sound" with an EMPTY findings
