@@ -17,9 +17,10 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
@@ -131,6 +132,25 @@ class Store:
     correctness_review: Optional[dict] = None
     assay_options: Optional[dict] = None
     chosen_assay: Optional[dict] = None
+    # Live activity feed for the current long op: [{seq, msg}], polled by the client.
+    progress: list = field(default_factory=list)
+    _plock: Any = field(default_factory=threading.Lock)
+
+    def start_progress(self) -> None:
+        """Clear the feed at the start of a new long op so the client (polling from 0)
+        sees only this op's steps."""
+        with self._plock:
+            self.progress = []
+
+    def note(self, msg: str) -> None:
+        """Append one activity line. Thread-safe: the op runs in Starlette's worker thread
+        while the client polls concurrently."""
+        with self._plock:
+            self.progress.append({"seq": len(self.progress) + 1, "msg": str(msg)})
+
+    def steps_after(self, seq: int) -> list:
+        with self._plock:
+            return [s for s in self.progress if s["seq"] > seq]
 
 
 _SESSIONS: dict[str, Store] = {}
@@ -294,6 +314,7 @@ def analyze(
 
 @app.post("/api/resolve", dependencies=_MUTATING)
 def resolve(req: ResolveRequest) -> dict:
+    _get(req.session_id).start_progress()  # fresh activity feed for this build
     return _resolve(req.session_id, [a.model_dump() for a in req.answers])
 
 
@@ -303,13 +324,16 @@ def revise(req: ReviseRequest) -> dict:
     if len(instruction) < 3:
         raise HTTPException(400, "Describe the correction you'd like.")
     store = _get(req.session_id)
+    store.start_progress()
+    store.note("Applying your correction and rebuilding the protocol…")
     agent = get_agent()
     try:
-        protocol = agent.revise(store.session, instruction)
+        protocol = agent.revise(store.session, instruction, progress=store.note)
     except AgentError as exc:
         raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(500, _explain(exc))
+    store.note("Done.")
     return _finish(req.session_id, store, protocol)
 
 
@@ -335,9 +359,11 @@ def critique(req: CritiqueRequest) -> dict:
     store = _get(req.session_id)
     if store.protocol is None:
         raise HTTPException(409, "Generate a protocol first, then run a correctness review.")
+    store.start_progress()
+    store.note("Auditing the protocol for correctness & practicality…")
     agent = get_agent()
     try:
-        review = agent.correctness_review(store.session)
+        review = agent.correctness_review(store.session, progress=store.note)
     except AgentError as exc:
         raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
     except Exception as exc:  # noqa: BLE001
@@ -348,8 +374,9 @@ def critique(req: CritiqueRequest) -> dict:
 
     # One-step mode: audit AND apply, returning the findings + the corrected protocol.
     if req.apply and fixable:
+        store.note(f"Applying {len(fixable)} fix(es) and rebuilding…")
         try:
-            protocol = agent.apply_correctness_fixes(store.session, findings)
+            protocol = agent.apply_correctness_fixes(store.session, findings, progress=store.note)
         except AgentError as exc:
             raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
         except Exception as exc:  # noqa: BLE001
@@ -373,9 +400,11 @@ def apply_fixes(req: DesignRequest) -> dict:
     findings = (store.correctness_review or {}).get("findings") or []
     if not any(isinstance(f, dict) and f.get("fix") for f in findings):
         raise HTTPException(409, "Run a correctness review that finds fixable issues first.")
+    store.start_progress()
+    store.note("Applying the review's fixes and rebuilding…")
     agent = get_agent()
     try:
-        protocol = agent.apply_correctness_fixes(store.session, findings)
+        protocol = agent.apply_correctness_fixes(store.session, findings, progress=store.note)
     except AgentError as exc:
         raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
     except Exception as exc:  # noqa: BLE001
@@ -444,14 +473,25 @@ def choose_assay(req: ChooseAssayRequest) -> dict:
     ids = [a.get("id") for a in opts.get("assays", [])]
     if req.assay_id not in ids:
         raise HTTPException(400, "Unknown assay for this session.")  # before any model call
+    store.start_progress()  # fresh activity feed for the build this kicks off
     return _choose(req.session_id, req.assay_id)
+
+
+@app.get("/api/progress/{session_id}", dependencies=_READONLY)
+def progress(session_id: str, after: int = 0) -> dict:
+    """Live activity feed for the in-flight long op on this session. Polled by the client
+    (concurrently with the blocking POST, which runs in a Starlette worker thread). Returns
+    only steps newer than `after`. Unknown/expired session -> empty (a poll shouldn't 404)."""
+    store = _SESSIONS.get(session_id)
+    return {"steps": store.steps_after(after) if store is not None else []}
 
 
 def _choose(session_id: str, assay_id: str) -> dict:
     store = _get(session_id)
     agent = get_agent()
+    store.note("Setting up the protocol for this assay…")
     try:
-        phase1 = agent.choose_assay(store.session, assay_id)
+        phase1 = agent.choose_assay(store.session, assay_id, progress=store.note)
     except AgentError as exc:
         raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
     except Exception as exc:  # noqa: BLE001
@@ -505,15 +545,18 @@ def download_materials_csv(session_id: str) -> PlainTextResponse:
 def _resolve(session_id: str, answers: list) -> dict:
     store = _get(session_id)
     agent = get_agent()
+    store.note("Drafting the protocol from your answers…")
     try:
-        protocol = agent.continue_with_answers(store.session, answers)
+        protocol = agent.continue_with_answers(store.session, answers, progress=store.note)
     except AgentError as exc:
         raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(500, _explain(exc))
+    store.note("Verifying citations and finalizing…")
     result = _finish(session_id, store, protocol)
     if config.AUTO_REVIEW:
         result = _auto_review(session_id, store, result)
+    store.note("Done.")
     return result
 
 
@@ -523,18 +566,21 @@ def _auto_review(session_id: str, store: Store, result: dict) -> dict:
     protocol with the findings attached (transparency). Never lets the audit break delivery —
     any failure falls back to the un-audited-but-valid protocol."""
     agent = get_agent()
+    store.note("Auditing the protocol for correctness & practicality…")
     try:
-        review = agent.correctness_review(store.session)
+        review = agent.correctness_review(store.session, progress=store.note)
         validate_correctness_review(review)
     except Exception as exc:  # noqa: BLE001 — audit is best-effort; never block the protocol
         _log.warning("auto-review skipped: %s", type(exc).__name__)
+        store.note("Audit skipped — delivering the protocol as drafted.")
         return result
     findings = review.get("findings") or []
     fixable = [f for f in findings if isinstance(f, dict) and f.get("fix")]
     applied = 0
     if fixable:
+        store.note(f"Audit found {len(fixable)} issue(s) — applying fixes…")
         try:
-            fixed = agent.apply_correctness_fixes(store.session, findings)
+            fixed = agent.apply_correctness_fixes(store.session, findings, progress=store.note)
             result = _finish(session_id, store, fixed)  # re-validate + replace with corrected
             applied = len(fixable)
             store.correctness_review = None  # applied — stale against the corrected protocol
@@ -542,6 +588,7 @@ def _auto_review(session_id: str, store: Store, result: dict) -> dict:
             _log.warning("auto-fix skipped: %s", type(exc).__name__)
             store.correctness_review = review  # keep for a manual apply
     else:
+        store.note("Audit found no fixable issues — the draft holds.")
         store.correctness_review = review
     return {**result, "correctness_review": review, "auto_review": True, "fixes_applied": applied}
 

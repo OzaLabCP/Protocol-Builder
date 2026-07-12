@@ -191,5 +191,9 @@ Dockerfile        # single-worker container; /healthz healthcheck
   the heavy emit + reviews + fixes keep the strong one (Opus) — spending the top tier only where
   the reasoning earns it. Override either side with `LLM_MODEL` / `LLM_MODEL_FAST`.
 - **Sessions** are in-memory (single process) — fine for a demo, swap for a store to scale.
-- **Latency:** Phase 2 can run for a minute or two while it searches; the UI shows a
-  working state. Streaming the emit call is a reasonable enhancement.
+- **Latency:** Phase 2 can run for a minute or two while it searches, drafts, audits and
+  fixes. The UI shows a **live activity feed** — the server records each stage (searching a
+  source, drafting, auditing, applying N fixes) to a per-session buffer that the browser
+  polls at `GET /api/progress/{session_id}` alongside the in-flight request (sync endpoints
+  run in Starlette's threadpool, so the poll isn't blocked by the build). Token-level
+  streaming of the emit is a further enhancement.

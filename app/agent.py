@@ -91,6 +91,7 @@ class RunState:
     session: Session
     searches_left: int
     lock: Any = field(default_factory=threading.Lock)  # guards budget/log under parallel dispatch
+    progress: Any = None  # optional Callable[[str], None] for a live activity feed
 
 
 @dataclass
@@ -272,6 +273,9 @@ class GapFillerAgent:
             state.searches_left -= 1
             query = str(tool_input.get("query", "")).strip()
             state.session.grounding_log.append(f"{name}: {query}")
+        if state.progress and query:  # live feed: surface the literature search underway
+            src = name.replace("search_", "").replace("_", " ")
+            state.progress(f"Searching {src} for “{query}”…")
         search_fn, formatter = enabled[name]
         try:
             results = search_fn(query, tool_input.get("retmax", 5))
@@ -498,7 +502,8 @@ class GapFillerAgent:
         session.pending_tool_use_id = block.id  # parked for _followup
         return session
 
-    def choose_assay(self, session: Session, assay_id: str) -> dict:
+    def choose_assay(self, session: Session, assay_id: str,
+                     progress: Optional[Any] = None) -> dict:
         """The student picked an assay: ack the parked emit_assay_options and drive the
         UNTOUCHED request_clarifications phase, leaving the session byte-identical to
         what analyze() produces so the rest of the pipeline is reused."""
@@ -516,17 +521,18 @@ class GapFillerAgent:
         phase1 = self._followup(session, brief, "request_clarifications",
                                 REQUEST_CLARIFICATIONS_TOOL,
                                 system=self.system_ask, model=self.model_fast,
-                                effort=self.effort_fast)
+                                effort=self.effort_fast, progress=progress)
         session.request_tool_use_id = session.pending_tool_use_id
         session.pending_tool_use_id = None
         session.phase1 = phase1
         return phase1
 
     # -- Phase 2 + 3 ------------------------------------------------------------
-    def continue_with_answers(self, session: Session, answers: list) -> dict:
+    def continue_with_answers(self, session: Session, answers: list,
+                              progress: Optional[Any] = None) -> dict:
         if session.request_tool_use_id is None:
             raise AgentError("Session has no pending clarification to answer.")
-        state = RunState(session=session, searches_left=config.PUBMED_BUDGET)
+        state = RunState(session=session, searches_left=config.PUBMED_BUDGET, progress=progress)
 
         # Answer the request_clarifications call with the user's answers.
         session.messages.append(
@@ -558,7 +564,8 @@ class GapFillerAgent:
     # -- Continue after an emit (ack the pending tool call) ---------------------
     def _followup(self, session: Session, instruction: str, terminal: str, tool: dict,
                   compact: bool = False, system: Optional[str] = None,
-                  model: Optional[str] = None, effort: Optional[str] = None) -> dict:
+                  model: Optional[str] = None, effort: Optional[str] = None,
+                  progress: Optional[Any] = None) -> dict:
         """Ack the last emit (answer its dangling tool call), append an instruction, and
         run to a new terminal tool. Shared by revise/design_review/design_alignment and
         choose_assay — answering whatever call is pending lets these interleave freely.
@@ -568,7 +575,7 @@ class GapFillerAgent:
             raise AgentError("Nothing to build on yet — emit a protocol first.")
         if compact:
             _compact_grounding(session)
-        state = RunState(session=session, searches_left=config.PUBMED_BUDGET)
+        state = RunState(session=session, searches_left=config.PUBMED_BUDGET, progress=progress)
         session.messages.append(
             {"role": "tool", "tool_call_id": session.pending_tool_use_id, "content": "Received."}
         )
@@ -582,7 +589,7 @@ class GapFillerAgent:
         return dict(block.input)
 
     # -- Revise (edit-and-regenerate) -------------------------------------------
-    def revise(self, session: Session, instruction: str) -> dict:
+    def revise(self, session: Session, instruction: str, progress: Optional[Any] = None) -> dict:
         """Feed a correction and re-emit, keeping all prior context and grounding."""
         return self._followup(
             session,
@@ -595,6 +602,7 @@ class GapFillerAgent:
             system=self.system_emit,
             model=self.model,
             effort=self.effort,
+            progress=progress,
         )
 
     # -- Design review (teach the experiment around the protocol) ---------------
@@ -621,14 +629,15 @@ class GapFillerAgent:
                                EMIT_DESIGN_ALIGNMENT_TOOL, compact=True)
 
     # -- Adversarial correctness review (attack the emitted protocol) -----------
-    def correctness_review(self, session: Session) -> dict:
+    def correctness_review(self, session: Session, progress: Optional[Any] = None) -> dict:
         """Skeptical, independent audit of the emitted protocol for logic/value/ordering/
         control errors. Model-generated reasoning (not a host guarantee); its citations are
         host-verified. Runs on the main model — this is reasoning-heavy."""
         return self._followup(session, CORRECTNESS_REVIEW_INSTRUCTION, "emit_correctness_review",
-                              EMIT_CORRECTNESS_REVIEW_TOOL, compact=True)
+                              EMIT_CORRECTNESS_REVIEW_TOOL, compact=True, progress=progress)
 
-    def apply_correctness_fixes(self, session: Session, findings: list) -> dict:
+    def apply_correctness_fixes(self, session: Session, findings: list,
+                                progress: Optional[Any] = None) -> dict:
         """Close the loop: feed the correctness review's fixes back in and re-emit a
         CORRECTED protocol. Keeps everything already right, preserves provenance, grounds
         any newly filled values. Returns the new protocol (host-validated by the caller)."""
@@ -655,4 +664,4 @@ class GapFillerAgent:
         )
         return self._followup(session, instruction, "emit_protocol", EMIT_PROTOCOL_TOOL,
                               compact=True, system=self.system_emit, model=self.model,
-                              effort=self.effort)
+                              effort=self.effort, progress=progress)

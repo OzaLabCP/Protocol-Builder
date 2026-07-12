@@ -151,6 +151,15 @@
   .busy .busy-x { background: transparent; border: 0; color: var(--muted); font-size: 14px;
     line-height: 1; padding: 0 2px; margin-left: 2px; cursor: pointer; font-weight: 700; }
   .btn:disabled, button:disabled { cursor: default; }
+  #activity-panel { border-color: var(--accent); }
+  #activity-panel h2 { margin: 0; font-size: 15px; }
+  ul.activity { list-style: none; margin: 10px 0 0; padding: 0; max-height: 240px; overflow-y: auto;
+    font: 12.5px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  ul.activity li { color: var(--muted); padding: 3px 0 3px 20px; position: relative; }
+  ul.activity li::before { content: "▸"; position: absolute; left: 4px; color: var(--accent); }
+  ul.activity li:last-child { color: var(--text); }
+  ul.activity li:last-child::before { content: "▸"; animation: gf-pulse 1s ease-in-out infinite; }
+  @keyframes gf-pulse { 50% { opacity: .35; } }
   @media print {
     body { background: #fff; color: #000; }
     header, #input-panel, #questions-panel, #discovery-panel, #assays-panel, .modebar, .noprint, .toolbar, .refine { display: none !important; }
@@ -244,6 +253,11 @@
       <button id="submit-answers">Build protocol</button>
       <span class="muted">Skip a question to accept its default (flagged “verify before use”).</span>
     </div>
+  </section>
+
+  <section class="panel hidden noprint" id="activity-panel">
+    <h2>Working… <span class="muted small" style="font-weight:400">live activity — what the model is doing</span></h2>
+    <ul id="activity" class="activity"></ul>
   </section>
 
   <section class="panel hidden" id="result-panel"></section>
@@ -447,12 +461,14 @@ async function chooseAssay(assayId, btn) {
   const orig = btn ? btn.textContent : "";
   if (btn) btn.textContent = "⏳ Drafting protocol…";
   setStatus("Drafting a protocol for this assay — this runs the emit, then an automatic correctness + practicality audit and fixes, so it can take a minute or two.");
+  startProgress(SESSION);
   try {
     const r = await postJSON("/api/choose_assay", { session_id: SESSION, assay_id: assayId });
     hide("#assays-panel");
     handlePhase(r);
     setStatus("");
   } catch (e) { setStatus(e.message, true); buttons.forEach((b) => (b.disabled = false)); if (btn) btn.textContent = orig; }
+  stopProgress();
 }
 
 function renderResult(r) {
@@ -558,12 +574,14 @@ function optionRow(name, value, labelHtml, multi, id) {
 $("#submit-answers").onclick = async () => {
   const answers = GAPS.map(collectAnswer);
   lock(true, "Grounding values in the literature and verifying citations… (this can take a minute or two)");
+  startProgress(SESSION);
   try {
     const r = await postJSON("/api/resolve", { session_id: SESSION, answers });
     renderResult(r);
     hide("#questions-panel");
   } catch (e) { setStatus(e.message, true); }
   lock(false);
+  stopProgress();
 };
 
 function collectAnswer(g) {
@@ -755,6 +773,7 @@ async function requestDesign(btn) {
 async function requestCritique(btn) {
   btn.disabled = true;
   setStatus("Re-auditing correctness & practicality, then applying any fixes… (this can take a couple of minutes)");
+  startProgress(SESSION);
   try {
     const r = await postJSON("/api/critique", { session_id: SESSION, apply: true });
     if (r.applied && r.protocol) renderResult(r);  // renderResult also renders the audit
@@ -762,6 +781,7 @@ async function requestCritique(btn) {
     setStatus("");
   } catch (e) { setStatus(e.message, true); }
   btn.disabled = false;
+  stopProgress();
 }
 
 const _SEV_META = {
@@ -919,6 +939,7 @@ function recRow(c) {
   const btn = el("button", "btn apply noprint", "Apply to protocol");
   btn.onclick = async () => {
     btn.disabled = true; setStatus("Applying the change and rebuilding the protocol…");
+    startProgress(SESSION);
     try {
       const r = await postJSON("/api/revise", { session_id: SESSION, instruction: c.change });
       row.classList.add("applied");
@@ -926,6 +947,7 @@ function recRow(c) {
       renderResult(r);
     } catch (e) { setStatus(e.message, true); btn.disabled = false; }
     setStatus("");
+    stopProgress();
   };
   row.appendChild(btn);
   return row;
@@ -1027,11 +1049,13 @@ function refineBox() {
     const instruction = ta.value.trim();
     if (instruction.length < 3) { setStatus("Describe the change first.", true); return; }
     btn.disabled = true; setStatus("Rebuilding with your correction…");
+    startProgress(SESSION);
     try {
       const r = await postJSON("/api/revise", { session_id: SESSION, instruction });
       renderResult(r);
     } catch (e) { setStatus(e.message, true); btn.disabled = false; }
     setStatus("");
+    stopProgress();
   };
   box.appendChild(btn);
   return box;
@@ -1180,6 +1204,42 @@ $("#busy .busy-x").onclick = () => $("#busy").classList.add("hidden");
 function setStatus(msg, isErr) {
   const s = $("#gstatus"); s.textContent = msg || ""; s.className = "noprint " + (isErr ? "err" : "muted");
   setToast(msg, isErr);
+}
+
+/* ---------- live activity feed (polls /api/progress while a long op runs) ---------- */
+let POLL = null, POLL_GEN = 0;
+function startProgress(sid) {
+  stopProgress();
+  const panel = $("#activity-panel"), list = $("#activity");
+  if (!sid || !panel) return;
+  const gen = ++POLL_GEN;          // invalidates any late in-flight tick from a prior op
+  list.innerHTML = "";
+  panel.classList.remove("hidden");
+  let after = 0;
+  const tick = async () => {
+    if (gen !== POLL_GEN) return;
+    let d;
+    try {
+      const res = await fetch(`/api/progress/${encodeURIComponent(sid)}?after=${after}`, { headers: authHeaders({}) });
+      if (!res.ok) return;
+      d = await res.json();
+    } catch (e) { return; }
+    if (gen !== POLL_GEN) return;   // op finished while this poll was in flight
+    (d.steps || []).forEach((s) => {
+      after = Math.max(after, s.seq);
+      list.appendChild(el("li", null, esc(s.msg)));
+      setToast(s.msg, false);       // mirror the latest line into the fixed spinner pill
+    });
+    if ((d.steps || []).length) list.scrollTop = list.scrollHeight;
+  };
+  POLL = setInterval(tick, 700);
+  tick();                           // poll immediately, don't wait 700ms for the first line
+}
+function stopProgress() {
+  POLL_GEN++;                       // any pending tick becomes a no-op
+  if (POLL) { clearInterval(POLL); POLL = null; }
+  const panel = $("#activity-panel");
+  if (panel) panel.classList.add("hidden");
 }
 function lock(on, msg) { $("#analyze").disabled = on; $("#submit-answers").disabled = on; setStatus(on ? (msg || "Working…") : ""); }
 function show(sel) { $(sel).classList.remove("hidden"); }
