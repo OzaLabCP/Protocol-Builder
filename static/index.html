@@ -133,6 +133,20 @@
   .diff ins { color: var(--stated); text-decoration: none; background: rgba(74,192,122,.12); }
   .diff del { color: var(--danger); background: rgba(239,106,106,.12); }
   .hint { color: var(--muted); font-size: 12.5px; margin: 6px 0 0; }
+  @keyframes gf-spin { to { transform: rotate(360deg); } }
+  .busy {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 12px; z-index: 1000;
+    background: var(--panel2); border: 1px solid var(--accent); border-radius: 999px;
+    padding: 12px 20px; box-shadow: 0 8px 28px rgba(0,0,0,.5); max-width: min(92vw, 640px);
+  }
+  .busy .spin {
+    flex: 0 0 auto; width: 18px; height: 18px; border-radius: 50%;
+    border: 2.5px solid var(--line); border-top-color: var(--accent);
+    animation: gf-spin .8s linear infinite;
+  }
+  .busy .busy-msg { color: var(--text); font-size: 13.5px; }
+  .btn:disabled, button:disabled { cursor: default; }
   @media print {
     body { background: #fff; color: #000; }
     header, #input-panel, #questions-panel, #discovery-panel, #assays-panel, .modebar, .noprint, .toolbar, .refine { display: none !important; }
@@ -230,6 +244,10 @@
 
   <section class="panel hidden" id="result-panel"></section>
 </main>
+
+<div id="busy" class="busy hidden noprint" role="status" aria-live="polite">
+  <span class="spin"></span><span class="busy-msg"></span>
+</div>
 
 <script>
 const $ = (s) => document.querySelector(s);
@@ -349,7 +367,7 @@ async function runDiscover(autoPick) {
 }
 $("#discover").onclick = () => runDiscover(false);
 $("#autopick").onclick = () => runDiscover(true);
-function discStatus(msg, isErr) { const s = $("#disc-status"); s.textContent = msg || ""; s.className = isErr ? "err" : "muted"; }
+function discStatus(msg, isErr) { const s = $("#disc-status"); s.textContent = msg || ""; s.className = isErr ? "err" : "muted"; setBusy(!!msg && !isErr, msg); }
 function discLock(on, msg) { $("#discover").disabled = on; $("#autopick").disabled = on; discStatus(on ? (msg || "Working…") : ""); }
 
 $("#analyze").onclick = async () => {
@@ -421,12 +439,15 @@ function renderAssays(opts) {
 async function chooseAssay(assayId, btn) {
   const buttons = document.querySelectorAll("#assays button");
   buttons.forEach((b) => (b.disabled = true));
-  setStatus("Drafting a protocol for this assay… (this can take a minute)");
+  const orig = btn ? btn.textContent : "";
+  if (btn) btn.textContent = "⏳ Drafting protocol…";
+  setStatus("Drafting a protocol for this assay — this runs the emit, then an automatic correctness + practicality audit and fixes, so it can take a minute or two.");
   try {
     const r = await postJSON("/api/choose_assay", { session_id: SESSION, assay_id: assayId });
     hide("#assays-panel");
     handlePhase(r);
-  } catch (e) { setStatus(e.message, true); buttons.forEach((b) => (b.disabled = false)); }
+    setStatus("");
+  } catch (e) { setStatus(e.message, true); buttons.forEach((b) => (b.disabled = false)); if (btn) btn.textContent = orig; }
 }
 
 function renderResult(r) {
@@ -1136,7 +1157,19 @@ async function postForm(url, formData) {
 }
 // Target an always-visible element (#status lives inside #input-panel, which is hidden
 // in hypothesis mode — writing there would silently swallow errors).
-function setStatus(msg, isErr) { const s = $("#gstatus"); s.textContent = msg || ""; s.className = "noprint " + (isErr ? "err" : "muted"); }
+// A fixed, always-visible spinner toast — the status text lives at the top of the page and
+// is off-screen once you've scrolled to an assay/protocol, so a long call looked frozen.
+// Any non-error "working…" status drives it; errors and clears hide it.
+function setBusy(on, msg) {
+  const b = $("#busy");
+  if (!b) return;
+  b.classList.toggle("hidden", !on);
+  if (on) b.querySelector(".busy-msg").textContent = msg || "Working…";
+}
+function setStatus(msg, isErr) {
+  const s = $("#gstatus"); s.textContent = msg || ""; s.className = "noprint " + (isErr ? "err" : "muted");
+  setBusy(!!msg && !isErr, msg);
+}
 function lock(on, msg) { $("#analyze").disabled = on; $("#submit-answers").disabled = on; setStatus(on ? (msg || "Working…") : ""); }
 function show(sel) { $(sel).classList.remove("hidden"); }
 function hide(sel) { $(sel).classList.add("hidden"); }
