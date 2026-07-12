@@ -1,0 +1,201 @@
+
+<style>
+:root{
+  --bg:#f6f7f9; --surface:#ffffff; --surface-2:#eef1f5; --line:#dde2ea;
+  --ink:#1a2230; --muted:#5b6675; --accent:#0b6d83;
+  --t-stated:#1f9d57; --t-literature_grounded:#2563c9; --t-best_practice:#8257d6;
+  --t-user_input:#0d9488; --t-default_verify:#c77d16;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#0f141b; --surface:#151b24; --surface-2:#1b232e; --line:#2a3441;
+    --ink:#e6eaf0; --muted:#93a0b1; --accent:#3bbcd6;
+    --t-stated:#43c98a; --t-literature_grounded:#6ea8fe; --t-best_practice:#b48cff;
+    --t-user_input:#2dd4bf; --t-default_verify:#f2b13a;
+  }
+}
+:root[data-theme="light"]{
+  --bg:#f6f7f9; --surface:#ffffff; --surface-2:#eef1f5; --line:#dde2ea;
+  --ink:#1a2230; --muted:#5b6675; --accent:#0b6d83;
+  --t-stated:#1f9d57; --t-literature_grounded:#2563c9; --t-best_practice:#8257d6;
+  --t-user_input:#0d9488; --t-default_verify:#c77d16;
+}
+:root[data-theme="dark"]{
+  --bg:#0f141b; --surface:#151b24; --surface-2:#1b232e; --line:#2a3441;
+  --ink:#e6eaf0; --muted:#93a0b1; --accent:#3bbcd6;
+  --t-stated:#43c98a; --t-literature_grounded:#6ea8fe; --t-best_practice:#b48cff;
+  --t-user_input:#2dd4bf; --t-default_verify:#f2b13a;
+}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:16px/1.6 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  font-variant-numeric:tabular-nums;}
+.wrap{max-width:860px;margin:0 auto;padding:40px 22px 90px;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+.eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);margin:0 0 10px;}
+h1{font-size:30px;line-height:1.15;margin:0 0 10px;letter-spacing:-.01em;text-wrap:balance;font-weight:680;}
+h2{font-size:15px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);
+  font-family:ui-monospace,monospace;font-weight:600;margin:40px 0 12px;
+  padding-bottom:8px;border-bottom:1px solid var(--line);}
+h3{font-size:17px;margin:0;font-weight:640;}
+.source{font-family:ui-monospace,monospace;font-size:13px;color:var(--muted);margin:0 0 18px;}
+.source a{color:var(--accent);}
+.summary{max-width:68ch;color:var(--ink);margin:0 0 6px;}
+.dur{color:var(--muted);font-size:14px;margin:0 0 24px;}
+.strip{display:flex;flex-wrap:wrap;gap:10px;margin:22px 0;}
+.stat{display:flex;align-items:center;gap:8px;background:var(--surface);
+  border:1px solid var(--line);border-radius:10px;padding:9px 12px;}
+.stat b{font-size:20px;min-width:18px;text-align:center;}
+.legend{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 6px;}
+.tier{font-family:ui-monospace,monospace;font-size:10.5px;font-weight:700;letter-spacing:.06em;
+  text-transform:uppercase;padding:2px 8px;border-radius:999px;white-space:nowrap;}
+.t-stated{background:color-mix(in srgb,var(--t-stated) 16%,transparent);color:var(--t-stated);}
+.t-literature_grounded{background:color-mix(in srgb,var(--t-literature_grounded) 16%,transparent);color:var(--t-literature_grounded);}
+.t-best_practice{background:color-mix(in srgb,var(--t-best_practice) 16%,transparent);color:var(--t-best_practice);}
+.t-user_input{background:color-mix(in srgb,var(--t-user_input) 16%,transparent);color:var(--t-user_input);}
+.t-default_verify{background:color-mix(in srgb,var(--t-default_verify) 16%,transparent);color:var(--t-default_verify);}
+.callout{background:var(--surface-2);border:1px solid var(--line);border-left:3px solid var(--accent);
+  border-radius:8px;padding:12px 16px;margin:18px 0;font-size:14px;color:var(--muted);max-width:70ch;}
+.callout b{color:var(--ink);}
+.tablewrap{overflow-x:auto;}
+table{width:100%;border-collapse:collapse;font-size:14.5px;}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top;}
+th{font-family:ui-monospace,monospace;font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--muted);font-weight:600;}
+td.num{font-family:ui-monospace,monospace;white-space:nowrap;}
+ol.steps{list-style:none;margin:0;padding:0;}
+.step{padding:18px 0;border-bottom:1px solid var(--line);}
+.step-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+.step-n{font-family:ui-monospace,monospace;font-weight:700;color:var(--accent);
+  border:1.5px solid var(--accent);border-radius:8px;min-width:28px;height:28px;
+  display:inline-flex;align-items:center;justify-content:center;font-size:14px;}
+.instr{margin:10px 0 0;max-width:70ch;}
+.meta{font-family:ui-monospace,monospace;font-size:13px;color:var(--muted);margin-top:8px;}
+.cp{margin-top:10px;padding-left:12px;border-left:2px solid var(--line);}
+.cp-name{color:var(--muted);font-size:14px;}
+.cp-val{font-family:ui-monospace,monospace;font-weight:650;margin:0 8px;}
+.sub{margin-top:8px;padding-left:12px;color:var(--ink);font-size:14.5px;}
+.sub-n{font-family:ui-monospace,monospace;color:var(--muted);margin-right:6px;}
+.pnote{font-family:ui-monospace,monospace;font-size:12.5px;color:var(--muted);
+  margin-top:4px;line-height:1.5;max-width:78ch;}
+.warn{color:var(--t-default_verify);font-size:13.5px;margin-top:8px;}
+.panel{background:var(--surface-2);border:1px solid var(--line);border-radius:12px;padding:6px 16px 14px;}
+.vflag{font-family:ui-monospace,monospace;font-size:11px;color:var(--t-default_verify);
+  border:1px solid color-mix(in srgb,var(--t-default_verify) 45%,transparent);
+  border-radius:999px;padding:0 6px;margin-left:4px;}
+ul.oq{max-width:74ch;padding-left:18px;color:var(--muted);}
+ul.oq li{margin:7px 0;}
+footer{margin-top:40px;font-size:12.5px;color:var(--muted);font-family:ui-monospace,monospace;line-height:1.6;}
+a{color:var(--accent);}
+</style>
+
+<title>gSTEP variant binding screen — provenance-tagged</title>
+<div class="wrap">
+  <p class="eyebrow">Reconstructed protocol · provenance-tagged</p>
+  <h1>gSTEP variant screen — ranking STEPtag binding by fluorescence (ΔF/F0)</h1>
+  <p class="source">Source: <a href="https://doi.org/10.1021/acssynbio.0c00407" target="_blank" rel="noopener">Eason et&nbsp;al., ACS Synth. Biol. 2020 — 10.1021/acssynbio.0c00407</a></p>
+  <p class="summary">Rank a handful (2–8) of gSTEP biosensor variants by their relative binding to STEPtag. Each variant, fixed at 75 nM, is challenged with one shared STEPtag dilution series so all variants are compared on the same axis; variants are ranked by fluorescence dynamic range (ΔF/F0) and apparent affinity. Tuned for comparison across variants, not a precise single-pair Kd.</p>
+  <p class="dur">Estimated duration: ~3 h for up to 8 variants on 1–2 plates (excludes protein expression/purification)</p>
+
+  <div class="callout">
+    <b>How to read this.</b> Every value is tagged by how it was obtained. Nothing here is silently invented:
+    values present in the paper are <b>stated</b>; gaps the paper left open are filled from <b>best practice</b>,
+    your own <b>answers</b>, or flagged as a <b>default to verify</b>. This copy was reconstructed offline, so no
+    values are <b>literature-grounded</b> — on a live run, Phase&nbsp;2 web search grounds the best-practice/verify
+    items in real citations, and the host resolves each DOI/PMID before shipping.
+  </div>
+
+  <div class="strip"><div class="stat"><b>16</b><span class="tier t-stated">stated</span></div><div class="stat"><b>0</b><span class="tier t-literature_grounded">literature grounded</span></div><div class="stat"><b>7</b><span class="tier t-best_practice">best practice</span></div><div class="stat"><b>5</b><span class="tier t-user_input">user input</span></div><div class="stat"><b>2</b><span class="tier t-default_verify">default verify</span></div></div>
+  <div class="legend"><span class="tier t-stated">stated</span><span class="tier t-literature_grounded">literature grounded</span><span class="tier t-best_practice">best practice</span><span class="tier t-user_input">user input</span><span class="tier t-default_verify">default verify</span></div>
+
+  <h2>Materials</h2>
+  <div class="tablewrap"><table>
+    <tr><th>Reagent</th><th>Amount</th><th>Grade / vendor</th><th>Provenance</th></tr>
+    <tr><td>Purified gSTEP variants to screen (His-tagged, IMAC-purified, buffer-exchanged, A280-quantified)</td><td class="num">75 nM</td><td>prepared in-house</td><td><span class="tier t-stated">stated</span><div class="pnote">75 nM final per well is stated in the source; applied identically to every variant so ΔF/F0 is comparable.</div></td></tr><tr><td>Binding partner (titrant): STEPtag</td><td class="num">—</td><td>prepared in-house</td><td><span class="tier t-user_input">user input</span><div class="pnote">User selected STEPtag as the common partner for the screen.</div></td></tr><tr><td>Control protein: bovine serum albumin (BSA)</td><td class="num">—</td><td>Bio-Rad</td><td><span class="tier t-stated">stated</span><div class="pnote">BSA named as a control protein in the source; defines nonspecific ΔF.</div></td></tr><tr><td>Assay buffer: sodium phosphate</td><td class="num">20 mM</td><td>—</td><td><span class="tier t-stated">stated</span><div class="pnote">20 mM sodium phosphate, pH 7.4, stated.</div></td></tr><tr><td>Assay buffer: sodium chloride</td><td class="num">50 mM</td><td>—</td><td><span class="tier t-stated">stated</span><div class="pnote">50 mM NaCl stated.</div></td></tr><tr><td>Fluotrac 96-well plate (black, flat-bottom)</td><td class="num">—</td><td>Greiner Bio-One</td><td><span class="tier t-stated">stated</span><div class="pnote">Fluotrac 96-well plate (Greiner Bio-One) stated.</div></td></tr>
+  </table></div>
+
+  <h2>Equipment</h2>
+  <ul><li>Tecan Infinite M1000 plate reader (stated)</li><li>Multichannel pipette (to dispense the shared STEPtag series identically across variants)</li><li>Reagent reservoir / dilution plate for the shared master series</li></ul>
+
+  <h2>Procedure</h2>
+  <ol class="steps">
+    <li class="step">
+      <div class="step-head"><span class="step-n">1</span>
+        <h3>Prepare assay buffer</h3> <span class="tier t-stated">stated</span></div>
+      <p class="instr">Prepare 20 mM sodium phosphate buffer with 50 mM NaCl, pH 7.4; filter-sterilize. Used as both storage and assay diluent.</p>
+      
+      
+      <div class="cp"><span class="cp-name">Buffer composition</span><span class="cp-val">20 mM sodium phosphate, 50 mM NaCl, pH 7.4</span> <span class="tier t-stated">stated</span><div class="pnote">Stated verbatim in the source.</div></div>
+      
+    </li>
+    <li class="step">
+      <div class="step-head"><span class="step-n">2</span>
+        <h3>Normalize and prepare each variant at 75 nM</h3> <span class="tier t-stated">stated</span></div>
+      <p class="instr">Quantify each purified gSTEP variant by A280 (ProtParam extinction coefficients) and dilute every variant to an identical 75 nM working concentration in assay buffer. Equal biosensor concentration across variants is what makes ΔF/F0 comparable.</p>
+      
+      
+      <div class="cp"><span class="cp-name">gSTEP concentration</span><span class="cp-val">75 nM</span> <span class="tier t-stated">stated</span><div class="pnote">Stated; held identical across all variants.</div></div><div class="cp"><span class="cp-name">Number of gSTEP variants</span><span class="cp-val">2–8</span> <span class="tier t-user_input">user input</span><div class="pnote">User is screening a handful of variants; sets plate layout and whether a second plate is needed.</div></div><div class="cp"><span class="cp-name">gSTEP working-solution volume per variant</span><span class="cp-val">~1 mL each</span> <span class="tier t-default_verify">default verify</span><div class="pnote">Scaling per variant: 6 titrant points x 3 replicates = 18 wells; 18 x 100 uL = 1.8 mL... but a shared partner series means each variant only supplies its own 75 nM gSTEP to ~9 wells (partner added separately) -&gt; ~1 mL + dead volume. Verify against your final layout.</div></div>
+      <div class="warn">⚠ Keep variants on ice and shielded from light until dispensed.</div>
+    </li>
+    <li class="step">
+      <div class="step-head"><span class="step-n">3</span>
+        <h3>Prepare ONE shared STEPtag master dilution series</h3> <span class="tier t-user_input">user input</span></div>
+      <p class="instr">Because affinities are unknown and the goal is ranking, prepare a single wide STEPtag dilution series and apply it identically to every variant. Run a quick pilot on one representative variant first to center the bracket.</p>
+      
+      <div class="sub"><span class="sub-n">3.1</span> Pilot: run one representative variant across the full ~3 nM–10 uM range to find where its response transitions, then keep or narrow the bracket for the full screen. <span class="tier t-default_verify">default verify</span></div><div class="sub"><span class="sub-n">3.2</span> Prepare the master series once in a reservoir/dilution plate so every variant sees the identical STEPtag concentrations (multichannel transfer). <span class="tier t-best_practice">best practice</span></div>
+      <div class="cp"><span class="cp-name">Shared STEPtag titration bracket</span><span class="cp-val">~3 nM to 10 uM, 6-point (~4-fold steps)</span> <span class="tier t-user_input">user input</span><div class="pnote">Wide bracket chosen because expected Kd is unknown; a sparse 6-point series is enough to rank variants. Center it after the pilot; flag to verify.</div></div>
+      <div class="warn">⚠ If any variant&#x27;s ΔF/F0 is still rising at the top concentration, its binding is weaker than the bracket covers — extend the top point before ranking it.</div>
+    </li>
+    <li class="step">
+      <div class="step-head"><span class="step-n">4</span>
+        <h3>Lay out the plate(s)</h3> <span class="tier t-stated">stated</span></div>
+      <p class="instr">For each variant, combine 75 nM gSTEP with the shared STEPtag series across a row (or block) of the Fluotrac plate. Add one BSA control series per plate and, per variant, buffer-only and gSTEP-only (F0) wells. If variants span two plates, repeat one reference variant on both plates for normalization.</p>
+      
+      
+      <div class="cp"><span class="cp-name">Assay volume per well</span><span class="cp-val">100 uL</span> <span class="tier t-user_input">user input</span><div class="pnote">User selected 100 uL/well (scale choice; not specified in the source).</div></div><div class="cp"><span class="cp-name">Replicates</span><span class="cp-val">3 (2 acceptable for a first-pass rank)</span> <span class="tier t-stated">stated</span><div class="pnote">‘a minimum of three replicates’ stated; a first-pass screen can drop to 2 to fit more variants per plate.</div></div><div class="cp"><span class="cp-name">Control titration (BSA)</span><span class="cp-val">one shared series per plate</span> <span class="tier t-best_practice">best practice</span><div class="pnote">One control-protein titration per plate defines nonspecific ΔF for background subtraction; per-plate rather than per-variant saves wells.</div></div><div class="cp"><span class="cp-name">Per-plate reference variant</span><span class="cp-val">repeat one variant on every plate</span> <span class="tier t-best_practice">best practice</span><div class="pnote">Anchors plate-to-plate normalization when a screen spans multiple plates.</div></div>
+      <div class="warn">⚠ Mix gently; bubbles corrupt fluorescence reads.</div>
+    </li>
+    <li class="step">
+      <div class="step-head"><span class="step-n">5</span>
+        <h3>Equilibrate</h3> <span class="tier t-best_practice">best practice</span></div>
+      <p class="instr">Incubate all plates under identical conditions to reach binding equilibrium before reading.</p>
+      <div class="meta">⏱ 30 min · 🌡 25 C</div>
+      
+      <div class="cp"><span class="cp-name">Equilibration time and temperature</span><span class="cp-val">30 min at 25 C</span> <span class="tier t-best_practice">best practice</span><div class="pnote">Not stated in the source. Standard-practice default; keep it identical across all variants and plates so ΔF/F0 is comparable. Verify equilibrium is reached for your tightest binders.</div></div>
+      
+    </li>
+    <li class="step">
+      <div class="step-head"><span class="step-n">6</span>
+        <h3>Read fluorescence (fixed gain across the whole screen)</h3> <span class="tier t-stated">stated</span></div>
+      <p class="instr">Read every plate on the Tecan Infinite M1000 with excitation at 485 nm and emission at 515 nm. Set the gain once on the brightest bound well across ALL variants and hold it fixed for every plate.</p>
+      <div class="meta">🌡 25 C</div>
+      
+      <div class="cp"><span class="cp-name">Excitation wavelength</span><span class="cp-val">485 nm</span> <span class="tier t-stated">stated</span><div class="pnote">Stated.</div></div><div class="cp"><span class="cp-name">Emission wavelength</span><span class="cp-val">515 nm</span> <span class="tier t-stated">stated</span><div class="pnote">Stated.</div></div><div class="cp"><span class="cp-name">Fixed reader gain across variants</span><span class="cp-val">set once on the brightest well; hold constant for all plates</span> <span class="tier t-best_practice">best practice</span><div class="pnote">Comparability requirement for a screen: if gain varies between variants or plates, ΔF/F0 is no longer comparable. Verify no wells saturate at the chosen gain.</div></div>
+      <div class="warn">⚠ A different gain per variant invalidates the ranking — this is the most common screen mistake.</div>
+    </li>
+    <li class="step">
+      <div class="step-head"><span class="step-n">7</span>
+        <h3>Rank the variants</h3> <span class="tier t-stated">stated</span></div>
+      <p class="instr">Subtract the BSA control background, then for each variant compute ΔF/F0 = (F_saturated − F0)/F0 as the primary ranking metric. Optionally fit each sparse series to the ligand-depletion Hill equation for an apparent Kd as a secondary sort. Rank variants by ΔF/F0, then apparent affinity.</p>
+      
+      
+      <div class="cp"><span class="cp-name">Primary ranking metric (ΔF/F0)</span><span class="cp-val">ΔF/F0 = (F_sat − F0)/F0</span> <span class="tier t-best_practice">best practice</span><div class="pnote">For a variant screen, dynamic range (ΔF/F0) is the primary readout; the paper reports ΔF/F0 alongside Kd. Apparent Kd from a sparse fit is a coarse secondary sort only.</div></div><div class="cp"><span class="cp-name">Fitting model</span><span class="cp-val">Hill equation accounting for ligand depletion</span> <span class="tier t-stated">stated</span><div class="pnote">The source specifies this fit (cites reference 35). Use total concentrations; depletion is modeled.</div></div>
+      <div class="warn">⚠ Tight binders (apparent Kd ≤ ~75 nM) are ligand-depletion-limited at 75 nM biosensor: their apparent Kd is compressed and rankings among the very tightest binders may be unreliable. Lower the biosensor concentration to separate them.</div>
+    </li>
+  </ol>
+
+  <h2>Assumptions log — everything not stated in the source</h2>
+  <div class="panel tablewrap"><table>
+    <tr><th>Parameter</th><th>Value</th><th>Provenance</th><th>Basis</th></tr>
+    <tr><td>Binding partner (titrant): STEPtag</td><td class="num">STEPtag chosen as the common partner</td><td><span class="tier t-user_input">user input</span></td><td>User selected STEPtag for the screen. </td></tr><tr><td>Number of gSTEP variants</td><td class="num">2–8</td><td><span class="tier t-user_input">user input</span></td><td>User is screening a handful of variants. </td></tr><tr><td>gSTEP working-solution volume per variant</td><td class="num">~1 mL each</td><td><span class="tier t-default_verify">default verify</span></td><td>Scaling from the per-variant well count + dead volume; depends on final layout. <span class="vflag">verify</span></td></tr><tr><td>Shared STEPtag titration bracket</td><td class="num">~3 nM to 10 uM, 6-point</td><td><span class="tier t-user_input">user input</span></td><td>Wide bracket because Kd is unknown; sparse series suffices for ranking. Center after pilot. <span class="vflag">verify</span></td></tr><tr><td>Assay volume per well</td><td class="num">100 uL</td><td><span class="tier t-user_input">user input</span></td><td>Scale choice; not specified in the source. </td></tr><tr><td>Control titration (BSA)</td><td class="num">one shared series per plate</td><td><span class="tier t-best_practice">best practice</span></td><td>Per-plate control defines nonspecific ΔF; saves wells vs per-variant. </td></tr><tr><td>Per-plate reference variant</td><td class="num">repeat one variant per plate</td><td><span class="tier t-best_practice">best practice</span></td><td>Enables plate-to-plate normalization across a multi-plate screen. </td></tr><tr><td>Equilibration time and temperature</td><td class="num">30 min at 25 C</td><td><span class="tier t-best_practice">best practice</span></td><td>Standard equilibrium-binding practice; source omits it and the fit assumes equilibrium. <span class="vflag">verify</span></td></tr><tr><td>Fixed reader gain across variants</td><td class="num">set once, hold constant for all plates</td><td><span class="tier t-best_practice">best practice</span></td><td>Comparability requirement for a ΔF/F0 ranking. <span class="vflag">verify</span></td></tr><tr><td>Primary ranking metric (ΔF/F0)</td><td class="num">ΔF/F0 = (F_sat − F0)/F0</td><td><span class="tier t-best_practice">best practice</span></td><td>Dynamic range is the primary screen readout; apparent Kd is a secondary sort. </td></tr>
+  </table></div>
+
+  <h2>Open questions</h2>
+  <ul class="oq"><li>Expected Kd is unknown — the pilot on one variant is required to center the shared bracket before the full screen.</li><li>Ligand depletion at 75 nM biosensor compresses apparent Kd for tight binders (Kd ≤ ~75 nM); to rank the tightest binders precisely, repeat them at a lower biosensor concentration.</li><li>Replicate count: 3 gives the paper&#x27;s rigor; 2 fits more variants per plate for a first-pass rank — your call on the precision/throughput trade.</li><li>On a live run, Phase-2 web_search would ground the ΔF/F0 screening convention, the sparse-titration spacing, and the depletion caveat in specific citations (upgrading the best_practice/default_verify items to verified literature_grounded).</li></ul>
+
+  <footer>
+    Built by Methods Gap-Filler as a hand-run demonstration (no API key in the sandbox).<br>
+    Binding-assay methods reconstructed from Eason et&nbsp;al. 2020. Provenance verification runs live on your machine.
+  </footer>
+</div>

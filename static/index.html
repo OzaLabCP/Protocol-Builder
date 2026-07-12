@@ -1,0 +1,1145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Methods Gap-Filler</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1e222b; --line: #2a2f3a;
+    --text: #e7e9ee; --muted: #9aa3b2; --accent: #6ea8fe;
+    --stated: #4ac07a; --lit: #6ea8fe; --best: #b48cff;
+    --user: #35c2c2; --verify: #f2b13a; --danger: #ef6a6a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header { padding: 22px 28px; border-bottom: 1px solid var(--line); }
+  h1 { margin: 0; font-size: 20px; letter-spacing: .2px; }
+  header p { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+  main { max-width: 920px; margin: 0 auto; padding: 24px 20px 80px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin: 16px 0; }
+  textarea {
+    width: 100%; min-height: 180px; resize: vertical; background: var(--panel2);
+    color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 12px;
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  button {
+    background: var(--accent); color: #0a0d13; border: 0; border-radius: 8px;
+    padding: 10px 16px; font-weight: 600; cursor: pointer; font-size: 14px;
+  }
+  button.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--line); }
+  button:disabled { opacity: .5; cursor: default; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .small { font-size: 12px; margin: 8px 0 0; }
+  .hidden { display: none; }
+  .or { text-align: center; color: var(--muted); font-size: 12px; margin: 12px 0; letter-spacing: .1em; }
+  .filebtn { display: inline-flex; align-items: center; gap: 10px; border: 1px dashed var(--line);
+    border-radius: 8px; padding: 12px 14px; cursor: pointer; background: var(--panel2); width: 100%; }
+  .filebtn input { flex: 0 0 auto; color: var(--muted); }
+  .filebtn.has-file { border-style: solid; border-color: var(--accent); }
+  .gap { border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin: 12px 0; background: var(--panel2); }
+  .gap h4 { margin: 0 0 4px; font-size: 15px; }
+  .gap .why { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
+  .opt { display: flex; gap: 8px; align-items: flex-start; padding: 7px 0; border-top: 1px solid var(--line); }
+  .opt:first-of-type { border-top: 0; }
+  .opt label { cursor: pointer; }
+  .opt .note { color: var(--muted); font-size: 12.5px; }
+  .src-tag { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); vertical-align: middle; }
+  input[type=text], input[type=number] {
+    background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 7px; padding: 8px 10px; width: 100%; font-size: 14px;
+  }
+  .skip { margin-left: auto; }
+  a { color: var(--accent); }
+  .tier { font-size: 11px; padding: 1px 8px; border-radius: 999px; font-weight: 700; letter-spacing: .3px; text-transform: uppercase; }
+  .t-stated { background: rgba(74,192,122,.16); color: var(--stated); }
+  .t-literature_grounded { background: rgba(110,168,254,.16); color: var(--lit); }
+  .t-best_practice { background: rgba(180,140,255,.16); color: var(--best); }
+  .t-user_input { background: rgba(53,194,194,.16); color: var(--user); }
+  .t-default_verify { background: rgba(242,177,58,.16); color: var(--verify); }
+  .legend { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; }
+  .step { border-top: 1px solid var(--line); padding: 12px 0; }
+  .step:first-child { border-top: 0; }
+  .step .num { color: var(--accent); font-weight: 700; }
+  .cite { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+  .badge-ok { color: var(--stated); font-weight: 700; }
+  .badge-warn { color: var(--verify); font-weight: 700; }
+  .cp { font-size: 13px; color: var(--muted); margin-top: 4px; }
+  .warn { color: var(--verify); font-size: 13px; margin-top: 4px; }
+  .pnote { color: var(--muted); font-size: 12.5px; font-family: ui-monospace, monospace; }
+  .summary { display: flex; gap: 18px; flex-wrap: wrap; }
+  .stat { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+  .stat b { font-size: 20px; }
+  .err { color: var(--danger); }
+  li { margin: 4px 0; }
+  h2 { font-size: 17px; margin: 22px 0 8px; }
+  h3 { font-size: 15px; margin: 16px 0 6px; }
+  .toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin: 14px 0 6px; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; background: var(--accent); color: #0a0d13;
+    border: 0; border-radius: 8px; padding: 9px 14px; font-weight: 600; font-size: 13.5px; cursor: pointer; text-decoration: none; }
+  .btn.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--line); }
+  .design { margin: 18px 0; padding: 4px 18px 16px; border: 1px solid var(--line); border-left: 3px solid var(--best); border-radius: 10px; background: var(--panel2); }
+  .finding { margin: 10px 0; padding: 8px 12px; border: 1px solid var(--line); border-left: 3px solid var(--line); border-radius: 8px; }
+  .finding-head { font-weight: 700; margin-bottom: 4px; }
+  .finding p { margin: 3px 0; }
+  .finding.sev-critical { border-left-color: #e5484d; }
+  .finding.sev-major { border-left-color: #f5a623; }
+  .finding.sev-minor { border-left-color: #d9c313; }
+  .flag { display: inline-block; font-size: 0.82em; padding: 0 6px; border-radius: 6px; border: 1px solid var(--line); white-space: nowrap; }
+  .flag-user { color: var(--verify); font-weight: 700; }
+  .flag-flex { color: var(--muted); }
+  .design h2 { color: var(--best); }
+  .align { margin: 18px 0; padding: 4px 18px 16px; border: 1px solid var(--line); border-left: 3px solid var(--user); border-radius: 10px; background: var(--panel2); }
+  .align h2 { color: var(--user); }
+  .verdict { display: inline-block; font-weight: 700; padding: 3px 12px; border-radius: 999px; font-size: 13.5px; }
+  .v-yes { background: rgba(74,192,122,.16); color: var(--stated); }
+  .v-partial { background: rgba(242,177,58,.16); color: var(--verify); }
+  .v-no { background: rgba(239,106,106,.16); color: var(--danger); }
+  .rec { border-top: 1px solid var(--line); padding: 10px 0; }
+  .rec:first-of-type { border-top: 0; }
+  .rec .type-tag { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); margin-right: 6px; }
+  .rec .addresses { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
+  .rec .apply { margin-top: 6px; padding: 6px 12px; font-size: 12.5px; }
+  .rec.applied { opacity: .6; }
+  ul.gaps li { color: var(--verify); }
+  .refine { margin-top: 26px; padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel2); }
+  .refine textarea { min-height: 0; margin: 8px 0; }
+  .modebar { display: flex; gap: 8px; margin: 0 0 14px; }
+  .modebtn { flex: 1; background: var(--panel2); color: var(--muted); border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px 14px; cursor: pointer; text-align: left; font-weight: 600; font-size: 14px; }
+  .modebtn.active { border-color: var(--accent); color: var(--text); background: rgba(110,168,254,.10); }
+  .modebtn small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; margin-top: 3px; }
+  .assay { border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin: 12px 0; background: var(--panel2); position: relative; }
+  .assay.recommended { border-color: var(--stated); box-shadow: 0 0 0 1px rgba(74,192,122,.3) inset; }
+  .assay h4 { margin: 0 0 4px; font-size: 15.5px; }
+  .assay .rec-badge { position: absolute; top: -9px; right: 12px; background: var(--stated); color: #0a0d13;
+    font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 999px; }
+  .assay .kv { font-size: 13px; margin: 4px 0; }
+  .assay .kv b { color: var(--muted); font-weight: 600; }
+  .pill { font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); margin-right: 4px; }
+  .pill.hi { color: var(--stated); border-color: var(--stated); }
+  .pill.med { color: var(--verify); border-color: var(--verify); }
+  .pill.lo { color: var(--muted); }
+  .rangewarn { color: var(--verify); font-size: 12px; margin-top: 4px; }
+  .diff { margin: 10px 0; padding: 10px 14px; border: 1px solid var(--line); border-left: 3px solid var(--accent);
+    border-radius: 8px; background: var(--panel2); font-size: 13px; }
+  .diff ins { color: var(--stated); text-decoration: none; background: rgba(74,192,122,.12); }
+  .diff del { color: var(--danger); background: rgba(239,106,106,.12); }
+  .hint { color: var(--muted); font-size: 12.5px; margin: 6px 0 0; }
+  @media print {
+    body { background: #fff; color: #000; }
+    header, #input-panel, #questions-panel, #discovery-panel, #assays-panel, .modebar, .noprint, .toolbar, .refine { display: none !important; }
+    .panel { border: 0; background: #fff; margin: 0; padding: 0; }
+    main { max-width: 100%; padding: 0; }
+    a { color: #000; text-decoration: underline; }
+    .tier { border: 1px solid #999; color: #000 !important; background: #fff !important; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Methods Gap-Filler</h1>
+  <p>Start from a <b>hypothesis</b> — and find the assay that tests it — or start from a <b>paper</b> and adapt it.
+     Either way you get an executable protocol where every value is provenance-tagged and every citation is verified.</p>
+</header>
+
+<main>
+  <section class="panel hidden" id="authbar" style="border-color:var(--verify)">
+    <label class="muted" for="authtok">This instance requires an access token</label>
+    <div class="row" style="margin-top:8px">
+      <input type="password" id="authtok" placeholder="access token" style="flex:1;min-width:180px" />
+      <button id="authsave">Save</button>
+      <span class="muted" id="authmsg"></span>
+    </div>
+  </section>
+
+  <div class="modebar">
+    <button class="modebtn active" id="mode-paper">I have a paper / protocol
+      <small>Paste a Methods section or upload a PDF — adapt it to your needs</small></button>
+    <button class="modebtn" id="mode-hyp">I have a hypothesis
+      <small>Find the best assay to test it, then draft the protocol</small></button>
+  </div>
+  <p id="gstatus" class="muted noprint" style="min-height:1.2em; margin:0 0 8px"></p>
+
+  <section class="panel" id="input-panel">
+    <label class="muted" for="methods">Paste a Methods section</label>
+    <textarea id="methods" placeholder="Paste the Methods / protocol text here…"></textarea>
+    <div class="or">— or —</div>
+    <label class="filebtn" for="pdf">
+      <input type="file" id="pdf" accept="application/pdf,.pdf" />
+      <span id="pdf-label">Upload the paper as a PDF</span>
+    </label>
+    <p class="muted small">If you choose a PDF, it's used instead of the pasted text — the tool finds the Methods section for you. Your file is sent to the model only to build this protocol and is held in memory for this session (about an hour), not stored permanently.</p>
+    <label class="muted" for="hypothesis" style="display:block;margin-top:14px">Your hypothesis <span class="small">(optional — orients the protocol and lets you check it's directly tested)</span></label>
+    <input type="text" id="hypothesis" placeholder="e.g. Adding DsbC increases the yield of correctly folded, disulfide-bonded scFv" style="margin-top:6px" />
+    <div class="row">
+      <button id="analyze">Analyze</button>
+      <button class="secondary" id="example">Load example (CFPS)</button>
+      <button class="secondary hidden" id="clear-pdf">Clear PDF</button>
+      <span class="muted" id="status"></span>
+    </div>
+  </section>
+
+  <section class="panel hidden" id="discovery-panel">
+    <label class="muted" for="disc-hyp">What's your hypothesis or goal?</label>
+    <textarea id="disc-hyp" placeholder="e.g. Overexpressing the GroEL/ES chaperone increases the soluble yield of my membrane protein"></textarea>
+    <p class="muted small">No paper needed — describe what you want to find out. The tool proposes candidate assays, each grounded in the literature, and recommends one.</p>
+    <div class="row" style="margin-top:12px; align-items:flex-start; gap:14px; flex-wrap:wrap">
+      <div style="flex:1; min-width:180px">
+        <label class="muted small" for="c-equip">Equipment on hand <span>(optional)</span></label>
+        <input type="text" id="c-equip" placeholder="e.g. plate reader, qPCR, no FPLC" />
+      </div>
+      <div style="flex:1; min-width:150px">
+        <label class="muted small" for="c-time">Time budget <span>(optional)</span></label>
+        <input type="text" id="c-time" placeholder="e.g. results in a day" />
+      </div>
+      <div style="flex:1; min-width:150px">
+        <label class="muted small" for="c-skill">Skill comfort <span>(optional)</span></label>
+        <input type="text" id="c-skill" placeholder="e.g. new to the bench" />
+      </div>
+    </div>
+    <div class="row">
+      <button id="discover">Find the best assay</button>
+      <button class="secondary" id="autopick">Just pick the best &amp; start</button>
+      <span class="muted" id="disc-status"></span>
+    </div>
+  </section>
+
+  <section class="panel hidden" id="assays-panel">
+    <h2>Candidate assays</h2>
+    <p class="muted" id="assays-hyp"></p>
+    <div id="assays"></div>
+  </section>
+
+  <section class="panel hidden" id="questions-panel">
+    <h2>A few questions</h2>
+    <p class="muted" id="q-summary"></p>
+    <div id="gaps"></div>
+    <div class="row">
+      <button id="submit-answers">Build protocol</button>
+      <span class="muted">Skip a question to accept its default (flagged “verify before use”).</span>
+    </div>
+  </section>
+
+  <section class="panel hidden" id="result-panel"></section>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const el = (t, c, h) => { const e = document.createElement(t); if (c) e.className = c; if (h != null) e.innerHTML = h; return e; };
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (m) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]));
+// Only allow http(s) links — model/search output could carry a javascript: URL.
+const safeUrl = (u) => { const s = String(u || "").trim(); return /^https?:\/\//i.test(s) ? s : null; };
+
+let SESSION = null;
+let GAPS = [];
+let MD_URL = null;
+let CSV_URL = null;
+let GLOG = [];
+let HYP = "";
+
+/* ---------- access token (only when this instance requires one) ---------- */
+let AUTH = localStorage.getItem("gf_token") || "";
+function authHeaders(h) { h = h || {}; if (AUTH) h["X-API-Key"] = AUTH; return h; }
+// Fetch a download through the auth header (never a ?t= query param, which would land
+// the token in access logs / Referer), then hand the browser a blob to save. Surfaces
+// a 401 through the same auth bar as the rest of the app.
+async function downloadWithAuth(url, fallbackName) {
+  let res;
+  try {
+    res = await fetch(url, { headers: authHeaders({}) });
+  } catch (e) { setStatus("Download failed — network error.", true); return; }
+  if (res.status === 401) { showAuthBar("Access token required or invalid."); return; }
+  if (!res.ok) { setStatus(`Download failed (${res.status}).`, true); return; }
+  let name = fallbackName;
+  const cd = res.headers.get("Content-Disposition") || "";
+  const m = /filename="?([^"]+)"?/.exec(cd);
+  if (m) name = m[1];
+  const blob = await res.blob();
+  const href = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = href; a.download = name || "download";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(href), 4000);
+}
+function showAuthBar(msg) {
+  $("#authbar").classList.remove("hidden");
+  $("#authtok").value = AUTH;
+  $("#authmsg").textContent = msg || "";
+  $("#authmsg").className = msg ? "err" : "muted";
+  $("#authtok").focus();
+}
+$("#authsave").onclick = () => {
+  AUTH = $("#authtok").value.trim();
+  localStorage.setItem("gf_token", AUTH);
+  $("#authbar").classList.add("hidden");
+};
+(async () => {
+  try {
+    const h = await (await fetch("/healthz")).json();
+    if (h.auth_required && !AUTH) showAuthBar("");
+  } catch (e) { /* ignore — health probe is best-effort */ }
+})();
+let CURR_PROTOCOL = null;
+let PREV_PROTOCOL = null;
+
+const EXAMPLE = `CFPS reactions were assembled with S30 extract prepared as described previously and a PANOx-SP energy system, and incubated at 30 C. The template plasmid encoded a single-chain antibody fragment. Disulfide-bonded, correctly folded product was obtained. Reactions were quenched and product yield was quantified by radioactive leucine incorporation.`;
+
+$("#example").onclick = () => { $("#methods").value = EXAMPLE; clearPdf(); };
+
+$("#pdf").onchange = () => {
+  const f = $("#pdf").files[0];
+  $("#pdf-label").textContent = f ? f.name : "Upload the paper as a PDF";
+  $(".filebtn").classList.toggle("has-file", !!f);
+  $("#clear-pdf").classList.toggle("hidden", !f);
+};
+function clearPdf() {
+  $("#pdf").value = "";
+  $("#pdf-label").textContent = "Upload the paper as a PDF";
+  $(".filebtn").classList.remove("has-file");
+  $("#clear-pdf").classList.add("hidden");
+}
+$("#clear-pdf").onclick = clearPdf;
+
+/* ---------- mode toggle ---------- */
+function setMode(mode) {
+  const paper = mode === "paper";
+  $("#mode-paper").classList.toggle("active", paper);
+  $("#mode-hyp").classList.toggle("active", !paper);
+  $("#input-panel").classList.toggle("hidden", !paper);
+  $("#discovery-panel").classList.toggle("hidden", paper);
+  // reset any downstream panels + diff baseline when switching entry paths
+  ["#questions-panel", "#assays-panel", "#result-panel"].forEach(hide);
+  PREV_PROTOCOL = null; CURR_PROTOCOL = null;
+  setStatus(""); $("#disc-status").textContent = "";
+}
+$("#mode-paper").onclick = () => setMode("paper");
+$("#mode-hyp").onclick = () => setMode("hyp");
+
+/* ---------- hypothesis-first: discover assays ---------- */
+function discoverBody(autoPick) {
+  const hyp = $("#disc-hyp").value.trim();
+  HYP = hyp;
+  return {
+    hypothesis: hyp,
+    auto_pick: !!autoPick,
+    constraints: {
+      equipment: $("#c-equip").value.trim(),
+      time: $("#c-time").value.trim(),
+      skill: $("#c-skill").value.trim(),
+    },
+  };
+}
+async function runDiscover(autoPick) {
+  const body = discoverBody(autoPick);
+  if (body.hypothesis.length < 12) { discStatus("State a hypothesis or goal (a sentence).", true); return; }
+  discLock(true, autoPick ? "Finding and picking the best assay…" : "Searching the literature for the best assays to test this… (this can take a minute)");
+  try {
+    const r = await postJSON("/api/discover", body);
+    handlePhase(r);
+  } catch (e) { discStatus(e.message, true); }
+  discLock(false);
+}
+$("#discover").onclick = () => runDiscover(false);
+$("#autopick").onclick = () => runDiscover(true);
+function discStatus(msg, isErr) { const s = $("#disc-status"); s.textContent = msg || ""; s.className = isErr ? "err" : "muted"; }
+function discLock(on, msg) { $("#discover").disabled = on; $("#autopick").disabled = on; discStatus(on ? (msg || "Working…") : ""); }
+
+$("#analyze").onclick = async () => {
+  const file = $("#pdf").files[0];
+  const text = $("#methods").value.trim();
+  if (!file && text.length < 40) { setStatus("Paste a Methods section or choose a PDF.", true); return; }
+  lock(true, file ? "Reading the PDF and scoping gaps… (this can take a minute or two)"
+                  : "Reading the methods and scoping gaps… (this can take a minute)");
+  try {
+    const fd = new FormData();
+    if (file) fd.append("file", file); else fd.append("methods_text", text);
+    const hyp = $("#hypothesis").value.trim();
+    if (hyp) fd.append("hypothesis", hyp);
+    HYP = hyp;
+    const r = await postForm("/api/analyze", fd);
+    handlePhase(r);
+  } catch (e) { setStatus(e.message, true); }
+  lock(false);
+};
+
+function handlePhase(r) {
+  // A new session id == a new protocol lineage: don't diff across unrelated protocols.
+  if (r.session_id !== SESSION) { PREV_PROTOCOL = null; CURR_PROTOCOL = null; }
+  SESSION = r.session_id;
+  if (r.phase === "rejected") {
+    const reason = (r.assay_options && r.assay_options.reason) || (r.phase1 && r.phase1.reason)
+      || "This input does not look like something the tool can build from.";
+    showResultMessage("Can't proceed with this input", reason);
+    return;
+  }
+  if (r.phase === "assays") { renderAssays(r.assay_options); return; }
+  if (r.phase === "questions") { renderQuestions(r.phase1); return; }
+  if (r.phase === "complete") { renderResult(r); return; }
+}
+
+const LEVEL = { high: "hi", medium: "med", low: "lo" };
+function renderAssays(opts) {
+  const rec = opts.recommended_assay_id;
+  $("#assays-hyp").textContent = opts.hypothesis_restated ? "Testing: " + opts.hypothesis_restated : "";
+  const wrap = $("#assays"); wrap.innerHTML = "";
+  (opts.assays || []).forEach((a) => {
+    const box = el("div", "assay" + (a.id === rec ? " recommended" : ""));
+    if (a.id === rec) box.appendChild(el("span", "rec-badge", "Recommended"));
+    box.appendChild(el("h4", null, esc(a.name)));
+    const tp = `<span class="pill ${LEVEL[a.throughput] || "lo"}">throughput: ${esc(a.throughput || "?")}</span>`;
+    const df = `<span class="pill ${LEVEL[a.difficulty] || "lo"}">difficulty: ${esc(a.difficulty || "?")}</span>`;
+    const tt = a.turnaround ? `<span class="pill">⏱ ${esc(a.turnaround)}</span>` : "";
+    box.appendChild(el("div", "kv", tp + df + tt));
+    box.appendChild(el("div", "kv", `<b>Measures:</b> ${esc(a.measures)}`));
+    box.appendChild(el("div", "kv", `<b>Tests your hypothesis by:</b> ${esc(a.why_tests_hypothesis)}`));
+    box.appendChild(el("div", "kv", `<b>Critical comparison:</b> ${esc(a.critical_comparison)}`));
+    if (a.materials_burden) box.appendChild(el("div", "kv", `<b>Materials:</b> ${esc(a.materials_burden)}`));
+    if (a.equipment_burden) box.appendChild(el("div", "kv", `<b>Equipment:</b> ${esc(a.equipment_burden)}`));
+    box.appendChild(el("div", "kv", `<b>Key limitation:</b> ${esc(a.key_limitation)}`));
+    const prov = el("div", "kv"); prov.innerHTML = tierPill(a.provenance) + citeInline(a); box.appendChild(prov);
+    const btn = el("button", "btn", a.id === rec ? "Use this assay (recommended)" : "Use this assay");
+    btn.onclick = () => chooseAssay(a.id, btn);
+    box.appendChild(el("div", "row", "")).appendChild(btn);
+    wrap.appendChild(box);
+  });
+  if (opts.recommendation_rationale) {
+    wrap.appendChild(el("p", "hint", "Why the recommendation: " + esc(opts.recommendation_rationale)));
+  }
+  hide("#discovery-panel");
+  show("#assays-panel");
+  $("#assays-panel").scrollIntoView({ behavior: "smooth" });
+}
+
+async function chooseAssay(assayId, btn) {
+  const buttons = document.querySelectorAll("#assays button");
+  buttons.forEach((b) => (b.disabled = true));
+  setStatus("Drafting a protocol for this assay… (this can take a minute)");
+  try {
+    const r = await postJSON("/api/choose_assay", { session_id: SESSION, assay_id: assayId });
+    hide("#assays-panel");
+    handlePhase(r);
+  } catch (e) { setStatus(e.message, true); buttons.forEach((b) => (b.disabled = false)); }
+}
+
+function renderResult(r) {
+  // capture the just-rendered protocol so the next rebuild can diff against it
+  PREV_PROTOCOL = CURR_PROTOCOL;
+  CURR_PROTOCOL = r.protocol;
+  MD_URL = r.markdown_url || null;
+  CSV_URL = r.materials_csv_url || null;
+  GLOG = r.grounding_log || [];
+  renderProtocol(r.protocol);
+  // The audit runs in the pipeline; if this result carries one, show what it caught/fixed.
+  if (r.correctness_review) renderCritique(r.correctness_review, !!r.auto_review && (r.fixes_applied || 0) > 0, r.fixes_applied || 0);
+}
+
+function renderQuestions(p1) {
+  GAPS = p1.gaps || [];
+  $("#q-summary").textContent = (p1.protocol_title ? p1.protocol_title + " — " : "") + (p1.source_summary || "");
+  const wrap = $("#gaps"); wrap.innerHTML = "";
+  GAPS.forEach((g, i) => wrap.appendChild(renderGap(g, i)));
+  show("#questions-panel");
+  $("#questions-panel").scrollIntoView({ behavior: "smooth" });
+}
+
+function renderGap(g, i) {
+  const box = el("div", "gap");
+  box.appendChild(el("h4", null, `${i + 1}. ${esc(g.question)}`));
+  box.appendChild(el("p", "why", `${esc(g.parameter)} · ${esc(g.why_it_matters)}`));
+  if (g.option_context) box.appendChild(el("p", "muted", esc(g.option_context)));
+
+  const name = "gap_" + g.id;
+  if (g.answer_type === "single_select" || g.answer_type === "multi_select") {
+    const multi = g.answer_type === "multi_select";
+    (g.options || []).forEach((o, j) => {
+      box.appendChild(optionRow(name, o.value, optionLabel(o), multi, `${name}_${j}`));
+    });
+    // Other / not sure escape
+    const otherId = `${name}_other`;
+    const other = optionRow(name, "__other__", "Other / not sure", multi, otherId);
+    box.appendChild(other);
+    const otherText = el("input"); otherText.type = "text"; otherText.placeholder = "Describe (optional)";
+    otherText.id = `${name}_othertext`; otherText.style.marginTop = "6px"; otherText.classList.add("hidden");
+    box.appendChild(otherText);
+    box.addEventListener("change", () => {
+      const checked = document.getElementById(otherId).checked;
+      otherText.classList.toggle("hidden", !checked);
+    });
+  } else if (g.answer_type === "number") {
+    const inp = el("input"); inp.type = "number"; inp.step = "any"; inp.id = name + "_val";
+    inp.placeholder = g.suggested_default != null ? `default: ${g.suggested_default}` : "";
+    const wrap = el("div", "row"); wrap.appendChild(inp);
+    if (g.unit) wrap.appendChild(el("span", "muted", esc(g.unit)));
+    box.appendChild(wrap);
+    const lo = g.plausible_min, hi = g.plausible_max;
+    if (lo != null || hi != null) {
+      const warn = el("div", "rangewarn hidden");
+      box.appendChild(warn);
+      inp.addEventListener("input", () => {
+        const v = parseFloat(inp.value);
+        const bad = !isNaN(v) && ((lo != null && v < lo) || (hi != null && v > hi));
+        warn.textContent = bad
+          ? `⚠ Outside the usual range (${lo != null ? lo : "?"}–${hi != null ? hi : "?"}${g.unit ? " " + g.unit : ""}). Double-check before continuing.`
+          : "";
+        warn.classList.toggle("hidden", !bad);
+      });
+    }
+  } else {
+    const inp = el("input"); inp.type = "text"; inp.id = name + "_val";
+    inp.placeholder = g.suggested_default != null ? `default: ${g.suggested_default}` : "";
+    box.appendChild(inp);
+  }
+
+  const skipRow = el("label", "row skip muted");
+  const skip = el("input"); skip.type = "checkbox"; skip.id = name + "_skip";
+  skipRow.appendChild(skip);
+  skipRow.appendChild(el("span", null, g.suggested_default != null
+    ? `Skip — use default “${esc(g.suggested_default)}” (flag to verify)`
+    : "Skip this question"));
+  box.appendChild(skipRow);
+  return box;
+}
+
+function optionLabel(o) {
+  const tag = `<span class="src-tag">${esc(o.source)}</span>`;
+  let cite = "";
+  if (o.citation) {
+    const c = o.citation;
+    const t = `${esc(c.authors || "")} (${esc(c.year || "")}) — ${esc(c.identifier || "")}`;
+    const u = safeUrl(c.url);
+    cite = u ? ` <a href="${esc(u)}" target="_blank" rel="noopener">${t}</a>` : ` <span class="cite">${t}</span>`;
+  }
+  const note = o.note ? `<div class="note">${esc(o.note)}</div>` : "";
+  return `<b>${esc(o.label)}</b> ${tag}${cite}${note}`;
+}
+
+function optionRow(name, value, labelHtml, multi, id) {
+  const row = el("div", "opt");
+  const inp = el("input"); inp.type = multi ? "checkbox" : "radio"; inp.name = name; inp.value = value; inp.id = id;
+  const lab = el("label", null, labelHtml); lab.setAttribute("for", id);
+  row.appendChild(inp); row.appendChild(lab);
+  return row;
+}
+
+$("#submit-answers").onclick = async () => {
+  const answers = GAPS.map(collectAnswer);
+  lock(true, "Grounding values in the literature and verifying citations… (this can take a minute or two)");
+  try {
+    const r = await postJSON("/api/resolve", { session_id: SESSION, answers });
+    renderResult(r);
+    hide("#questions-panel");
+  } catch (e) { setStatus(e.message, true); }
+  lock(false);
+};
+
+function collectAnswer(g) {
+  const name = "gap_" + g.id;
+  const skip = document.getElementById(name + "_skip");
+  if (skip && skip.checked) return { id: g.id, value: null, skipped: true };
+
+  if (g.answer_type === "multi_select") {
+    const vals = [...document.querySelectorAll(`input[name="${name}"]:checked`)].map((i) => i.value);
+    const idx = vals.indexOf("__other__");
+    if (idx >= 0) { vals.splice(idx, 1); const t = document.getElementById(name + "_othertext"); if (t && t.value.trim()) vals.push(t.value.trim()); }
+    return { id: g.id, value: vals, skipped: vals.length === 0 };
+  }
+  if (g.answer_type === "single_select") {
+    const sel = document.querySelector(`input[name="${name}"]:checked`);
+    if (!sel) return { id: g.id, value: null, skipped: true };
+    if (sel.value === "__other__") {
+      const t = document.getElementById(name + "_othertext");
+      const v = t && t.value.trim();
+      return { id: g.id, value: v || "not sure", skipped: !v };
+    }
+    return { id: g.id, value: sel.value, skipped: false };
+  }
+  const inp = document.getElementById(name + "_val");
+  const v = inp ? inp.value.trim() : "";
+  return { id: g.id, value: v || null, skipped: !v };
+}
+
+/* ---------- protocol render ---------- */
+function renderProtocol(p) {
+  const P = $("#result-panel"); P.innerHTML = "";
+  P.appendChild(el("h2", null, esc(p.title || "Protocol")));
+  if (p.summary) P.appendChild(el("p", "muted", esc(p.summary)));
+  if (p.estimated_duration) P.appendChild(el("p", "muted", "Estimated duration: " + esc(p.estimated_duration)));
+
+  P.appendChild(toolbar());
+  P.appendChild(el("div", null, "")).id = "align-anchor";
+  P.appendChild(el("div", null, "")).id = "design-anchor";
+  P.appendChild(el("div", null, "")).id = "critique-anchor";
+  const changes = protocolDiff(PREV_PROTOCOL, p);
+  if (changes.length) P.appendChild(diffBox(changes));
+  P.appendChild(validationSummary(p.validation_report));
+  P.appendChild(legend());
+
+  // Materials
+  if ((p.materials || []).length) {
+    P.appendChild(el("h3", null, "Materials"));
+    const tbl = el("table");
+    tbl.innerHTML = "<tr><th>Reagent</th><th>Amount</th><th>Grade/vendor</th><th>Provenance</th></tr>";
+    (p.materials).forEach((m) => {
+      const tr = el("tr");
+      const amt = [m.amount, m.unit].filter((x) => x != null && x !== "").join(" ");
+      tr.appendChild(el("td", null, esc(m.name)));
+      tr.appendChild(el("td", null, esc(amt)));
+      tr.appendChild(el("td", null, esc(m.vendor_or_grade || "—")));
+      tr.appendChild(provCell(m));
+      tbl.appendChild(tr);
+    });
+    P.appendChild(tbl);
+  }
+
+  if ((p.equipment || []).length) {
+    P.appendChild(el("h3", null, "Equipment"));
+    const ul = el("ul"); p.equipment.forEach((e) => ul.appendChild(el("li", null, esc(e)))); P.appendChild(ul);
+  }
+
+  // Steps
+  P.appendChild(el("h3", null, "Procedure"));
+  const steps = el("div");
+  (p.steps || []).forEach((s) => {
+    const d = el("div", "step");
+    d.appendChild(el("div", null, `<span class="num">${esc(s.number)}.</span> <b>${esc(s.title)}</b> ${tierPill(s.provenance)}${anchorInline(s)}`));
+    d.appendChild(el("div", null, esc(s.instruction)));
+    const meta = [s.duration ? "⏱ " + esc(s.duration) : "", s.temperature ? "🌡 " + esc(s.temperature) : ""].filter(Boolean).join(" · ");
+    if (meta) d.appendChild(el("div", "cp", meta));
+    (s.critical_parameters || []).forEach((cp) => {
+      const line = el("div", "cp", `${esc(cp.name)}: <b>${esc([cp.value, cp.unit].filter(Boolean).join(" "))}</b> ${tierPill(cp.provenance)} ${citeInline(cp)}${anchorInline(cp)}${flagInline(cp)}`);
+      if (cp.provenance_note) line.appendChild(el("div", "pnote", esc(cp.provenance_note)));
+      d.appendChild(line);
+    });
+    (s.substeps || []).forEach((ss) => d.appendChild(el("div", "cp", `${esc(ss.number)} ${esc(ss.instruction)} ${tierPill(ss.provenance)}${anchorInline(ss)}${flagInline(ss)}`)));
+    (s.warnings || []).forEach((w) => d.appendChild(el("div", "warn", "⚠ " + esc(w))));
+    steps.appendChild(d);
+  });
+  P.appendChild(steps);
+
+  // Titration series worklist (present for dilution/dose-response/screen protocols)
+  const ts = p.titration_series;
+  if (ts && (ts.points || []).length) {
+    const unit = ts.unit ? ` (${esc(ts.unit)})` : "";
+    P.appendChild(el("h3", null, `Titration series — ${esc(ts.variable || "condition")}${unit} ${tierPill(ts.provenance)}`));
+    const meta = [ts.spacing ? "spacing: " + esc(ts.spacing) : "", esc(ts.rationale || "")].filter(Boolean).join(" · ");
+    if (meta) P.appendChild(el("p", "muted small", meta));
+    const comp = [];
+    ts.points.forEach((pt) => (pt.components || []).forEach((c) => { if (c.name && !comp.includes(c.name)) comp.push(c.name); }));
+    const tt = el("table");
+    tt.innerHTML = "<tr><th>Condition</th><th>Target</th>" + comp.map((n) => `<th>${esc(n)}</th>`).join("") + "</tr>";
+    ts.points.forEach((pt) => {
+      const vols = {}; (pt.components || []).forEach((c) => (vols[c.name] = c.volume));
+      const tr = el("tr");
+      tr.appendChild(el("td", null, esc(pt.label || "")));
+      tr.appendChild(el("td", null, esc(pt.target_concentration || "—")));
+      comp.forEach((n) => tr.appendChild(el("td", null, esc(vols[n] != null ? vols[n] : "—"))));
+      tt.appendChild(tr);
+    });
+    P.appendChild(tt);
+  }
+
+  // Assumptions log — the payoff panel
+  P.appendChild(el("h3", null, "Assumptions log — everything not stated in the source"));
+  const tbl = el("table");
+  tbl.innerHTML = "<tr><th>Parameter</th><th>Value</th><th>Provenance</th><th>Basis</th></tr>";
+  (p.assumptions_log || []).forEach((a) => {
+    const tr = el("tr");
+    tr.appendChild(el("td", null, esc(a.parameter)));
+    tr.appendChild(el("td", null, esc(a.value)));
+    tr.appendChild(provCell(a));
+    const basis = el("td"); basis.innerHTML = esc(a.basis || "") + (a.verify ? ' <span class="badge-warn">· verify</span>' : "");
+    tr.appendChild(basis);
+    tbl.appendChild(tr);
+  });
+  P.appendChild(tbl);
+
+  if ((p.open_questions || []).length) {
+    P.appendChild(el("h3", null, "Open questions"));
+    const ul = el("ul"); p.open_questions.forEach((q) => ul.appendChild(el("li", "muted", esc(q)))); P.appendChild(ul);
+  }
+
+  if (GLOG.length) {
+    P.appendChild(el("h3", "noprint", "How values were grounded"));
+    const ul = el("ul", "noprint");
+    GLOG.forEach((g) => ul.appendChild(el("li", "muted", esc(g))));
+    P.appendChild(ul);
+  }
+
+  P.appendChild(refineBox());
+
+  show("#result-panel");
+  P.scrollIntoView({ behavior: "smooth" });
+}
+
+function toolbar() {
+  const wrap = el("div", "noprint");
+  const bar = el("div", "toolbar noprint");
+  if (MD_URL) {
+    const dl = el("button", "btn", "⬇ Download .md");
+    dl.onclick = () => downloadWithAuth(MD_URL, "protocol.md");
+    bar.appendChild(dl);
+  }
+  if (CSV_URL) {
+    const cs = el("button", "btn secondary", "⬇ Materials .csv");
+    cs.onclick = () => downloadWithAuth(CSV_URL, "materials.csv");
+    cs.title = "The materials table as CSV, with provenance columns.";
+    bar.appendChild(cs);
+  }
+  const dr = el("button", "btn", "🎓 Design review");
+  dr.title = "Reason about the experiment around this protocol: controls, variables, readout, replication, pitfalls.";
+  dr.onclick = () => requestDesign(dr);
+  bar.appendChild(dr);
+  const cr = el("button", "btn", "🔍 Re-review & fix");
+  cr.title = "The correctness + practicality audit already ran automatically when this protocol was generated. Click to run it again (e.g. after a manual refine): it re-audits and auto-applies any new fixes. Model-generated; findings ranked by severity.";
+  cr.onclick = () => requestCritique(cr);
+  bar.appendChild(cr);
+  const al = el("button", "btn", HYP ? "🎯 Test my hypothesis" : "🎯 Test a hypothesis");
+  al.title = HYP
+    ? "Does this protocol directly test your hypothesis? Get a verdict, the critical comparison, confounds, and one-click protocol fixes."
+    : "Check whether this protocol directly tests a hypothesis. You didn't state one, so you can type it now (or let the tool infer it, clearly labelled).";
+  al.onclick = () => requestAlignment(al);
+  bar.appendChild(al);
+  const pr = el("button", "btn secondary", "🖨 Print / Save PDF");
+  pr.onclick = () => window.print();
+  bar.appendChild(pr);
+  wrap.appendChild(bar);
+  wrap.appendChild(el("p", "hint noprint",
+    "A correctness &amp; practicality audit already ran automatically and any fixes were applied (shown above). Use <b>Design review</b> to reason about the experiment, <b>Re-review &amp; fix</b> to re-audit after edits, and <b>Test a hypothesis</b> to confirm it's directly tested."));
+  return wrap;
+}
+
+async function requestDesign(btn) {
+  btn.disabled = true; setStatus("Building the experiment-design review… (this can take a minute)");
+  try {
+    const r = await postJSON("/api/design", { session_id: SESSION });
+    renderDesign(r.design_review);
+    setStatus("");
+  } catch (e) { setStatus(e.message, true); }
+  btn.disabled = false;
+}
+
+async function requestCritique(btn) {
+  btn.disabled = true;
+  setStatus("Re-auditing correctness & practicality, then applying any fixes… (this can take a couple of minutes)");
+  try {
+    const r = await postJSON("/api/critique", { session_id: SESSION, apply: true });
+    if (r.applied && r.protocol) renderResult(r);  // renderResult also renders the audit
+    else renderCritique(r.correctness_review, false, 0);  // sound / nothing to apply
+    setStatus("");
+  } catch (e) { setStatus(e.message, true); }
+  btn.disabled = false;
+}
+
+const _SEV_META = {
+  critical: { label: "🔴 Critical", cls: "sev-critical" },
+  major: { label: "🟠 Major", cls: "sev-major" },
+  minor: { label: "🟡 Minor", cls: "sev-minor" },
+};
+const _VERDICT_META = {
+  sound: '<span class="badge-ok">✅ Sound — no correctness defects found</span>',
+  issues_found: '<span class="badge-warn">⚠️ Issues found</span>',
+  serious_issues: '<span class="badge-warn">🛑 Serious issues</span>',
+};
+
+function renderCritique(r, applied, count) {
+  r = r || {};
+  const host = $("#critique-anchor");
+  host.innerHTML = "";
+  const box = el("div", "design");
+  box.appendChild(el("h2", null, "🔍 Correctness & practicality review (adversarial)"));
+  box.appendChild(el("p", "muted small", "A skeptical audit for logic, value, unit/scaling, ordering, and missing-control errors <b>and</b> for practicality — missing detail, unclear steps, impractical logistics. This is <b>model-generated reasoning, not a host-verified guarantee</b>; only cited evidence is checked against a database."));
+  box.appendChild(el("p", null, _VERDICT_META[r.verdict] || esc(r.verdict || "")));
+  if (r.summary) box.appendChild(el("p", null, esc(r.summary)));
+  if (applied && count) {
+    box.appendChild(el("p", "badge-ok", `🛠 ${count} fix${count > 1 ? "es" : ""} applied — corrected protocol below. Re-run the review to confirm they hold.`));
+  }
+
+  const findings = (r.findings || []).filter((f) => f && typeof f === "object");
+  if (findings.length) {
+    findings.forEach((f) => {
+      const meta = _SEV_META[f.severity] || { label: esc(f.severity || ""), cls: "" };
+      const card = el("div", "finding " + meta.cls);
+      const fixedTag = applied && (f.fix || "").trim() ? ' <span class="badge-ok">✓ fixed</span>' : "";
+      const head = [meta.label, f.location ? esc(f.location) : "", f.category ? `<span class="muted small">(${esc(f.category)})</span>` : ""].filter(Boolean).join(" — ") + fixedTag;
+      card.appendChild(el("div", "finding-head", head));
+      card.appendChild(el("p", null, `<b>Problem.</b> ${esc(f.problem || "")}`));
+      card.appendChild(el("p", null, `<b>Fix.</b> ${esc(f.fix || "")}`));
+      if (f.citation) card.appendChild(el("p", "muted small", "Evidence: " + esc(f.citation.identifier || "") + (f.citation_verified ? " ✓" : "")));
+      box.appendChild(card);
+    });
+  } else {
+    box.appendChild(el("p", "muted", "No correctness or practicality defects found in this audit."));
+  }
+
+  if ((r.strengths || []).length) {
+    box.appendChild(el("h3", null, "Strengths"));
+    const ul = el("ul");
+    r.strengths.forEach((s) => ul.appendChild(el("li", null, esc(s))));
+    box.appendChild(ul);
+  }
+  host.appendChild(box);
+  box.scrollIntoView({ behavior: "smooth" });
+}
+
+function requestAlignment(btn) {
+  if (HYP) { runAlignment(HYP); return; }
+  // No hypothesis on file — ask for one rather than silently inferring.
+  const host = $("#align-anchor");
+  host.innerHTML = "";
+  const box = el("div", "align");
+  box.appendChild(el("h2", null, "🎯 Test a hypothesis"));
+  box.appendChild(el("p", "muted small", "You didn't state a hypothesis. Type the one this protocol should test, or let the tool infer it (it'll be clearly labelled as inferred)."));
+  const inp = el("input"); inp.type = "text"; inp.id = "align-hyp";
+  inp.placeholder = "e.g. Adding DsbC increases the yield of correctly folded scFv";
+  box.appendChild(inp);
+  const row = el("div", "row");
+  const go = el("button", "btn", "Check alignment");
+  go.onclick = () => { HYP = inp.value.trim(); runAlignment(HYP || null); };
+  const infer = el("button", "btn secondary", "Let the tool infer");
+  infer.onclick = () => runAlignment(null);
+  row.appendChild(go); row.appendChild(infer);
+  box.appendChild(row);
+  host.appendChild(box);
+  box.scrollIntoView({ behavior: "smooth" });
+}
+
+async function runAlignment(hyp) {
+  setStatus("Checking whether the protocol directly tests the hypothesis… (this can take a minute)");
+  try {
+    const body = { session_id: SESSION };
+    if (hyp) body.hypothesis = hyp;
+    const r = await postJSON("/api/align", body);
+    renderAlignment(r.design_alignment);
+    setStatus("");
+  } catch (e) { setStatus(e.message, true); }
+}
+
+const VERDICT = {
+  yes: ["v-yes", "✓ Directly tests your hypothesis"],
+  partial: ["v-partial", "◐ Only partially tests your hypothesis"],
+  no: ["v-no", "✗ Does not directly test your hypothesis"],
+};
+
+function renderAlignment(a) {
+  const host = $("#align-anchor");
+  host.innerHTML = "";
+  const box = el("div", "align");
+  box.appendChild(el("h2", null, "🎯 Does this test your hypothesis?"));
+
+  const h = a.hypothesis || {};
+  if (h.statement) {
+    const tag = a.inferred ? ' <span class="src-tag">inferred</span>' : "";
+    box.appendChild(el("p", null, `<b>Hypothesis.</b> ${esc(h.statement)}${tag}`));
+    const ul = el("ul");
+    if (h.prediction_if_true) ul.appendChild(el("li", null, `<b>If true →</b> ${esc(h.prediction_if_true)}`));
+    if (h.prediction_if_false) ul.appendChild(el("li", null, `<b>If false →</b> ${esc(h.prediction_if_false)}`));
+    if (ul.children.length) box.appendChild(ul);
+  }
+
+  const dt = a.directly_tests || {};
+  if (dt.verdict) {
+    const [cls, label] = VERDICT[dt.verdict] || ["v-partial", dt.verdict];
+    box.appendChild(el("p", null, `<span class="verdict ${cls}">${esc(label)}</span>`));
+    if (dt.rationale) box.appendChild(el("p", "muted", esc(dt.rationale)));
+  }
+
+  if (a.critical_comparison) {
+    box.appendChild(el("h3", null, "The comparison that makes it a valid test"));
+    box.appendChild(el("p", null, esc(a.critical_comparison)));
+  }
+
+  if ((a.alignment_gaps || []).length) {
+    box.appendChild(el("h3", null, "Where it falls short"));
+    const ul = el("ul", "gaps");
+    a.alignment_gaps.forEach((g) => ul.appendChild(el("li", null, `<b>${esc(g.gap)}</b> — ${esc(g.why_it_breaks_the_test)}`)));
+    box.appendChild(ul);
+  }
+
+  if ((a.confounds || []).length) {
+    box.appendChild(el("h3", null, "Confounds that would make a positive result ambiguous"));
+    const ul = el("ul");
+    a.confounds.forEach((c) => {
+      const mit = c.mitigation ? ` <span class="muted">Mitigation: ${esc(c.mitigation)}</span>` : "";
+      ul.appendChild(el("li", null, `<b>${esc(c.confound)}</b> — ${esc(c.makes_result_ambiguous)}.${mit}`));
+    });
+    box.appendChild(ul);
+  }
+
+  if ((a.recommended_changes || []).length) {
+    box.appendChild(el("h3", null, "Recommended changes — apply to make it a direct test"));
+    box.appendChild(el("p", "muted small noprint", "Each button rebuilds the protocol with that change, keeping everything else."));
+    a.recommended_changes.forEach((c) => box.appendChild(recRow(c)));
+  }
+
+  if (a.summary) box.appendChild(el("p", null, `<b>Bottom line.</b> ${esc(a.summary)}`));
+
+  host.appendChild(box);
+  box.scrollIntoView({ behavior: "smooth" });
+}
+
+function recRow(c) {
+  const row = el("div", "rec");
+  const tag = c.type ? `<span class="type-tag">${esc(c.type.replace(/_/g, " "))}</span>` : "";
+  row.appendChild(el("div", null, `${tag}${esc(c.change)}`));
+  if (c.addresses) row.appendChild(el("div", "addresses", "Addresses: " + esc(c.addresses)));
+  const btn = el("button", "btn apply noprint", "Apply to protocol");
+  btn.onclick = async () => {
+    btn.disabled = true; setStatus("Applying the change and rebuilding the protocol…");
+    try {
+      const r = await postJSON("/api/revise", { session_id: SESSION, instruction: c.change });
+      row.classList.add("applied");
+      btn.textContent = "✓ Applied — protocol rebuilt below";
+      renderResult(r);
+    } catch (e) { setStatus(e.message, true); btn.disabled = false; }
+    setStatus("");
+  };
+  row.appendChild(btn);
+  return row;
+}
+
+function renderDesign(d) {
+  const host = $("#design-anchor");
+  host.innerHTML = "";
+  const box = el("div", "design");
+  box.appendChild(el("h2", null, "🎓 Experiment design review"));
+  box.appendChild(el("p", "muted small", "The protocol tells you what to do; this explains how to reason about the experiment around it."));
+  if (d.question) box.appendChild(el("p", null, `<b>Question.</b> ${esc(d.question)}`));
+  if (d.hypothesis) box.appendChild(el("p", null, `<b>Hypothesis.</b> ${esc(d.hypothesis)}`));
+
+  const v = d.variables || {};
+  if (v.independent || v.dependent || v.controlled) {
+    box.appendChild(el("h3", null, "Variables"));
+    const ul = el("ul");
+    [["Independent (you vary)", v.independent], ["Dependent (you measure)", v.dependent], ["Controlled (held constant)", v.controlled]]
+      .forEach(([k, arr]) => ul.appendChild(el("li", null, `<b>${k}:</b> ${esc((arr || []).join(", ") || "—")}`)));
+    box.appendChild(ul);
+  }
+
+  if ((d.controls || []).length) {
+    box.appendChild(el("h3", null, "Controls — and what each rules out"));
+    const tbl = el("table");
+    tbl.innerHTML = "<tr><th>Control</th><th>Type</th><th>Rules out</th><th>Provenance</th></tr>";
+    d.controls.forEach((c) => {
+      const tr = el("tr");
+      tr.appendChild(el("td", null, esc(c.name)));
+      tr.appendChild(el("td", null, esc(c.type)));
+      tr.appendChild(el("td", null, esc(c.rules_out)));
+      const p = el("td"); p.innerHTML = tierPill(c.provenance || "best_practice") + citeInline(c);
+      tr.appendChild(p);
+      tbl.appendChild(tr);
+    });
+    box.appendChild(tbl);
+  }
+
+  const r = d.readout || {};
+  if (r.measures) {
+    box.appendChild(el("h3", null, "Readout adequacy"));
+    const ok = r.answers_question ? '<span class="badge-ok">✓ tests the hypothesis</span>' : '<span class="badge-warn">⚠ may not test the hypothesis</span>';
+    box.appendChild(el("p", null, `${esc(r.measures)} — ${ok}`));
+    if (r.caveat) box.appendChild(el("p", "muted", "Caveat: " + esc(r.caveat)));
+  }
+
+  const rep = d.replication || {};
+  if (rep.rationale) {
+    box.appendChild(el("h3", null, "Replication"));
+    const bits = [rep.biological ? `biological: ${esc(rep.biological)}` : "", rep.technical ? `technical: ${esc(rep.technical)}` : ""].filter(Boolean).join(" · ");
+    if (bits) box.appendChild(el("p", "muted", bits));
+    box.appendChild(el("p", null, esc(rep.rationale)));
+  }
+
+  if ((d.expected_results || []).length) {
+    box.appendChild(el("h3", null, "Expected results — if you see X, it means Y"));
+    const ul = el("ul");
+    d.expected_results.forEach((e) => ul.appendChild(el("li", null, `<b>${esc(e.scenario)}</b> → ${esc(e.interpretation)}`)));
+    box.appendChild(ul);
+  }
+
+  if ((d.failure_modes || []).length) {
+    box.appendChild(el("h3", null, "Failure modes"));
+    const tbl = el("table");
+    tbl.innerHTML = "<tr><th>Symptom</th><th>Likely cause</th><th>Check</th></tr>";
+    d.failure_modes.forEach((f) => {
+      const tr = el("tr");
+      tr.appendChild(el("td", null, esc(f.symptom)));
+      tr.appendChild(el("td", null, esc(f.likely_cause)));
+      tr.appendChild(el("td", null, esc(f.check || "—")));
+      tbl.appendChild(tr);
+    });
+    box.appendChild(tbl);
+  }
+
+  if ((d.interpretation_limits || []).length) {
+    box.appendChild(el("h3", null, "What this experiment cannot conclude"));
+    const ul = el("ul"); d.interpretation_limits.forEach((x) => ul.appendChild(el("li", "muted", esc(x)))); box.appendChild(ul);
+  }
+
+  if ((d.design_gaps || []).length) {
+    box.appendChild(el("h3", null, "Design gaps to fix in this plan"));
+    const ul = el("ul", "gaps"); d.design_gaps.forEach((g) => ul.appendChild(el("li", null, esc(g)))); box.appendChild(ul);
+  }
+
+  host.appendChild(box);
+  box.scrollIntoView({ behavior: "smooth" });
+}
+
+function refineBox() {
+  const box = el("div", "refine noprint");
+  box.appendChild(el("h3", null, "Refine this protocol"));
+  box.appendChild(el("p", "muted small", "Describe a change and it rebuilds with full context — e.g. “use 150 µL wells and drop to 2 replicates”, or “switch the folding aid to DsbC”."));
+  const ta = el("textarea"); ta.id = "revise-text"; ta.rows = 2; ta.placeholder = "Your correction…";
+  box.appendChild(ta);
+  const btn = el("button", "btn", "Apply correction & rebuild");
+  btn.onclick = async () => {
+    const instruction = ta.value.trim();
+    if (instruction.length < 3) { setStatus("Describe the change first.", true); return; }
+    btn.disabled = true; setStatus("Rebuilding with your correction…");
+    try {
+      const r = await postJSON("/api/revise", { session_id: SESSION, instruction });
+      renderResult(r);
+    } catch (e) { setStatus(e.message, true); btn.disabled = false; }
+    setStatus("");
+  };
+  box.appendChild(btn);
+  return box;
+}
+
+/* Structured before/after diff of the LAST rebuild only (not a version history). */
+function protocolDiff(prev, curr) {
+  if (!prev || !curr) return [];
+  const out = [];
+  const amt = (m) => [m.amount, m.unit].filter((x) => x != null && x !== "").join(" ");
+  if ((prev.title || "") !== (curr.title || "")) out.push(`Title: <del>${esc(prev.title || "")}</del> <ins>${esc(curr.title || "")}</ins>`);
+  if ((prev.estimated_duration || "") !== (curr.estimated_duration || "")) out.push(`Duration: <del>${esc(prev.estimated_duration || "")}</del> <ins>${esc(curr.estimated_duration || "")}</ins>`);
+  // materials by name
+  const pm = new Map((prev.materials || []).map((m) => [m.name, m]));
+  const cm = new Map((curr.materials || []).map((m) => [m.name, m]));
+  cm.forEach((m, name) => {
+    if (!pm.has(name)) out.push(`Added reagent: <ins>${esc(name)}${amt(m) ? " (" + esc(amt(m)) + ")" : ""}</ins>`);
+    else {
+      const o = pm.get(name);
+      if (amt(o) !== amt(m)) out.push(`${esc(name)}: <del>${esc(amt(o) || "—")}</del> → <ins>${esc(amt(m) || "—")}</ins>`);
+      else if ((o.provenance || "") !== (m.provenance || "")) out.push(`${esc(name)} provenance: <del>${esc(o.provenance)}</del> → <ins>${esc(m.provenance)}</ins>`);
+    }
+  });
+  pm.forEach((m, name) => { if (!cm.has(name)) out.push(`Removed reagent: <del>${esc(name)}</del>`); });
+  // steps by count + titles
+  const ps = prev.steps || [], cs = curr.steps || [];
+  if (ps.length !== cs.length) out.push(`Steps: <del>${ps.length}</del> → <ins>${cs.length}</ins>`);
+  const pt = new Set(ps.map((s) => s.title));
+  cs.forEach((s) => { if (!pt.has(s.title)) out.push(`New step: <ins>${esc(s.title)}</ins>`); });
+  const ct = new Set(cs.map((s) => s.title));
+  ps.forEach((s) => { if (!ct.has(s.title)) out.push(`Dropped step: <del>${esc(s.title)}</del>`); });
+  return out;
+}
+
+function diffBox(changes) {
+  const box = el("div", "diff noprint");
+  box.appendChild(el("div", null, "<b>What changed in this rebuild</b>"));
+  const ul = el("ul");
+  changes.slice(0, 20).forEach((c) => ul.appendChild(el("li", null, c)));
+  box.appendChild(ul);
+  if (changes.length > 20) box.appendChild(el("div", "muted", `…and ${changes.length - 20} more.`));
+  return box;
+}
+
+function tierPill(t) { return `<span class="tier t-${esc(t)}">${esc((t || "").replace(/_/g, " "))}</span>`; }
+
+function citeInline(entry) {
+  if (!entry.citation) return "";
+  const c = entry.citation;
+  const label = `${esc(c.authors || "")} ${esc(c.year || "")} — ${esc(c.identifier || "")}`;
+  const badge = entry.citation_verified ? ' <span class="badge-ok">✓ verified</span>' : ' <span class="badge-warn">⚠ unverified</span>';
+  const u = safeUrl(c.url);
+  const link = u ? `<a href="${esc(u)}" target="_blank" rel="noopener">${label}</a>` : `<span class="cite">${label}</span>`;
+  return `<div class="cite">${link}${badge}</div>`;
+}
+
+// A verified verbatim source quote — shown only when the host confirmed it.
+function anchorInline(entry) {
+  if (!entry.source_quote || !entry.quote_verified) return "";
+  return `<div class="cite">📌 “${esc(entry.source_quote)}” <span class="badge-ok">source-anchored</span></div>`;
+}
+
+function flagInline(e) {
+  const bits = [];
+  if (e.needs_user_input) bits.push('<span class="flag flag-user" title="Depends on your setup/goal and was not already clarified — you still need to decide this">👤 needs your input</span>');
+  const fx = (e.flexibility || "").trim();
+  if (fx) bits.push(`<span class="flag flag-flex" title="This value has latitude — you can tune it in this range">🎛 flexible: ${esc(fx)}</span>`);
+  return bits.length ? " " + bits.join(" ") : "";
+}
+
+function provCell(entry) {
+  const td = el("td");
+  td.innerHTML = tierPill(entry.provenance);
+  if (entry.provenance_note) td.appendChild(el("div", "pnote", esc(entry.provenance_note)));
+  td.insertAdjacentHTML("beforeend", citeInline(entry) + anchorInline(entry) + flagInline(entry));
+  return td;
+}
+
+function validationSummary(r) {
+  const box = el("div", "summary");
+  if (!r) return box;
+  box.appendChild(el("div", "stat", `<b>${r.verified.length}</b><div class="muted">citations verified</div>`));
+  box.appendChild(el("div", "stat", `<b>${r.downgraded.length}</b><div class="muted">downgraded (unverifiable)</div>`));
+  box.appendChild(el("div", "stat", `<b>${r.citations_checked}</b><div class="muted">citations checked</div>`));
+  const cons = (r.consistency.inline_missing_from_log.length + r.consistency.log_missing_from_inline.length);
+  box.appendChild(el("div", "stat", `<b>${cons}</b><div class="muted">log/inline mismatches</div>`));
+  if ((r.stated_downgrades || []).length) {
+    box.appendChild(el("div", "stat", `<b>${r.stated_downgrades.length}</b><div class="muted">stated → verify (no source)</div>`));
+  }
+  const anchored = r.quotes && r.quotes.verified ? r.quotes.verified.length : 0;
+  if (anchored) {
+    box.appendChild(el("div", "stat", `<b>${anchored}</b><div class="muted">stated values source-anchored</div>`));
+  }
+  return box;
+}
+
+function legend() {
+  const box = el("div", "legend");
+  ["stated", "literature_grounded", "best_practice", "user_input", "default_verify"].forEach((t) =>
+    box.appendChild(el("span", null, tierPill(t))));
+  return box;
+}
+
+function showResultMessage(title, body) {
+  const P = $("#result-panel"); P.innerHTML = "";
+  P.appendChild(el("h2", null, esc(title)));
+  P.appendChild(el("p", "muted", esc(body)));
+  show("#result-panel");
+}
+
+/* ---------- helpers ---------- */
+function _handleAuth(res, data) {
+  if (res.status === 401) { showAuthBar("Access token required or invalid."); throw new Error(data.detail || "Access token required."); }
+}
+async function postJSON(url, body) {
+  const res = await fetch(url, { method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  _handleAuth(res, data);
+  if (!res.ok) throw new Error(data.detail || `Request failed (${res.status})`);
+  return data;
+}
+async function postForm(url, formData) {
+  const res = await fetch(url, { method: "POST", headers: authHeaders({}), body: formData });
+  const data = await res.json().catch(() => ({}));
+  _handleAuth(res, data);
+  if (!res.ok) throw new Error(data.detail || `Request failed (${res.status})`);
+  return data;
+}
+// Target an always-visible element (#status lives inside #input-panel, which is hidden
+// in hypothesis mode — writing there would silently swallow errors).
+function setStatus(msg, isErr) { const s = $("#gstatus"); s.textContent = msg || ""; s.className = "noprint " + (isErr ? "err" : "muted"); }
+function lock(on, msg) { $("#analyze").disabled = on; $("#submit-answers").disabled = on; setStatus(on ? (msg || "Working…") : ""); }
+function show(sel) { $(sel).classList.remove("hidden"); }
+function hide(sel) { $(sel).classList.add("hidden"); }
+</script>
+</body>
+</html>

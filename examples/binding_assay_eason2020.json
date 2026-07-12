@@ -1,0 +1,121 @@
+{
+  "title": "gSTEP variant screen — ranking STEPtag binding by fluorescence (ΔF/F0)",
+  "summary": "Rank a handful (2–8) of gSTEP biosensor variants by their relative binding to STEPtag. Each variant, fixed at 75 nM, is challenged with one shared STEPtag dilution series so all variants are compared on the same axis; variants are ranked by fluorescence dynamic range (ΔF/F0) and apparent affinity. Tuned for comparison across variants, not a precise single-pair Kd.",
+  "source_citation": "Eason et al., ACS Synth. Biol. 2020, DOI 10.1021/acssynbio.0c00407",
+  "estimated_duration": "~3 h for up to 8 variants on 1–2 plates (excludes protein expression/purification)",
+  "materials": [
+    {"name": "Purified gSTEP variants to screen (His-tagged, IMAC-purified, buffer-exchanged, A280-quantified)", "amount": 75, "unit": "nM", "vendor_or_grade": "prepared in-house", "provenance": "stated", "selected_by_user": false, "provenance_note": "75 nM final per well is stated in the source; applied identically to every variant so ΔF/F0 is comparable.", "citation": null},
+    {"name": "Binding partner (titrant): STEPtag", "amount": null, "unit": null, "vendor_or_grade": "prepared in-house", "provenance": "user_input", "selected_by_user": true, "provenance_note": "User selected STEPtag as the common partner for the screen.", "citation": null},
+    {"name": "Control protein: bovine serum albumin (BSA)", "amount": null, "unit": null, "vendor_or_grade": "Bio-Rad", "provenance": "stated", "selected_by_user": false, "provenance_note": "BSA named as a control protein in the source; defines nonspecific ΔF.", "citation": null},
+    {"name": "Assay buffer: sodium phosphate", "amount": 20, "unit": "mM", "vendor_or_grade": null, "provenance": "stated", "selected_by_user": false, "provenance_note": "20 mM sodium phosphate, pH 7.4, stated.", "citation": null},
+    {"name": "Assay buffer: sodium chloride", "amount": 50, "unit": "mM", "vendor_or_grade": null, "provenance": "stated", "selected_by_user": false, "provenance_note": "50 mM NaCl stated.", "citation": null},
+    {"name": "Fluotrac 96-well plate (black, flat-bottom)", "amount": null, "unit": null, "vendor_or_grade": "Greiner Bio-One", "provenance": "stated", "selected_by_user": false, "provenance_note": "Fluotrac 96-well plate (Greiner Bio-One) stated.", "citation": null}
+  ],
+  "equipment": [
+    "Tecan Infinite M1000 plate reader (stated)",
+    "Multichannel pipette (to dispense the shared STEPtag series identically across variants)",
+    "Reagent reservoir / dilution plate for the shared master series"
+  ],
+  "steps": [
+    {
+      "number": 1,
+      "title": "Prepare assay buffer",
+      "instruction": "Prepare 20 mM sodium phosphate buffer with 50 mM NaCl, pH 7.4; filter-sterilize. Used as both storage and assay diluent.",
+      "duration": null, "temperature": null, "provenance": "stated",
+      "critical_parameters": [
+        {"name": "Buffer composition", "value": "20 mM sodium phosphate, 50 mM NaCl, pH 7.4", "unit": null, "provenance": "stated", "selected_by_user": false, "provenance_note": "Stated verbatim in the source.", "citation": null}
+      ],
+      "substeps": [], "warnings": []
+    },
+    {
+      "number": 2,
+      "title": "Normalize and prepare each variant at 75 nM",
+      "instruction": "Quantify each purified gSTEP variant by A280 (ProtParam extinction coefficients) and dilute every variant to an identical 75 nM working concentration in assay buffer. Equal biosensor concentration across variants is what makes ΔF/F0 comparable.",
+      "duration": null, "temperature": null, "provenance": "stated",
+      "critical_parameters": [
+        {"name": "gSTEP concentration", "value": "75", "unit": "nM", "provenance": "stated", "selected_by_user": false, "provenance_note": "Stated; held identical across all variants.", "citation": null},
+        {"name": "Number of gSTEP variants", "value": "2–8", "unit": null, "provenance": "user_input", "selected_by_user": true, "provenance_note": "User is screening a handful of variants; sets plate layout and whether a second plate is needed.", "citation": null},
+        {"name": "gSTEP working-solution volume per variant", "value": "~1 mL each", "unit": null, "provenance": "default_verify", "selected_by_user": false, "provenance_note": "Scaling per variant: 6 titrant points x 3 replicates = 18 wells; 18 x 100 uL = 1.8 mL... but a shared partner series means each variant only supplies its own 75 nM gSTEP to ~9 wells (partner added separately) -> ~1 mL + dead volume. Verify against your final layout.", "citation": null}
+      ],
+      "substeps": [], "warnings": ["Keep variants on ice and shielded from light until dispensed."]
+    },
+    {
+      "number": 3,
+      "title": "Prepare ONE shared STEPtag master dilution series",
+      "instruction": "Because affinities are unknown and the goal is ranking, prepare a single wide STEPtag dilution series and apply it identically to every variant. Run a quick pilot on one representative variant first to center the bracket.",
+      "duration": null, "temperature": null, "provenance": "user_input",
+      "critical_parameters": [
+        {"name": "Shared STEPtag titration bracket", "value": "~3 nM to 10 uM, 6-point (~4-fold steps)", "unit": null, "provenance": "user_input", "selected_by_user": true, "provenance_note": "Wide bracket chosen because expected Kd is unknown; a sparse 6-point series is enough to rank variants. Center it after the pilot; flag to verify.", "citation": null}
+      ],
+      "substeps": [
+        {"number": "3.1", "instruction": "Pilot: run one representative variant across the full ~3 nM–10 uM range to find where its response transitions, then keep or narrow the bracket for the full screen.", "provenance": "default_verify", "provenance_note": "Pilot needed because Kd is unknown."},
+        {"number": "3.2", "instruction": "Prepare the master series once in a reservoir/dilution plate so every variant sees the identical STEPtag concentrations (multichannel transfer).", "provenance": "best_practice", "provenance_note": "A single shared series removes between-variant pipetting variance from the ranking."}
+      ],
+      "warnings": ["If any variant's ΔF/F0 is still rising at the top concentration, its binding is weaker than the bracket covers — extend the top point before ranking it."]
+    },
+    {
+      "number": 4,
+      "title": "Lay out the plate(s)",
+      "instruction": "For each variant, combine 75 nM gSTEP with the shared STEPtag series across a row (or block) of the Fluotrac plate. Add one BSA control series per plate and, per variant, buffer-only and gSTEP-only (F0) wells. If variants span two plates, repeat one reference variant on both plates for normalization.",
+      "duration": null, "temperature": null, "provenance": "stated",
+      "critical_parameters": [
+        {"name": "Assay volume per well", "value": "100", "unit": "uL", "provenance": "user_input", "selected_by_user": true, "provenance_note": "User selected 100 uL/well (scale choice; not specified in the source).", "citation": null},
+        {"name": "Replicates", "value": "3 (2 acceptable for a first-pass rank)", "unit": null, "provenance": "stated", "selected_by_user": false, "provenance_note": "‘a minimum of three replicates’ stated; a first-pass screen can drop to 2 to fit more variants per plate.", "citation": null},
+        {"name": "Control titration (BSA)", "value": "one shared series per plate", "unit": null, "provenance": "best_practice", "selected_by_user": false, "provenance_note": "One control-protein titration per plate defines nonspecific ΔF for background subtraction; per-plate rather than per-variant saves wells.", "citation": null},
+        {"name": "Per-plate reference variant", "value": "repeat one variant on every plate", "unit": null, "provenance": "best_practice", "selected_by_user": false, "provenance_note": "Anchors plate-to-plate normalization when a screen spans multiple plates.", "citation": null}
+      ],
+      "substeps": [], "warnings": ["Mix gently; bubbles corrupt fluorescence reads."]
+    },
+    {
+      "number": 5,
+      "title": "Equilibrate",
+      "instruction": "Incubate all plates under identical conditions to reach binding equilibrium before reading.",
+      "duration": "30 min", "temperature": "25 C", "provenance": "best_practice",
+      "critical_parameters": [
+        {"name": "Equilibration time and temperature", "value": "30 min at 25 C", "unit": null, "provenance": "best_practice", "selected_by_user": true, "provenance_note": "Not stated in the source. Standard-practice default; keep it identical across all variants and plates so ΔF/F0 is comparable. Verify equilibrium is reached for your tightest binders.", "citation": null}
+      ],
+      "substeps": [], "warnings": []
+    },
+    {
+      "number": 6,
+      "title": "Read fluorescence (fixed gain across the whole screen)",
+      "instruction": "Read every plate on the Tecan Infinite M1000 with excitation at 485 nm and emission at 515 nm. Set the gain once on the brightest bound well across ALL variants and hold it fixed for every plate.",
+      "duration": null, "temperature": "25 C", "provenance": "stated",
+      "critical_parameters": [
+        {"name": "Excitation wavelength", "value": "485", "unit": "nm", "provenance": "stated", "selected_by_user": false, "provenance_note": "Stated.", "citation": null},
+        {"name": "Emission wavelength", "value": "515", "unit": "nm", "provenance": "stated", "selected_by_user": false, "provenance_note": "Stated.", "citation": null},
+        {"name": "Fixed reader gain across variants", "value": "set once on the brightest well; hold constant for all plates", "unit": null, "provenance": "best_practice", "selected_by_user": false, "provenance_note": "Comparability requirement for a screen: if gain varies between variants or plates, ΔF/F0 is no longer comparable. Verify no wells saturate at the chosen gain.", "citation": null}
+      ],
+      "substeps": [], "warnings": ["A different gain per variant invalidates the ranking — this is the most common screen mistake."]
+    },
+    {
+      "number": 7,
+      "title": "Rank the variants",
+      "instruction": "Subtract the BSA control background, then for each variant compute ΔF/F0 = (F_saturated − F0)/F0 as the primary ranking metric. Optionally fit each sparse series to the ligand-depletion Hill equation for an apparent Kd as a secondary sort. Rank variants by ΔF/F0, then apparent affinity.",
+      "duration": null, "temperature": null, "provenance": "stated",
+      "critical_parameters": [
+        {"name": "Primary ranking metric (ΔF/F0)", "value": "ΔF/F0 = (F_sat − F0)/F0", "unit": null, "provenance": "best_practice", "selected_by_user": false, "provenance_note": "For a variant screen, dynamic range (ΔF/F0) is the primary readout; the paper reports ΔF/F0 alongside Kd. Apparent Kd from a sparse fit is a coarse secondary sort only.", "citation": null},
+        {"name": "Fitting model", "value": "Hill equation accounting for ligand depletion", "unit": null, "provenance": "stated", "selected_by_user": false, "provenance_note": "The source specifies this fit (cites reference 35). Use total concentrations; depletion is modeled.", "citation": null}
+      ],
+      "substeps": [], "warnings": ["Tight binders (apparent Kd ≤ ~75 nM) are ligand-depletion-limited at 75 nM biosensor: their apparent Kd is compressed and rankings among the very tightest binders may be unreliable. Lower the biosensor concentration to separate them."]
+    }
+  ],
+  "assumptions_log": [
+    {"parameter": "Binding partner (titrant): STEPtag", "value": "STEPtag chosen as the common partner", "provenance": "user_input", "selected_by_user": true, "basis": "User selected STEPtag for the screen.", "citation": null, "verify": false},
+    {"parameter": "Number of gSTEP variants", "value": "2–8", "provenance": "user_input", "selected_by_user": true, "basis": "User is screening a handful of variants.", "citation": null, "verify": false},
+    {"parameter": "gSTEP working-solution volume per variant", "value": "~1 mL each", "provenance": "default_verify", "selected_by_user": false, "basis": "Scaling from the per-variant well count + dead volume; depends on final layout.", "citation": null, "verify": true},
+    {"parameter": "Shared STEPtag titration bracket", "value": "~3 nM to 10 uM, 6-point", "provenance": "user_input", "selected_by_user": true, "basis": "Wide bracket because Kd is unknown; sparse series suffices for ranking. Center after pilot.", "citation": null, "verify": true},
+    {"parameter": "Assay volume per well", "value": "100 uL", "provenance": "user_input", "selected_by_user": true, "basis": "Scale choice; not specified in the source.", "citation": null, "verify": false},
+    {"parameter": "Control titration (BSA)", "value": "one shared series per plate", "provenance": "best_practice", "selected_by_user": false, "basis": "Per-plate control defines nonspecific ΔF; saves wells vs per-variant.", "citation": null, "verify": false},
+    {"parameter": "Per-plate reference variant", "value": "repeat one variant per plate", "provenance": "best_practice", "selected_by_user": false, "basis": "Enables plate-to-plate normalization across a multi-plate screen.", "citation": null, "verify": false},
+    {"parameter": "Equilibration time and temperature", "value": "30 min at 25 C", "provenance": "best_practice", "selected_by_user": true, "basis": "Standard equilibrium-binding practice; source omits it and the fit assumes equilibrium.", "citation": null, "verify": true},
+    {"parameter": "Fixed reader gain across variants", "value": "set once, hold constant for all plates", "provenance": "best_practice", "selected_by_user": false, "basis": "Comparability requirement for a ΔF/F0 ranking.", "citation": null, "verify": true},
+    {"parameter": "Primary ranking metric (ΔF/F0)", "value": "ΔF/F0 = (F_sat − F0)/F0", "provenance": "best_practice", "selected_by_user": false, "basis": "Dynamic range is the primary screen readout; apparent Kd is a secondary sort.", "citation": null, "verify": false}
+  ],
+  "open_questions": [
+    "Expected Kd is unknown — the pilot on one variant is required to center the shared bracket before the full screen.",
+    "Ligand depletion at 75 nM biosensor compresses apparent Kd for tight binders (Kd ≤ ~75 nM); to rank the tightest binders precisely, repeat them at a lower biosensor concentration.",
+    "Replicate count: 3 gives the paper's rigor; 2 fits more variants per plate for a first-pass rank — your call on the precision/throughput trade.",
+    "On a live run, Phase-2 web_search would ground the ΔF/F0 screening convention, the sparse-titration spacing, and the depletion caveat in specific citations (upgrading the best_practice/default_verify items to verified literature_grounded)."
+  ]
+}
