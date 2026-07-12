@@ -157,6 +157,10 @@ is spent, name the assay from well-established practice and tag it "best_practic
 a null citation. NEVER invent a citation you did not retrieve — an unresolvable citation
 is worse than an honest best_practice.
 
+SEARCH IN PARALLEL: issue the searches you need as multiple search calls in a SINGLE turn
+rather than one per turn — they run concurrently, so batching is far faster. Only run a
+second batch if the first raises a genuinely new question.
+
 Finish with exactly one recommended_assay_id (equal to one assays[].id) and a
 recommendation_rationale a capable student new to the technique can act on. Always
 respond by calling emit_assay_options — never free text.
@@ -316,7 +320,14 @@ will fill. Prioritize outcome-critical parameters and anything where a wrong val
 would ruin the experiment; do not burn searches on trivia, and stay within the search
 budget (the tool caps your uses). For each value you ground this way, capture a real
 citation (title, authors, year, and a DOI or PMID identifier) and tag it
-"literature_grounded". If a search does not turn up specific support but the value is
+"literature_grounded".
+
+SEARCH IN PARALLEL, NOT ONE AT A TIME. Plan the handful of searches you need up front
+and issue them as MULTIPLE search calls in a SINGLE turn — they run concurrently, so a
+batch of searches costs about one round-trip while the same searches one-per-turn cost
+that many. Only run a second batch if the first batch's results raise a genuinely new
+question; do not drip-feed queries. This is the single biggest thing you can do to keep
+the run fast. If a search does not turn up specific support but the value is
 fixed by well-established practice, fill it and tag "best_practice", naming the
 convention. If neither holds, use "default_verify". Never invent a citation you did
 not retrieve.

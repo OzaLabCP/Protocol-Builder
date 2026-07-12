@@ -383,7 +383,8 @@ class GapFillerAgent:
                 return tc["id"], name, content
 
             if len(pending) > 1:
-                with ThreadPoolExecutor(max_workers=min(len(pending), 6)) as ex:
+                workers = min(len(pending), max(1, config.SEARCH_CONCURRENCY))
+                with ThreadPoolExecutor(max_workers=workers) as ex:
                     answered = list(ex.map(_answer, pending))
             else:
                 answered = [_answer(tc) for tc in pending]

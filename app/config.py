@@ -130,6 +130,12 @@ ENABLE_PROTOCOLS_IO = (
 # GAPFILLER_PUBMED_BUDGET for deeper grounding at the cost of speed.
 PUBMED_BUDGET = int(os.environ.get("GAPFILLER_PUBMED_BUDGET", "6"))
 PUBMED_RETMAX_CAP = int(os.environ.get("GAPFILLER_PUBMED_RETMAX", "8"))
+# The model is prompted to batch its searches into one turn; they run concurrently. Cap the
+# concurrency to what NCBI's rate limit tolerates (~3 req/s without an API key, ~10 with one)
+# so a batch doesn't burst into 429s that silently drop grounding. Override with
+# GAPFILLER_SEARCH_CONCURRENCY.
+SEARCH_CONCURRENCY = int(os.environ.get("GAPFILLER_SEARCH_CONCURRENCY", "0")) or (
+    6 if NCBI_API_KEY else 3)
 
 # --- Access control (all OFF by default so local dev is unaffected) ---------
 # When set, the /api/* endpoints require this token (Authorization: Bearer,
