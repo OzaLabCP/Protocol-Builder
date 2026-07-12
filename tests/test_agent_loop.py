@@ -352,6 +352,33 @@ def test_truncation_raises_actionable_error_at_cap():
         assert "MAX_TOKENS" in str(e)
 
 
+def test_followup_restores_session_on_failure():
+    # A follow-up that fails mid-run must leave the session re-appliable: the acked emit id
+    # is re-armed and the appended ack+instruction are dropped, so a retry (Apply fixes,
+    # Re-review, Revise) still works instead of dying with "Nothing to build on yet".
+    session = Session(
+        messages=[
+            {"role": "user", "content": "seed"},
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "e0", "type": "function", "function": {"name": "emit_protocol", "arguments": "{}"}}]},
+        ],
+        pending_tool_use_id="e0",
+    )
+    before_len = len(session.messages)
+    agent = make_agent([text_msg("I won't call the tool")])  # no tool call -> _run None -> AgentError
+    try:
+        agent.revise(session, "use 150 uL wells")
+        assert False, "expected AgentError"
+    except AgentError:
+        pass
+    assert session.pending_tool_use_id == "e0"       # emit re-armed
+    assert len(session.messages) == before_len       # appended ack + instruction dropped
+    # ...and a subsequent apply now works on the restored session (proves it wasn't bricked)
+    agent2 = make_agent([tool_msg(("emit_protocol", dict(PROTO, title="Fixed"), "e1"))])
+    out = agent2.revise(session, "use 150 uL wells")
+    assert out["title"] == "Fixed"
+
+
 def test_grounding_results_compacted_on_followup():
     big = "PMID 1 — Grounding source (Doe 2020) " + "x" * 500
     session = Session(

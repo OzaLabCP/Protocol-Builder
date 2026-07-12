@@ -124,8 +124,11 @@ ENABLE_PROTOCOLS_IO = (
     os.environ.get("GAPFILLER_ENABLE_PROTOCOLS_IO", "1") != "0"
 ) and bool(PROTOCOLS_IO_TOKEN)
 
-# Max literature searches the agent may run per phase, and max hits per search.
-PUBMED_BUDGET = int(os.environ.get("GAPFILLER_PUBMED_BUDGET", "12"))
+# Max literature searches the agent may run per phase, and max hits per search. Kept modest:
+# a fat budget makes each phase slow (rate-limited PubMed) AND risks the emit/audit/fix phase
+# spending its whole tool-round allowance on searches before it converges to the emit. Raise
+# GAPFILLER_PUBMED_BUDGET for deeper grounding at the cost of speed.
+PUBMED_BUDGET = int(os.environ.get("GAPFILLER_PUBMED_BUDGET", "6"))
 PUBMED_RETMAX_CAP = int(os.environ.get("GAPFILLER_PUBMED_RETMAX", "8"))
 
 # --- Access control (all OFF by default so local dev is unaffected) ---------

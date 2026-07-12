@@ -108,7 +108,7 @@ liveness, the model, and which grounding sources are enabled. Sessions expire af
 | `GAPFILLER_MAX_TOKENS` | `16000` | Base output ceiling. You only pay for tokens actually generated. |
 | `GAPFILLER_MAX_TOKENS_CAP` | `32000` | A truncated emit auto-retries at 2× the budget, up to this cap — so a large protocol completes instead of erroring, while normal ones stay cheap. Set `== GAPFILLER_MAX_TOKENS` to disable escalation. |
 | `GAPFILLER_REQUEST_TIMEOUT` | `600` | Per-request HTTP timeout (seconds). |
-| `GAPFILLER_PUBMED_BUDGET` | `12` | Max literature searches per phase. |
+| `GAPFILLER_PUBMED_BUDGET` | `6` | Max literature searches per phase. Kept modest so each phase stays fast (PubMed is rate-limited) and the emit/audit/fix phases converge within their tool-round budget instead of spending it all on searches. Raise for deeper grounding. |
 | `GAPFILLER_ENABLE_PUBMED` | `1` | Set `0` to disable the PubMed grounding tool. |
 | `GAPFILLER_ENABLE_PREPRINTS` | `1` | Set `0` to disable bioRxiv/medRxiv (Europe PMC) search. |
 | `NCBI_API_KEY` | — | Optional; raises the E-utilities rate limit (3→10 req/s). |

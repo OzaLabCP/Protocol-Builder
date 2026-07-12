@@ -766,7 +766,7 @@ function toolbar() {
   bar.appendChild(pr);
   wrap.appendChild(bar);
   wrap.appendChild(el("p", "hint noprint",
-    "A correctness &amp; practicality audit already ran automatically and any fixes were applied (shown above). Use <b>Design review</b> to reason about the experiment, <b>Re-review &amp; fix</b> to re-audit after edits, and <b>Test a hypothesis</b> to confirm it's directly tested."));
+    "A correctness &amp; practicality audit runs automatically (results above; if any fix couldn't be auto-applied you'll see a button to apply it). Use <b>Design review</b> to reason about the experiment, <b>Re-review &amp; fix</b> to re-audit after edits, and <b>Test a hypothesis</b> to confirm it's directly tested."));
   return wrap;
 }
 
@@ -778,6 +778,19 @@ async function requestDesign(btn) {
     setStatus("");
   } catch (e) { setStatus(e.message, true); }
   btn.disabled = false;
+}
+
+// Apply the fixes the audit already proposed (no re-audit) — used when auto-apply didn't run.
+async function applyAuditFixes(btn) {
+  btn.disabled = true;
+  setStatus("Applying the audit's fixes and rebuilding the protocol… (this can take a minute)");
+  startProgress(SESSION);
+  try {
+    const r = await postJSON("/api/apply_fixes", { session_id: SESSION });
+    renderResult(r);
+    setStatus("");
+  } catch (e) { setStatus(e.message, true); btn.disabled = false; }
+  stopProgress();
 }
 
 async function requestCritique(btn) {
@@ -814,11 +827,21 @@ function renderCritique(r, applied, count) {
   box.appendChild(el("p", "muted small", "A skeptical audit for logic, value, unit/scaling, ordering, and missing-control errors <b>and</b> for practicality — missing detail, unclear steps, impractical logistics. This is <b>model-generated reasoning, not a host-verified guarantee</b>; only cited evidence is checked against a database."));
   box.appendChild(el("p", null, _VERDICT_META[r.verdict] || esc(r.verdict || "")));
   if (r.summary) box.appendChild(el("p", null, esc(r.summary)));
-  if (applied && count) {
-    box.appendChild(el("p", "badge-ok", `🛠 ${count} fix${count > 1 ? "es" : ""} applied — corrected protocol below. Re-run the review to confirm they hold.`));
-  }
 
   const findings = (r.findings || []).filter((f) => f && typeof f === "object");
+  const fixable = findings.filter((f) => (f.fix || "").trim()).length;
+  if (applied && count) {
+    box.appendChild(el("p", "badge-ok", `🛠 ${count} fix${count > 1 ? "es" : ""} applied — corrected protocol below. Re-run the review to confirm they hold.`));
+  } else if (!applied && fixable) {
+    // The audit proposed concrete fixes but they weren't integrated into the protocol
+    // (auto-apply failed/was skipped, or this is a fresh manual audit). Offer one-click apply
+    // instead of implying the protocol was already corrected.
+    box.appendChild(el("p", "badge-warn",
+      `⚠ ${fixable} concrete fix${fixable > 1 ? "es are" : " is"} proposed below but <b>not yet applied</b> to the protocol above.`));
+    const applyBtn = el("button", "btn", `🛠 Apply ${fixable} fix${fixable > 1 ? "es" : ""} & rebuild the protocol`);
+    applyBtn.onclick = () => applyAuditFixes(applyBtn);
+    box.appendChild(el("div", "row", "")).appendChild(applyBtn);
+  }
   if (findings.length) {
     findings.forEach((f) => {
       const meta = _SEV_META[f.severity] || { label: esc(f.severity || ""), cls: "" };

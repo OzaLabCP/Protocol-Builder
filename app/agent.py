@@ -577,16 +577,27 @@ class GapFillerAgent:
             raise AgentError("Nothing to build on yet — emit a protocol first.")
         if compact:
             _compact_grounding(session)
+        # Transactional: a follow-up that fails mid-run (tool-round ceiling, a transient
+        # provider error) must leave the session exactly as it found it. Otherwise the acked
+        # emit id is gone and the appended instruction dangles, bricking EVERY later follow-up
+        # (retry, re-review, revise) with "Nothing to build on yet". Snapshot, restore on error.
+        saved_pending = session.pending_tool_use_id
+        saved_len = len(session.messages)
         state = RunState(session=session, searches_left=config.PUBMED_BUDGET, progress=progress)
         session.messages.append(
             {"role": "tool", "tool_call_id": session.pending_tool_use_id, "content": "Received."}
         )
         session.messages.append({"role": "user", "content": instruction})
         session.pending_tool_use_id = None
-        block = self._run(session.messages, _grounding_tools() + [tool], terminal, state,
-                          system=system, model=model, effort=effort)
-        if block is None:
-            raise AgentError(f"Model ended without calling {terminal}.")
+        try:
+            block = self._run(session.messages, _grounding_tools() + [tool], terminal, state,
+                              system=system, model=model, effort=effort)
+            if block is None:
+                raise AgentError(f"Model ended without calling {terminal}.")
+        except Exception:
+            del session.messages[saved_len:]           # drop the ack + instruction we appended
+            session.pending_tool_use_id = saved_pending  # re-arm the emit so a retry works
+            raise
         session.pending_tool_use_id = block.id
         return dict(block.input)
 
