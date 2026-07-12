@@ -146,6 +146,10 @@
     animation: gf-spin .8s linear infinite;
   }
   .busy .busy-msg { color: var(--text); font-size: 13.5px; }
+  .busy.as-error { border-color: var(--danger); }
+  .busy.as-error .busy-msg { color: var(--danger); }
+  .busy .busy-x { background: transparent; border: 0; color: var(--muted); font-size: 14px;
+    line-height: 1; padding: 0 2px; margin-left: 2px; cursor: pointer; font-weight: 700; }
   .btn:disabled, button:disabled { cursor: default; }
   @media print {
     body { background: #fff; color: #000; }
@@ -247,6 +251,7 @@
 
 <div id="busy" class="busy hidden noprint" role="status" aria-live="polite">
   <span class="spin"></span><span class="busy-msg"></span>
+  <button type="button" class="busy-x hidden" aria-label="Dismiss">✕</button>
 </div>
 
 <script>
@@ -367,7 +372,7 @@ async function runDiscover(autoPick) {
 }
 $("#discover").onclick = () => runDiscover(false);
 $("#autopick").onclick = () => runDiscover(true);
-function discStatus(msg, isErr) { const s = $("#disc-status"); s.textContent = msg || ""; s.className = isErr ? "err" : "muted"; setBusy(!!msg && !isErr, msg); }
+function discStatus(msg, isErr) { const s = $("#disc-status"); s.textContent = msg || ""; s.className = isErr ? "err" : "muted"; setToast(msg, isErr); }
 function discLock(on, msg) { $("#discover").disabled = on; $("#autopick").disabled = on; discStatus(on ? (msg || "Working…") : ""); }
 
 $("#analyze").onclick = async () => {
@@ -1157,18 +1162,24 @@ async function postForm(url, formData) {
 }
 // Target an always-visible element (#status lives inside #input-panel, which is hidden
 // in hypothesis mode — writing there would silently swallow errors).
-// A fixed, always-visible spinner toast — the status text lives at the top of the page and
-// is off-screen once you've scrolled to an assay/protocol, so a long call looked frozen.
-// Any non-error "working…" status drives it; errors and clears hide it.
-function setBusy(on, msg) {
+// A fixed, always-visible toast — the status text lives at the top of the page and is
+// off-screen once you've scrolled to an assay/protocol, so both long calls (looked frozen)
+// and errors (looked like nothing happened) went unseen. Working states show a spinner;
+// errors show a dismissible red message; a cleared status hides it.
+function setToast(msg, isErr) {
   const b = $("#busy");
   if (!b) return;
-  b.classList.toggle("hidden", !on);
-  if (on) b.querySelector(".busy-msg").textContent = msg || "Working…";
+  const show = !!msg;
+  b.classList.toggle("hidden", !show);
+  b.classList.toggle("as-error", show && !!isErr);
+  b.querySelector(".spin").classList.toggle("hidden", !show || !!isErr);
+  b.querySelector(".busy-x").classList.toggle("hidden", !show || !isErr);
+  b.querySelector(".busy-msg").textContent = msg || "";
 }
+$("#busy .busy-x").onclick = () => $("#busy").classList.add("hidden");
 function setStatus(msg, isErr) {
   const s = $("#gstatus"); s.textContent = msg || ""; s.className = "noprint " + (isErr ? "err" : "muted");
-  setBusy(!!msg && !isErr, msg);
+  setToast(msg, isErr);
 }
 function lock(on, msg) { $("#analyze").disabled = on; $("#submit-answers").disabled = on; setStatus(on ? (msg || "Working…") : ""); }
 function show(sel) { $(sel).classList.remove("hidden"); }
