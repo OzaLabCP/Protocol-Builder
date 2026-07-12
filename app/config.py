@@ -33,8 +33,12 @@ def _first(*vals: str, default: str = "") -> str:
 LLM_PROVIDER = (os.environ.get("LLM_PROVIDER", "openrouter").strip().lower() or "openrouter")
 
 _PROVIDER_DEFAULTS = {
-    "openrouter": {"base_url": "https://openrouter.ai/api/v1", "model": "anthropic/claude-opus-4-8"},
-    "anthropic": {"base_url": "https://api.anthropic.com/v1", "model": "claude-opus-4-8"},
+    "openrouter": {"base_url": "https://openrouter.ai/api/v1",
+                   "model": "anthropic/claude-opus-4-8",
+                   "model_fast": "anthropic/claude-sonnet-5"},
+    "anthropic": {"base_url": "https://api.anthropic.com/v1",
+                  "model": "claude-opus-4-8",
+                  "model_fast": "claude-sonnet-5"},
 }
 _defaults = _PROVIDER_DEFAULTS.get(LLM_PROVIDER, _PROVIDER_DEFAULTS["openrouter"])
 
@@ -46,14 +50,19 @@ OPENROUTER_BASE_URL = _first(
     os.environ.get("LLM_BASE_URL", ""), os.environ.get("OPENROUTER_BASE_URL", ""),
     default=_defaults["base_url"],
 )
-MODEL = _first(
-    os.environ.get("LLM_MODEL", ""), os.environ.get("OPENROUTER_MODEL", ""),
-    default=_defaults["model"],
+_model_env = _first(os.environ.get("LLM_MODEL", ""), os.environ.get("OPENROUTER_MODEL", ""))
+MODEL = _model_env or _defaults["model"]
+# Cheaper/faster model for the light phases (analyze/clarifications, assay discovery) — the
+# heavy emit + reviews + fixes stay on LLM_MODEL. This tier split is built in: on the default
+# models, the light phases run on the provider's fast model (e.g. Sonnet) while the heavy work
+# stays on the strong one (e.g. Opus), so you spend the top tier only where it earns its keep.
+# The built-in fast default is applied ONLY when LLM_MODEL is left at its default — if you pick
+# a custom LLM_MODEL we can't assume our fast model is cheaper than yours, so it's one model
+# everywhere unless you set LLM_MODEL_FAST explicitly. Empty -> use LLM_MODEL everywhere.
+MODEL_FAST = _first(
+    os.environ.get("LLM_MODEL_FAST", ""), os.environ.get("OPENROUTER_MODEL_FAST", ""),
+    default=(_defaults.get("model_fast", "") if not _model_env else ""),
 )
-# Optional cheaper/faster model for the light phases (analyze/clarifications, assay
-# discovery) — the heavy emit stays on LLM_MODEL. Empty -> use LLM_MODEL everywhere.
-# Lets you spend the top tier only where the reasoning earns it.
-MODEL_FAST = os.environ.get("LLM_MODEL_FAST", os.environ.get("OPENROUTER_MODEL_FAST", ""))
 
 # Optional attribution headers OpenRouter surfaces on your dashboard (OpenRouter only).
 OPENROUTER_REFERER = os.environ.get("OPENROUTER_REFERER", "")
