@@ -137,6 +137,31 @@
   .diff ins { color: var(--stated); text-decoration: none; background: rgba(74,192,122,.12); }
   .diff del { color: var(--danger); background: rgba(239,106,106,.12); }
   .hint { color: var(--muted); font-size: 12.5px; margin: 6px 0 0; }
+  /* ---------- projects layer (additive) ---------- */
+  #project-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+  #project-header h1 { flex: 1 1 auto; min-width: 180px; margin: 0; }
+  .ph-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+  .ph-actions { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+  .ph-actions button { padding: 7px 12px; font-size: 13px; }
+  #ph-stale { flex-basis: 100%; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+  .ph-badge { text-transform: none; letter-spacing: 0; }
+  .lc-intake_received, .lc-awaiting_confirmation, .lc-workflow_confirmed,
+  .lc-superseded, .lc-archived { color: var(--muted); border-color: var(--line); }
+  .lc-building, .lc-needs_clarification, .lc-selecting_assay { color: var(--lit); border-color: var(--lit); }
+  .lc-protocol_ready { color: var(--best); border-color: var(--best); }
+  .lc-failed { color: var(--danger); border-color: var(--danger); }
+  #workflow-cards, #detect-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin-top: 10px; }
+  .wf-card { background: var(--panel2); color: var(--muted); border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px 14px; cursor: pointer; text-align: left; font-weight: 600; font-size: 14px; display: block; width: 100%; }
+  .wf-card small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .wf-card[aria-checked="true"] { border-color: var(--accent); color: var(--text); background: rgba(110,168,254,.10); }
+  .wf-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .recent-list { list-style: none; margin: 10px 0 0; padding: 0; }
+  .recent-item { display: block; }
+  .recent-item a { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; text-decoration: none;
+    color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin: 8px 0; background: var(--panel2); }
+  .recent-item a:hover { border-color: var(--accent); }
+  .recent-item .r-title { font-weight: 600; flex: 1 1 auto; min-width: 140px; }
   @keyframes gf-spin { to { transform: rotate(360deg); } }
   .busy {
     position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
@@ -169,10 +194,13 @@
   @media print {
     body { background: #fff; color: #000; }
     header, #input-panel, #questions-panel, #discovery-panel, #assays-panel, .modebar, .noprint, .toolbar, .refine { display: none !important; }
+    #home-panel, #detect-panel, #project-header .ph-actions, #ph-stale { display: none !important; }
     .panel { border: 0; background: #fff; margin: 0; padding: 0; }
     main { max-width: 100%; padding: 0; }
     a { color: #000; text-decoration: underline; }
     .tier { border: 1px solid #999; color: #000 !important; background: #fff !important; }
+    #project-header { display: block !important; border: 0; padding: 0 0 8px; }
+    #project-header .ph-badge { border: 1px solid #999; color: #000 !important; background: #fff !important; }
   }
 </style>
 </head>
@@ -181,6 +209,23 @@
   <h1>Methods Gap-Filler</h1>
   <p>Start from a <b>hypothesis</b> — and find the assay that tests it — or start from a <b>paper</b> and adapt it.
      Either way you get an executable protocol where every value is provenance-tagged and every citation is verified.</p>
+</header>
+
+<header id="project-header" class="hidden" tabindex="-1">
+  <h1 id="ph-title"></h1>
+  <div class="ph-badges">
+    <span class="pill ph-badge" id="ph-workflow"></span>
+    <span class="pill ph-badge" id="ph-lifecycle"></span>
+    <span class="pill ph-badge" id="ph-version"></span>
+  </div>
+  <div class="ph-actions noprint">
+    <button type="button" class="secondary" id="ph-copy">Copy link</button>
+    <button type="button" class="secondary" id="ph-new">New project</button>
+  </div>
+  <div id="ph-stale" class="hidden noprint">
+    <span class="muted small">This project's editing session has expired.</span>
+    <button type="button" id="ph-resume">Resume editing</button>
+  </div>
 </header>
 
 <main>
@@ -193,15 +238,50 @@
     </div>
   </section>
 
-  <div class="modebar">
-    <button class="modebtn active" id="mode-paper">I have a paper / protocol
+  <section class="panel" id="home-panel">
+    <form id="universal-form">
+      <label class="muted" for="u-input">What do you want to build?</label>
+      <textarea id="u-input" placeholder="Describe your goal, paste a protocol or Methods section, give a DOI / PMID / URL, or state a hypothesis…"></textarea>
+      <div class="or">— and / or —</div>
+      <label class="filebtn" for="u-file">
+        <input type="file" id="u-file" accept="application/pdf,.pdf" />
+        <span id="u-file-label">Upload a paper as a PDF</span>
+      </label>
+      <p class="muted small">We'll detect which workflow fits and let you confirm before building.</p>
+      <div class="row">
+        <button type="submit" id="u-go">Start</button>
+        <button type="button" class="secondary" id="u-example">Load example (CFPS)</button>
+        <span class="muted" id="u-status"></span>
+      </div>
+      <p class="muted small" style="margin:16px 0 0">…or pick a workflow directly:</p>
+      <div id="workflow-cards" role="radiogroup" aria-label="Choose a workflow"></div>
+    </form>
+    <section id="recent-panel" style="margin-top:22px">
+      <h2>Recent projects</h2>
+      <ol id="recent-list" class="recent-list"></ol>
+      <p class="muted hidden" id="recent-empty">No projects yet — start one above.</p>
+    </section>
+  </section>
+
+  <section class="panel hidden" id="detect-panel" aria-live="polite">
+    <h2>Which workflow fits?</h2>
+    <p class="muted" id="detect-summary"></p>
+    <div id="detect-cards" role="radiogroup" aria-label="Confirm the workflow"></div>
+    <div class="row">
+      <button id="detect-confirm">Confirm &amp; continue</button>
+      <button class="secondary" id="detect-cancel">Back</button>
+    </div>
+  </section>
+
+  <div class="modebar" role="tablist" aria-label="Entry mode">
+    <button class="modebtn active" id="mode-paper" role="tab" aria-selected="true" aria-controls="input-panel" tabindex="0">I have a paper / protocol
       <small>Paste a Methods section or upload a PDF — adapt it to your needs</small></button>
-    <button class="modebtn" id="mode-hyp">I have a hypothesis
+    <button class="modebtn" id="mode-hyp" role="tab" aria-selected="false" aria-controls="discovery-panel" tabindex="-1">I have a hypothesis
       <small>Find the best assay to test it, then draft the protocol</small></button>
   </div>
   <p id="gstatus" class="muted noprint" style="min-height:1.2em; margin:0 0 8px"></p>
 
-  <section class="panel" id="input-panel">
+  <section class="panel" id="input-panel" role="tabpanel" aria-labelledby="mode-paper">
     <label class="muted" for="methods">Paste a Methods section</label>
     <textarea id="methods" placeholder="Paste the Methods / protocol text here…"></textarea>
     <div class="or">— or —</div>
@@ -220,7 +300,7 @@
     </div>
   </section>
 
-  <section class="panel hidden" id="discovery-panel">
+  <section class="panel hidden" id="discovery-panel" role="tabpanel" aria-labelledby="mode-hyp">
     <label class="muted" for="disc-hyp">What's your hypothesis or goal?</label>
     <textarea id="disc-hyp" placeholder="e.g. Overexpressing the GroEL/ES chaperone increases the soluble yield of my membrane protein"></textarea>
     <p class="muted small">No paper needed — describe what you want to find out. The tool proposes candidate assays, each grounded in the literature, and recommends one.</p>
@@ -333,6 +413,23 @@ $("#authsave").onclick = () => {
 let CURR_PROTOCOL = null;
 let PREV_PROTOCOL = null;
 
+/* ---------- projects layer (additive) ---------- */
+// PROJECT is the single source of truth for identity (§6.1). The globals above are derived
+// caches, written only through hydrateFromProject / handlePhase / renderResult.
+let PROJECT = null;
+let PENDING_WF = null;   // a workflow card pre-selected on the home screen (before submit)
+const WORKFLOWS = [
+  {id:"reproduce",label:"Reproduce",entry:"paper",blurb:"Rebuild a published protocol exactly, filling every unstated value."},
+  {id:"adapt",label:"Adapt",entry:"paper",blurb:"Change scale, organism, or conditions of an existing protocol."},
+  {id:"design",label:"Design",entry:"hypothesis",blurb:"Start from a hypothesis; find the assay, then draft the protocol."},
+  {id:"measure",label:"Measure",entry:"hypothesis",blurb:"Characterize or quantify a parameter (Km, kcat, Kd, IC50…)."},
+  {id:"review",label:"Review",entry:"paper",blurb:"Audit an existing protocol for correctness and design."},
+  {id:"troubleshoot",label:"Troubleshoot",entry:"paper",blurb:"Diagnose why a protocol failed and propose fixes."},
+  {id:"scale",label:"Scale",entry:"paper",blurb:"Move a protocol between bench, prep, and plate scales."},
+];
+function wfLabel(id) { const w = WORKFLOWS.find((x) => x.id === id); return w ? w.label : (id || ""); }
+function lcLabel(s) { return String(s || "").replace(/_/g, " "); }
+
 const EXAMPLE = `CFPS reactions were assembled with S30 extract prepared as described previously and a PANOx-SP energy system, and incubated at 30 C. The template plasmid encoded a single-chain antibody fragment. Disulfide-bonded, correctly folded product was obtained. Reactions were quenched and product yield was quantified by radioactive leucine incorporation.`;
 
 $("#example").onclick = () => { $("#methods").value = EXAMPLE; clearPdf(); };
@@ -340,27 +437,37 @@ $("#example").onclick = () => { $("#methods").value = EXAMPLE; clearPdf(); };
 $("#pdf").onchange = () => {
   const f = $("#pdf").files[0];
   $("#pdf-label").textContent = f ? f.name : "Upload the paper as a PDF";
-  $(".filebtn").classList.toggle("has-file", !!f);
+  $("#input-panel .filebtn").classList.toggle("has-file", !!f);
   $("#clear-pdf").classList.toggle("hidden", !f);
 };
 function clearPdf() {
   $("#pdf").value = "";
   $("#pdf-label").textContent = "Upload the paper as a PDF";
-  $(".filebtn").classList.remove("has-file");
+  $("#input-panel .filebtn").classList.remove("has-file");
   $("#clear-pdf").classList.add("hidden");
 }
 $("#clear-pdf").onclick = clearPdf;
 
 /* ---------- mode toggle ---------- */
 let MODE = "paper";
-function setMode(mode) {
-  if (mode === MODE) return;  // re-clicking the active tab must not wipe a shown result
+// applyMode paints the tabs + toggles the input panels + keeps ARIA in sync. It does NOT
+// reset any result — it's the funnel used by restore/routing. setMode wraps it and adds the
+// result-wipe for the manual toggle only.
+function applyMode(mode) {
   MODE = mode;
   const paper = mode === "paper";
   $("#mode-paper").classList.toggle("active", paper);
   $("#mode-hyp").classList.toggle("active", !paper);
+  $("#mode-paper").setAttribute("aria-selected", paper ? "true" : "false");
+  $("#mode-hyp").setAttribute("aria-selected", paper ? "false" : "true");
+  $("#mode-paper").tabIndex = paper ? 0 : -1;
+  $("#mode-hyp").tabIndex = paper ? -1 : 0;
   $("#input-panel").classList.toggle("hidden", !paper);
   $("#discovery-panel").classList.toggle("hidden", paper);
+}
+function setMode(mode) {
+  if (mode === MODE) return;  // re-clicking the active tab must not wipe a shown result
+  applyMode(mode);
   // reset any downstream panels + diff baseline when switching entry paths
   ["#questions-panel", "#assays-panel", "#result-panel"].forEach(hide);
   PREV_PROTOCOL = null; CURR_PROTOCOL = null;
@@ -368,6 +475,15 @@ function setMode(mode) {
 }
 $("#mode-paper").onclick = () => setMode("paper");
 $("#mode-hyp").onclick = () => setMode("hyp");
+$(".modebar").addEventListener("keydown", (e) => {
+  let target = null;
+  if (e.key === "ArrowLeft" || e.key === "ArrowUp" || e.key === "Home") target = "paper";
+  else if (e.key === "ArrowRight" || e.key === "ArrowDown" || e.key === "End") target = "hyp";
+  else return;
+  e.preventDefault();
+  setMode(target);
+  $(target === "paper" ? "#mode-paper" : "#mode-hyp").focus();
+});
 
 /* ---------- hypothesis-first: discover assays ---------- */
 function discoverBody(autoPick) {
@@ -390,6 +506,7 @@ async function runDiscover(autoPick) {
   const body = discoverBody(autoPick);
   if (body.hypothesis.length < 12) { discStatus("State a hypothesis or goal (a sentence).", true); return; }
   const pid = newPid(); body.progress_id = pid;
+  if (PROJECT) body.project_id = PROJECT.id;
   discLock(true, autoPick ? "Finding and picking the best assay…" : "Searching the literature for the best assays to test this… (this can take a minute)");
   startProgress(pid);
   try {
@@ -421,6 +538,7 @@ $("#analyze").onclick = async () => {
     const hyp = $("#hypothesis").value.trim();
     if (hyp) fd.append("hypothesis", hyp);
     fd.append("progress_id", pid);
+    if (PROJECT) fd.append("project_id", PROJECT.id);
     HYP = hyp;
     const r = await postForm("/api/analyze", fd);
     handlePhase(r);
@@ -434,6 +552,8 @@ function handlePhase(r) {
   // A new session id == a new protocol lineage: don't diff across unrelated protocols.
   if (r.session_id !== SESSION) { PREV_PROTOCOL = null; CURR_PROTOCOL = null; }
   SESSION = r.session_id;
+  if (PROJECT) { PROJECT.session_id = r.session_id;
+    if (r.phase) PROJECT.lifecycle_status = ({questions:"needs_clarification",assays:"selecting_assay",complete:"protocol_ready"}[r.phase]||PROJECT.lifecycle_status); }
   if (r.phase === "rejected") {
     const reason = (r.assay_options && r.assay_options.reason) || (r.phase1 && r.phase1.reason)
       || "This input does not look like something the tool can build from.";
@@ -520,6 +640,7 @@ function renderResult(r) {
     const host = $("#critique-anchor");
     if (host) { host.innerHTML = ""; host.appendChild(el("p", "hint", "⚠ The automatic correctness audit couldn't run this time. Use “Re-review & fix” to run it manually.")); }
   }
+  if (PROJECT) onProtocolRendered(r);
 }
 
 function renderQuestions(p1) {
@@ -1359,6 +1480,313 @@ function stopProgress() {
 function lock(on, msg) { $("#analyze").disabled = on; $("#submit-answers").disabled = on; if (on) setStatus(msg || "Working…"); }
 function show(sel) { $(sel).classList.remove("hidden"); }
 function hide(sel) { $(sel).classList.add("hidden"); }
+
+/* ===================== projects layer (additive; never touches the run engine) ===================== */
+
+/* ---------- GET twin of postJSON (auth header + 401 bar) ---------- */
+async function getJSON(url) {
+  const res = await fetch(url, { headers: authHeaders({}) });
+  const data = await res.json().catch(() => ({}));
+  _handleAuth(res, data);
+  if (!res.ok) throw new Error(data.detail || `Request failed (${res.status})`);
+  return data;
+}
+
+/* ---------- URL <-> project id (survives refresh) ---------- */
+function projectIdFromUrl() {
+  try { return new URLSearchParams(location.search).get("project"); } catch (e) { return null; }
+}
+function setProjectUrl(id) {
+  try { history.replaceState(null, "", location.pathname + "?project=" + encodeURIComponent(id)); } catch (e) { /* best-effort */ }
+}
+function clearProjectUrl() {
+  try { history.replaceState(null, "", location.pathname); } catch (e) { /* best-effort */ }
+}
+
+/* ---------- home screen + recent list ---------- */
+function showHome() {
+  PROJECT = null;
+  hide("#project-header"); hide("#detect-panel");
+  ["#input-panel", "#discovery-panel", "#questions-panel", "#assays-panel", "#result-panel"].forEach(hide);
+  hide(".modebar");
+  show("#home-panel");
+  renderWorkflowChooser($("#workflow-cards"), PENDING_WF, (id) => { PENDING_WF = id; });
+  renderRecent();
+  const inp = $("#u-input"); if (inp) inp.focus();
+}
+
+async function renderRecent() {
+  const list = $("#recent-list"), empty = $("#recent-empty");
+  list.innerHTML = "";
+  let projects = [];
+  try {
+    const d = await getJSON("/api/projects?limit=20");
+    projects = d.projects || [];
+  } catch (e) {
+    empty.textContent = "Couldn't load recent projects.";
+    empty.classList.remove("hidden");
+    return;
+  }
+  if (!projects.length) { empty.textContent = "No projects yet — start one above."; empty.classList.remove("hidden"); return; }
+  empty.classList.add("hidden");
+  projects.forEach((p) => list.appendChild(recentRow(p)));
+}
+
+function recentRow(p) {
+  const li = el("li", "recent-item");
+  const a = document.createElement("a");
+  a.href = "?project=" + encodeURIComponent(p.id);
+  const badges = `<span class="pill">${esc(wfLabel(p.workflow))}</span>`
+    + `<span class="pill lc-${esc(p.lifecycle_status || "")}">${esc(lcLabel(p.lifecycle_status))}</span>`
+    + (p.version ? `<span class="pill">v${esc(p.version)}</span>` : "");
+  a.innerHTML = `<span class="r-title">${esc(p.title || "Untitled project")}</span>${badges}`;
+  a.onclick = (e) => { e.preventDefault(); openProject(p.id); };
+  li.appendChild(a);
+  return li;
+}
+
+async function openProject(id) {
+  setToast("Loading project…", false);
+  try {
+    const p = await getJSON("/api/project/" + encodeURIComponent(id));
+    setToast("", false);
+    adoptProject(p);
+    restoreProjectView(p);
+  } catch (e) { setToast(e.message, true); }
+}
+
+/* ---------- workflow chooser (radiogroup, roving tabindex) ---------- */
+function renderWorkflowChooser(container, selectedId, onSelect) {
+  container.innerHTML = "";
+  WORKFLOWS.forEach((w, i) => {
+    const card = el("button", "wf-card");
+    card.type = "button";
+    card.setAttribute("role", "radio");
+    card.dataset.wf = w.id;
+    card.dataset.entry = w.entry;
+    const checked = w.id === selectedId;
+    card.setAttribute("aria-checked", checked ? "true" : "false");
+    // roving tabindex: the checked card (or the first, if none checked) is the tab stop
+    card.tabIndex = (checked || (!selectedId && i === 0)) ? 0 : -1;
+    card.innerHTML = `${esc(w.label)}<small>${esc(w.blurb)}</small>`;
+    card.onclick = () => selectWorkflow(container, w.id, onSelect);
+    card.addEventListener("keydown", (e) => wfKeydown(e, container, onSelect));
+    container.appendChild(card);
+  });
+}
+function selectWorkflow(container, id, onSelect) {
+  container.querySelectorAll(".wf-card").forEach((c) => {
+    const on = c.dataset.wf === id;
+    c.setAttribute("aria-checked", on ? "true" : "false");
+    c.tabIndex = on ? 0 : -1;
+  });
+  if (onSelect) onSelect(id);
+}
+function wfKeydown(e, container, onSelect) {
+  const cards = [...container.querySelectorAll(".wf-card")];
+  const idx = cards.indexOf(e.currentTarget);
+  if (idx < 0) return;
+  let ni = idx;
+  if (e.key === "ArrowRight" || e.key === "ArrowDown") ni = (idx + 1) % cards.length;
+  else if (e.key === "ArrowLeft" || e.key === "ArrowUp") ni = (idx - 1 + cards.length) % cards.length;
+  else if (e.key === "Home") ni = 0;
+  else if (e.key === "End") ni = cards.length - 1;
+  else if (e.key === " " || e.key === "Enter") { e.preventDefault(); selectWorkflow(container, cards[idx].dataset.wf, onSelect); return; }
+  else return;
+  e.preventDefault();
+  selectWorkflow(container, cards[ni].dataset.wf, onSelect);
+  cards[ni].focus();
+}
+
+/* ---------- universal input -> detect -> confirm ---------- */
+function uStatus(msg, isErr) { const s = $("#u-status"); if (s) { s.textContent = msg || ""; s.className = isErr ? "err" : "muted"; } setToast(msg, isErr); }
+
+$("#u-file").onchange = () => {
+  const f = $("#u-file").files[0];
+  $("#u-file-label").textContent = f ? f.name : "Upload a paper as a PDF";
+  $("#u-file").closest(".filebtn").classList.toggle("has-file", !!f);
+};
+$("#u-example").onclick = () => { $("#u-input").value = EXAMPLE; };
+
+$("#universal-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const file = $("#u-file").files[0];
+  const text = $("#u-input").value.trim();
+  if (!file && !text) { uStatus("Describe what you want to build, paste a protocol, give an identifier, or upload a PDF.", true); return; }
+  $("#u-go").disabled = true;
+  uStatus("Detecting the best workflow…");
+  try {
+    const fd = new FormData();
+    if (text) fd.append("text", text);      // C-frontend alias for free_text (§5.1)
+    if (file) fd.append("file", file);
+    if (PENDING_WF) fd.append("workflow", PENDING_WF);  // alias for requested_workflow
+    const draft = await postForm("/api/project", fd);
+    uStatus("");
+    showDetect(draft);
+  } catch (err) { uStatus(err.message, true); }
+  $("#u-go").disabled = false;
+});
+
+function showDetect(draft) {
+  PROJECT = draft;
+  setProjectUrl(draft.id);
+  hide("#home-panel");
+  $("#detect-summary").textContent = draft.detection_reason || "";
+  renderWorkflowChooser($("#detect-cards"), draft.workflow, (id) => { PROJECT.workflow = id; });
+  show("#detect-panel");
+  $("#detect-confirm").focus();
+}
+
+$("#detect-confirm").onclick = async () => {
+  if (!PROJECT) return;
+  $("#detect-confirm").disabled = true;
+  try {
+    const p = await postJSON("/api/project/" + encodeURIComponent(PROJECT.id) + "/workflow", { workflow: PROJECT.workflow });
+    adoptProject(p);
+    routeIntoScreen(p);
+    maybeAutoRun(p);
+  } catch (e) { setToast(e.message, true); }
+  $("#detect-confirm").disabled = false;
+};
+$("#detect-cancel").onclick = () => { showHome(); };
+
+/* ---------- adopt / hydrate / header ---------- */
+function adoptProject(p) {
+  PROJECT = p;
+  setProjectUrl(p.id);
+  hydrateFromProject(p);
+  renderProjectHeader(p);
+  hide("#home-panel"); hide("#detect-panel");
+}
+
+// The ONLY writer of the demoted globals on restore (§6.4).
+function hydrateFromProject(p) {
+  SESSION = p.session_id || null;
+  HYP = p.hypothesis || "";
+  MODE = p.entry_mode;
+  if (p.latest_result) {
+    CURR_PROTOCOL = p.latest_result.protocol;
+    PREV_PROTOCOL = null;
+    MD_URL = p.latest_result.markdown_url || null;
+    CSV_URL = p.latest_result.materials_csv_url || null;
+    GLOG = p.latest_result.grounding_log || [];
+  }
+}
+
+function renderProjectHeader(p) {
+  $("#ph-title").textContent = p.title || "Untitled project";
+  const wf = $("#ph-workflow"); wf.textContent = wfLabel(p.workflow); wf.className = "pill ph-badge";
+  const lc = $("#ph-lifecycle"); lc.textContent = lcLabel(p.lifecycle_status); lc.className = "pill ph-badge lc-" + (p.lifecycle_status || "");
+  $("#ph-version").textContent = "v" + (p.version || 0);
+  const stale = (p.session_live === false && !!p.latest_result);
+  $("#ph-stale").classList.toggle("hidden", !stale);
+  show("#project-header");
+}
+
+$("#ph-new").onclick = () => { clearProjectUrl(); showHome(); };
+$("#ph-copy").onclick = async () => {
+  try { await navigator.clipboard.writeText(location.href); setToast("Link copied.", false); setTimeout(() => setToast("", false), 1500); }
+  catch (e) { setToast("Copy failed — copy the URL from the address bar.", true); }
+};
+$("#ph-resume").onclick = async () => {
+  if (!PROJECT) return;
+  $("#ph-resume").disabled = true;
+  setToast("Resuming editing session…", false);
+  try {
+    const p = await postJSON("/api/project/" + encodeURIComponent(PROJECT.id) + "/resume", {});
+    setToast("", false);
+    adoptProject(p);
+    restoreProjectView(p);
+  } catch (e) { setToast(e.message, true); }
+  $("#ph-resume").disabled = false;
+};
+
+/* ---------- routing / restore ---------- */
+function routeIntoScreen(p) {
+  hide("#home-panel"); hide("#detect-panel");
+  show(".modebar");
+  applyMode(p.entry_mode);
+  const seed = (p.seed_input && p.seed_input.text) || "";
+  if (p.entry_mode === "paper") {
+    if (seed) $("#methods").value = seed;
+    if (p.hypothesis) $("#hypothesis").value = p.hypothesis;
+    $("#methods").focus();
+  } else {
+    if (p.hypothesis || seed) $("#disc-hyp").value = p.hypothesis || seed;
+    $("#disc-hyp").focus();
+  }
+}
+
+function restoreProjectView(p) {
+  hide("#home-panel"); hide("#detect-panel");
+  show(".modebar");
+  applyMode(p.entry_mode);
+  if (p.latest_result) {
+    // renderResult funnels through onProtocolRendered, which bumps version when the payload
+    // carries a protocol_version_id. On restore that id belongs to the CURRENT (already-counted)
+    // version, so snapshot the server-authoritative version and repaint the header with it.
+    const authVersion = p.version;
+    renderResult(p.latest_result);
+    PROJECT.version = authVersion;
+    renderProjectHeader(PROJECT);
+    if (p.session_live === false) disableMutations();
+  } else {
+    // Mid-flow question/assay state is not persisted in M1 — pre-protocol projects
+    // re-enter through the normal input screen.
+    routeIntoScreen(p);
+  }
+  const h = $("#project-header"); if (h) h.focus();
+}
+
+// Disable every model-driving button in the result panel (keep downloads/print) when the
+// editing session is gone and the user hasn't resumed yet.
+function disableMutations() {
+  const panel = $("#result-panel");
+  if (!panel) return;
+  panel.querySelectorAll("button").forEach((b) => {
+    if (/download|\.md|\.csv|print|save pdf/i.test(b.textContent || "")) return;
+    b.disabled = true;
+  });
+}
+
+// Local-only update after the run engine renders a protocol (§6.5). No network call —
+// the backend already persisted the version via _finish().
+function onProtocolRendered(r) {
+  PROJECT.latest_result = r;
+  PROJECT.version = (r.protocol_version_id != null) ? (PROJECT.version || 0) + 1 : (PROJECT.version || 0);
+  PROJECT.lifecycle_status = "protocol_ready";
+  PROJECT.title = (r.protocol && r.protocol.title) || PROJECT.title;
+  PROJECT.session_live = true;
+  renderProjectHeader(PROJECT);
+}
+
+// Optional convenience (§6.7): if the confirmed project already carries seed text in the
+// input, kick off the existing analyze/discover handler so the user isn't asked to paste twice.
+function maybeAutoRun(p) {
+  if (!p.seed_input || !p.seed_input.text) return;
+  if (p.entry_mode === "paper") { if ($("#methods").value.trim().length >= 40) $("#analyze").click(); }
+  else { if ($("#disc-hyp").value.trim().length >= 12) $("#discover").click(); }
+}
+
+/* ---------- boot: restore ?project= on load ---------- */
+async function boot() {
+  const pid = projectIdFromUrl();
+  if (pid) {
+    try {
+      const p = await getJSON("/api/project/" + encodeURIComponent(pid));
+      adoptProject(p);
+      restoreProjectView(p);
+      return;
+    } catch (e) {
+      clearProjectUrl();
+      showHome();
+      setToast("Couldn't open that project — it may have expired. Starting fresh.", true);
+      return;
+    }
+  }
+  showHome();
+}
+boot();
 </script>
 </body>
 </html>

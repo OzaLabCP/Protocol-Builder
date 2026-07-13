@@ -14,6 +14,7 @@ Sessions are held in memory (run one worker) and expire after SESSION_TTL.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import secrets
@@ -21,6 +22,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -31,6 +33,24 @@ from pydantic import BaseModel
 
 from . import config
 from .agent import AgentError, GapFillerAgent, Session, _pdf_text
+from .projects import (
+    WORKFLOWS,
+    LifecycleStatus,
+    ProtocolVersion,
+    ValidationSummary,
+    WorkflowType,
+    build_input_summary,
+    detect_workflow,
+    entry_mode_for,
+    make_project,
+    new_version_id,
+)
+from .store import (
+    ConcurrencyError,
+    ProjectNotFound,
+    ProjectStore,
+    SQLiteProjectStore,
+)
 from .render import (
     assay_selection_to_markdown,
     correctness_review_to_markdown,
@@ -143,6 +163,10 @@ class Store:
     # Optional second sink for notes (e.g. a pre-session pid feed the client is already
     # polling on the auto_pick path, where discover→choose→build share one request).
     mirror: Any = None
+    # Links this in-memory session to a durable ExperimentProject (projects layer).
+    # None for sessions that never went through the projects bridge; when set, _finish
+    # persists a ProtocolVersion and advances the project's lifecycle.
+    project_id: Optional[str] = None
 
     def start_progress(self) -> None:
         """Clear the feed at the start of a new long op so the client (polling from 0)
@@ -166,6 +190,11 @@ class Store:
 
 _SESSIONS: dict[str, Store] = {}
 _agent: Optional[GapFillerAgent] = None
+
+# Durable projects layer (SQLite). Instantiated at import (parallel to _agent, but eager
+# so the DB/schema is ready before the first request). The in-memory _SESSIONS dict and
+# per-session RLock discipline are unchanged; _STORE has its own lock for DB writes.
+_STORE: ProjectStore = SQLiteProjectStore()
 
 # Pre-session activity feeds: discover/analyze mint their session mid-call, so the client
 # can't key progress on a session id yet. It supplies a short-lived progress_id instead, and
@@ -270,6 +299,7 @@ class DiscoverRequest(BaseModel):
     constraints: Optional[dict] = None
     auto_pick: bool = False
     progress_id: Optional[str] = None  # client-supplied key for the pre-session activity feed
+    project_id: Optional[str] = None  # optional link into the durable projects layer
 
 
 class ChooseAssayRequest(BaseModel):
@@ -315,6 +345,7 @@ def analyze(
     methods_text: str = Form(default=""),
     hypothesis: str = Form(default=""),
     progress_id: str = Form(default=""),
+    project_id: str = Form(default=""),
     file: Optional[UploadFile] = File(default=None),
 ) -> dict:
     _prune()
@@ -364,6 +395,19 @@ def analyze(
     session_id = uuid.uuid4().hex
     store = Store(session=session, created=_now())
     _SESSIONS[session_id] = store
+    # Bridge: attach to (or create) a durable project so this generation is persisted.
+    # A stale/unknown project_id never 404s a generation — try_get_project → None → fresh.
+    _bridge_attach(
+        store, session_id, (project_id or "").strip(),
+        analyze=True, is_full_paper=is_full_paper,
+        seed_inputs={
+            "free_text": "" if is_full_paper else text,
+            "pdf_text": text if is_full_paper else "",
+            "pdf_present": is_full_paper,
+            "hypothesis": hyp or "",
+            "pdf_filename": (file.filename if (file is not None and is_full_paper) else None),
+        },
+    )
     phase1 = session.phase1 or {}
 
     if not phase1.get("usable", False):
@@ -410,11 +454,13 @@ def revise(req: ReviseRequest) -> dict:
         try:
             protocol = agent.revise(store.session, instruction, progress=store.note)
         except AgentError as exc:
+            _mark_failed(store.project_id)
             raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
         except Exception as exc:  # noqa: BLE001
+            _mark_failed(store.project_id)
             raise HTTPException(500, _explain(exc))
         store.note("Done.")
-        return _finish(req.session_id, store, protocol)
+        return _finish(req.session_id, store, protocol, source_op="revise")
 
 
 @app.post("/api/design", dependencies=_MUTATING)
@@ -465,7 +511,7 @@ def critique(req: CritiqueRequest) -> dict:
                 raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
             except Exception as exc:  # noqa: BLE001
                 raise HTTPException(500, _explain(exc))
-            result = _finish(req.session_id, store, protocol)  # validates + replaces + returns
+            result = _finish(req.session_id, store, protocol, source_op="critique_apply")
             store.correctness_review = None  # the review is stale against the rebuilt protocol
             return {**result, "correctness_review": review, "review_validation_report": report,
                     "applied": True, "fixes_applied": len(fixable)}
@@ -495,7 +541,7 @@ def apply_fixes(req: DesignRequest) -> dict:
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(500, _explain(exc))
         store.correctness_review = None  # the review is stale against the rebuilt protocol
-        return _finish(req.session_id, store, protocol)
+        return _finish(req.session_id, store, protocol, source_op="apply_fixes")
 
 
 @app.post("/api/align", dependencies=_MUTATING)
@@ -544,6 +590,11 @@ def discover(req: DiscoverRequest) -> dict:
     session_id = uuid.uuid4().hex
     store = Store(session=session, created=_now())
     _SESSIONS[session_id] = store
+    _bridge_attach(
+        store, session_id, (req.project_id or "").strip(),
+        analyze=False, is_full_paper=False,
+        seed_inputs={"hypothesis": hyp, "constraints": req.constraints or {}},
+    )
     opts = session.assay_options or {}
 
     if not opts.get("usable", True) or not (opts.get("assays") or []):
@@ -650,8 +701,10 @@ def _resolve(session_id: str, answers: list) -> dict:
         try:
             protocol = agent.continue_with_answers(store.session, answers, progress=store.note)
         except AgentError as exc:
+            _mark_failed(store.project_id)
             raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
         except Exception as exc:  # noqa: BLE001
+            _mark_failed(store.project_id)
             raise HTTPException(500, _explain(exc))
         store.note("Verifying citations and finalizing…")
         result = _finish(session_id, store, protocol)
@@ -684,7 +737,7 @@ def _auto_review(session_id: str, store: Store, result: dict) -> dict:
         store.note(f"Audit found {len(fixable)} issue(s) — applying fixes…")
         try:
             fixed = agent.apply_correctness_fixes(store.session, findings, progress=store.note)
-            result = _finish(session_id, store, fixed)  # re-validate + replace with corrected
+            result = _finish(session_id, store, fixed, source_op="auto_review")  # re-validate + replace
             applied = len(fixable)
             store.correctness_review = None  # applied — stale against the corrected protocol
         except Exception as exc:  # noqa: BLE001
@@ -696,7 +749,7 @@ def _auto_review(session_id: str, store: Store, result: dict) -> dict:
     return {**result, "correctness_review": review, "auto_review": True, "fixes_applied": applied}
 
 
-def _finish(session_id: str, store: Store, protocol: dict) -> dict:
+def _finish(session_id: str, store: Store, protocol: dict, source_op: str = "resolve") -> dict:
     report = validate_and_finalize(
         protocol,
         allow_stated=(store.session.source_kind != "hypothesis"),
@@ -704,7 +757,10 @@ def _finish(session_id: str, store: Store, protocol: dict) -> dict:
         source_exact=store.session.source_exact,
     )
     store.protocol = protocol
-    return {
+    # The complete, opaque payload. Persisted verbatim as ProtocolVersion.result so a
+    # restore rehydrates renderResult unchanged. The two projects-layer keys are always
+    # present (null when this session isn't linked to a durable project).
+    r: dict = {
         "session_id": session_id,
         "phase": "complete",
         "protocol": protocol,
@@ -713,7 +769,20 @@ def _finish(session_id: str, store: Store, protocol: dict) -> dict:
         "markdown_url": f"/api/protocol/{session_id}.md",
         "materials_csv_url": f"/api/protocol/{session_id}/materials.csv",
         "chosen_assay": store.chosen_assay,
+        "project_id": store.project_id,
+        "protocol_version_id": None,
     }
+    if store.project_id:
+        # Server-authoritative persistence: one _finish == one ProtocolVersion. Best-effort —
+        # a store failure never breaks protocol delivery (the response is still returned).
+        try:
+            vid = new_version_id()
+            r["protocol_version_id"] = vid  # embed before snapshotting so result is complete
+            _persist_protocol_version(store, protocol, report, r, source_op, vid)
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("protocol-version persist skipped: %s", type(exc).__name__)
+            r["protocol_version_id"] = None
+    return r
 
 
 def _slug(title: str) -> str:
@@ -738,3 +807,477 @@ def _explain(exc: Exception) -> str:
         return ("The model took too long and the request timed out. This usually means a very "
                 "large or complex build — try a narrower scope or fewer conditions, then retry.")
     return "Something went wrong while building the protocol. Please try again; if it persists, check the server logs."
+
+
+# ===========================================================================
+# Projects layer (Milestone-1) — additive. See NORMATIVE SPEC §5.
+# ===========================================================================
+
+_PROJECT_404 = "Unknown or expired project. Start a new one."
+_PROJECT_409 = "This project was modified by another request. Reload and retry."
+
+
+class ConfirmWorkflowRequest(BaseModel):
+    workflow: str
+
+
+# --- store-mutation helpers (get_versioned → mutate → update, retry once) ---
+
+def _update_with_retry(project_id: str, mutate) -> None:
+    """Read the project with its row_version, apply ``mutate`` (in place), and write it
+    back with optimistic concurrency. Retries once on a lost race. Propagates
+    ProjectNotFound and (after the retry) ConcurrencyError to the caller."""
+    last: Optional[ConcurrencyError] = None
+    for attempt in range(2):
+        project, rv = _STORE.get_project_versioned(project_id)
+        mutate(project)
+        try:
+            _STORE.update_project(project, expected_row_version=rv)
+            return
+        except ConcurrencyError as exc:
+            last = exc
+            continue
+    if last is not None:
+        raise last
+
+
+def _link_session(project_id: str, session_id: str) -> None:
+    """Bind a live in-memory session to the durable project and mark it building.
+    protocol_ready → building is an allowed (revise/retry) transition."""
+    def mutate(p):
+        p.session_id = session_id
+        p.lifecycle_status = LifecycleStatus.building
+    _update_with_retry(project_id, mutate)
+
+
+def _set_workflow(project_id: str, workflow: str) -> None:
+    """Set/override the confirmed workflow. MUST NOT touch inputs, protocol_versions,
+    session_id, current_protocol_version_id, or detected_workflow. Idempotent."""
+    def mutate(p):
+        p.workflow = WorkflowType(workflow)
+        p.confirmation_required = False
+        if p.lifecycle_status in (
+            LifecycleStatus.intake_received,
+            LifecycleStatus.awaiting_confirmation,
+        ):
+            p.lifecycle_status = LifecycleStatus.workflow_confirmed
+    _update_with_retry(project_id, mutate)
+
+
+def _mark_failed(project_id: Optional[str]) -> None:
+    """Best-effort: flag a project-linked generation that raised. A store error here
+    never masks the original HTTP error the caller is about to raise."""
+    if not project_id:
+        return
+    try:
+        def mutate(p):
+            p.lifecycle_status = LifecycleStatus.failed
+        _update_with_retry(project_id, mutate)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("mark_failed suppressed: %s", type(exc).__name__)
+
+
+def _validation_summary_from_report(report: dict) -> ValidationSummary:
+    """Denormalize the validation report into the project's ValidationSummary. Counts are
+    best-effort (the report has no top-level status); the full report is retained."""
+    report = report or {}
+    downgraded = len(report.get("downgraded") or [])
+    stated = len(report.get("stated_downgrades") or [])
+    quotes = report.get("quotes") or {}
+    unverified = len(quotes.get("unverified") or [])
+    support = report.get("support") or {}
+    mismatch = len(support.get("mismatch") or [])
+    warning_count = downgraded + stated + mismatch + unverified
+    unverified_citation_count = downgraded + unverified
+    status = "clean" if warning_count == 0 else "warnings"
+    return ValidationSummary(
+        status=status,
+        error_count=0,
+        warning_count=warning_count,
+        unverified_citation_count=unverified_citation_count,
+        report=report,
+        checked_at=datetime.now(timezone.utc),
+    )
+
+
+_PROVENANCE_BY_OP = {
+    "resolve": "initial",
+    "auto_review": "auto_review",
+    "apply_fixes": "apply_fixes",
+    "critique_apply": "critique_apply",
+    "revise": "revise",
+}
+
+
+def _persist_protocol_version(
+    store: Store, protocol: dict, report: dict, result: dict, source_op: str, version_id: str
+) -> None:
+    """Write a ProtocolVersion row, then update the project (append version_id, set
+    current_protocol_version_id, refresh validation_summary/title, advance lifecycle to
+    protocol_ready). One _finish == one version; current always points at the newest."""
+    project, _rv = _STORE.get_project_versioned(store.project_id)
+    version_number = len(project.protocol_versions) + 1
+    provenance = _PROVENANCE_BY_OP.get(source_op, source_op)
+    ver = ProtocolVersion(
+        version_id=version_id,
+        project_id=store.project_id,
+        version_number=version_number,
+        provenance=provenance,
+        source_op=source_op,
+        title=(protocol.get("title") or "protocol"),
+        result=result,
+        validation_summary=report,
+        chosen_assay=store.chosen_assay,
+        created_at=datetime.now(timezone.utc),
+    )
+    _STORE.save_protocol_version(ver)
+
+    summary = _validation_summary_from_report(report)
+    title = (protocol.get("title") or "").strip()
+
+    def mutate(p):
+        if ver.version_id not in p.protocol_versions:
+            p.protocol_versions.append(ver.version_id)
+        p.current_protocol_version_id = ver.version_id
+        p.lifecycle_status = LifecycleStatus.protocol_ready
+        p.validation_summary = summary
+        if title:
+            p.title = title
+    _update_with_retry(store.project_id, mutate)
+
+
+# --- intake bridge (analyze/discover attach-or-create) ----------------------
+
+def _bridge_attach(
+    store: Store, session_id: str, project_id: str, *,
+    analyze: bool, is_full_paper: bool, seed_inputs: dict,
+) -> None:
+    """Attach the session to an existing project (by id) or create a fresh one, then link
+    the live session. Wholly best-effort: a stale/unknown project_id never 404s a
+    generation, and any store error leaves the generation untouched (store.project_id None)."""
+    try:
+        proj = None
+        if project_id:
+            proj = _STORE.try_get_project(project_id)
+        if proj is None:
+            detected = (
+                "reproduce" if (analyze and is_full_paper)
+                else "adapt" if analyze
+                else "design"
+            )
+            try:
+                summary = build_input_summary(seed_inputs)
+            except Exception:  # noqa: BLE001
+                summary = {}
+            title = (summary.get("title") if isinstance(summary, dict) else None) or "Untitled project"
+            constraints = seed_inputs.get("constraints") or None
+            new = make_project(
+                title=title,
+                workflow=detected,
+                detected_workflow=detected,
+                confirmation_required=False,
+                hypothesis=(seed_inputs.get("hypothesis") or None),
+                inputs=seed_inputs,
+                input_summary=summary if isinstance(summary, dict) else {},
+                constraints=constraints,
+            )
+            proj = _STORE.create_project(new)
+        store.project_id = proj.project_id
+        _link_session(proj.project_id, session_id)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("project bridge skipped: %s", type(exc).__name__)
+
+
+# --- API serializers --------------------------------------------------------
+
+def _constraints_api(c) -> Optional[dict]:
+    d: dict = {}
+    if c.equipment:
+        d["equipment"] = c.equipment
+    if c.time:
+        d["time"] = c.time
+    if c.skill:
+        d["skill"] = c.skill
+    if c.extra:
+        d.update(c.extra)
+    return d or None
+
+
+def _report_ok(report: dict) -> bool:
+    report = report or {}
+    quotes = report.get("quotes") or {}
+    support = report.get("support") or {}
+    return not (
+        (report.get("downgraded") or [])
+        or (report.get("stated_downgrades") or [])
+        or (quotes.get("unverified") or [])
+        or (support.get("mismatch") or [])
+    )
+
+
+def _version_summary(v: ProtocolVersion) -> dict:
+    return {
+        "id": v.version_id,
+        "version_number": v.version_number,
+        "created_at": v.created_at.isoformat(),
+        "provenance": v.provenance.value,
+        "source_op": v.source_op,
+        "title": v.title,
+        "validation_ok": _report_ok(v.validation_summary or {}),
+    }
+
+
+def _current_version(project, versions: list) -> Optional[ProtocolVersion]:
+    if project.current_protocol_version_id:
+        for v in versions:
+            if v.version_id == project.current_protocol_version_id:
+                return v
+    return versions[-1] if versions else None
+
+
+def _project_detail(project) -> dict:
+    """Assemble the GET /api/project/{id} restore payload (§5.2). Never exposes raw
+    `inputs` or full pdf_text; download URLs on latest_result are rewritten to the
+    project-stable forms so restore-after-restart downloads work."""
+    versions = _STORE.list_protocol_versions(project.project_id)
+    cur = _current_version(project, versions)
+    latest_result: Optional[dict] = None
+    if cur is not None:
+        latest_result = dict(cur.result)
+        latest_result["markdown_url"] = f"/api/project/{project.project_id}/protocol.md"
+        latest_result["materials_csv_url"] = f"/api/project/{project.project_id}/materials.csv"
+    version_number = cur.version_number if cur is not None else 0
+    session_live = bool(project.session_id and project.session_id in _SESSIONS)
+    summary = project.input_summary or {}
+    seed_text = summary.get("preview", "") if isinstance(summary, dict) else ""
+    seed_filename = summary.get("pdf_filename") if isinstance(summary, dict) else None
+    return {
+        "id": project.project_id,
+        "title": project.title,
+        "workflow": project.workflow.value,
+        "detected_workflow": project.detected_workflow.value,
+        "entry_mode": entry_mode_for(project.workflow),
+        "detection_confidence": project.detection_confidence,
+        "detection_reason": project.detection_reason,
+        "confirmation_required": project.confirmation_required,
+        "lifecycle_status": project.lifecycle_status.value,
+        "version": version_number,
+        "created_at": project.created_at.isoformat(),
+        "updated_at": project.updated_at.isoformat(),
+        "session_id": project.session_id,
+        "session_live": session_live,
+        "hypothesis": project.hypothesis,
+        "scientific_goal": project.scientific_goal,
+        "measurement_objective": project.measurement_objective,
+        "constraints": _constraints_api(project.constraints),
+        "input_summary": project.input_summary,
+        "seed_input": {"text": seed_text, "filename": seed_filename},
+        "current_protocol_version_id": project.current_protocol_version_id,
+        "validation_summary": (
+            project.validation_summary.model_dump(mode="json")
+            if project.validation_summary else None
+        ),
+        "protocol_versions": [_version_summary(v) for v in versions],
+        "latest_result": latest_result,
+    }
+
+
+def _summary_api(s) -> dict:
+    return {
+        "id": s.project_id,
+        "title": s.title,
+        "workflow": s.workflow.value,
+        "detected_workflow": s.detected_workflow.value,
+        "entry_mode": entry_mode_for(s.workflow),
+        "lifecycle_status": s.lifecycle_status.value,
+        "detection_confidence": s.detection_confidence,
+        "confirmation_required": s.confirmation_required,
+        "version": s.version,
+        "has_protocol": s.has_protocol,
+        "current_protocol_version_id": s.current_protocol_version_id,
+        "created_at": s.created_at.isoformat(),
+        "updated_at": s.updated_at.isoformat(),
+    }
+
+
+# --- endpoints --------------------------------------------------------------
+
+@app.post("/api/project", dependencies=_MUTATING)
+@app.post("/api/intake", dependencies=_MUTATING)  # legacy alias
+def create_project(
+    free_text: str = Form(default=""),
+    text: str = Form(default=""),  # C-frontend alias for free_text
+    identifier: str = Form(default=""),
+    hypothesis: str = Form(default=""),
+    measurement_goal: str = Form(default=""),
+    existing_protocol_text: str = Form(default=""),
+    requested_workflow: str = Form(default=""),
+    workflow: str = Form(default=""),  # C-frontend alias for requested_workflow
+    constraints: str = Form(default=""),
+    file: Optional[UploadFile] = File(default=None),
+) -> dict:
+    """Create + classify a DRAFT project with a cheap heuristic (NO model call)."""
+    _prune()
+    free_text = (free_text or "").strip() or (text or "").strip()
+    identifier = (identifier or "").strip()
+    hypothesis = (hypothesis or "").strip()
+    measurement_goal = (measurement_goal or "").strip()
+    existing_protocol_text = (existing_protocol_text or "").strip()
+    requested = (requested_workflow or "").strip() or (workflow or "").strip()
+    if requested and requested not in WORKFLOWS:
+        raise HTTPException(400, "Unknown workflow.")
+
+    try:
+        constraints_dict = json.loads(constraints) if constraints.strip() else {}
+        if not isinstance(constraints_dict, dict):
+            constraints_dict = {}
+    except Exception:  # noqa: BLE001
+        constraints_dict = {}
+
+    # PDF extraction (host-side; NO model). Validated exactly as /api/analyze.
+    pdf_text = ""
+    pdf_filename = None
+    if file is not None and file.filename:
+        if file.size is not None and file.size > MAX_PDF_BYTES:
+            raise HTTPException(400, "PDF is too large (max ~25 MB). Paste the Methods section instead.")
+        pdf_bytes = file.file.read(MAX_PDF_BYTES + 1)
+        if len(pdf_bytes) > MAX_PDF_BYTES:
+            raise HTTPException(400, "PDF is too large (max ~25 MB). Paste the Methods section instead.")
+        if not pdf_bytes.startswith(b"%PDF"):
+            raise HTTPException(400, "That file doesn't look like a PDF.")
+        extracted = _pdf_text(pdf_bytes)
+        if not extracted:
+            raise HTTPException(400, "Couldn't read text from that PDF (it may be scanned or "
+                                     "image-only). Paste the Methods section instead.")
+        pdf_text = extracted[:MAX_TEXT_CHARS]
+        pdf_filename = file.filename
+
+    if not any([free_text, identifier, hypothesis, measurement_goal,
+                existing_protocol_text, pdf_text]):
+        raise HTTPException(
+            400,
+            "Describe what you want to build, paste a protocol, give an identifier, "
+            "or upload a PDF.",
+        )
+
+    inputs = {
+        "requested_workflow": requested,
+        "identifier": identifier,
+        "free_text": free_text,
+        "hypothesis": hypothesis,
+        "measurement_goal": measurement_goal,
+        "existing_protocol_text": existing_protocol_text,
+        "pdf_present": bool(pdf_text),
+        "pdf_text": pdf_text,
+        "pdf_filename": pdf_filename,
+        "constraints": constraints_dict,
+    }
+    detection = detect_workflow(inputs)
+    input_summary = build_input_summary(inputs)
+    title = input_summary.get("title") or "Untitled project"
+
+    project = make_project(
+        title=title,
+        workflow=detection.detected_workflow,
+        detected_workflow=detection.detected_workflow,
+        detection_confidence=detection.detection_confidence,
+        detection_reason=detection.detection_reason,
+        confirmation_required=detection.confirmation_required,
+        scientific_goal=(free_text or None),
+        hypothesis=(hypothesis or None),
+        measurement_objective=(measurement_goal or None),
+        constraints=constraints_dict or None,
+        inputs=inputs,
+        input_summary=input_summary,
+    )
+    project = _STORE.create_project(project)
+
+    return {
+        "id": project.project_id,
+        "detected_workflow": project.detected_workflow.value,
+        "workflow": project.workflow.value,
+        "entry_mode": entry_mode_for(project.workflow),
+        "detection_confidence": project.detection_confidence,
+        "detection_reason": project.detection_reason,
+        "confirmation_required": project.confirmation_required,
+        "lifecycle_status": project.lifecycle_status.value,
+        "seed_input": {"text": input_summary.get("preview", ""), "filename": pdf_filename},
+        "input_summary": input_summary,
+    }
+
+
+@app.get("/api/projects", dependencies=_READONLY)
+def list_projects(limit: int = 20) -> dict:
+    limit = max(1, min(100, int(limit)))
+    summaries = _STORE.list_projects(limit=limit, order_by="updated_at", descending=True)
+    return {"projects": [_summary_api(s) for s in summaries]}
+
+
+@app.get("/api/project/{project_id}", dependencies=_READONLY)
+def get_project(project_id: str) -> dict:
+    try:
+        project = _STORE.get_project(project_id)
+    except ProjectNotFound:
+        raise HTTPException(404, _PROJECT_404)
+    return _project_detail(project)
+
+
+@app.post("/api/project/{project_id}/workflow", dependencies=_MUTATING)
+@app.post("/api/project/{project_id}/confirm_workflow", dependencies=_MUTATING)  # legacy alias
+def confirm_workflow(project_id: str, req: ConfirmWorkflowRequest) -> dict:
+    wf = (req.workflow or "").strip()
+    if wf not in WORKFLOWS:
+        raise HTTPException(400, "Unknown workflow.")
+    try:
+        _set_workflow(project_id, wf)
+        project = _STORE.get_project(project_id)
+    except ProjectNotFound:
+        raise HTTPException(404, _PROJECT_404)
+    except ConcurrencyError:
+        raise HTTPException(409, _PROJECT_409)
+    return _project_detail(project)
+
+
+@app.get("/api/project/{project_id}/protocol.md", dependencies=_READONLY)
+def project_markdown(project_id: str) -> PlainTextResponse:
+    _project, cur = _current_version_or_404(project_id)
+    protocol = cur.result.get("protocol") or {}
+    md = ""
+    if cur.chosen_assay is not None:
+        md += assay_selection_to_markdown(cur.chosen_assay, {}) + "\n\n"
+    md += protocol_to_markdown(protocol)
+    log = cur.result.get("grounding_log")
+    log_md = grounding_log_to_markdown(log) if log else ""
+    if log_md:
+        md += "\n\n" + log_md
+    fname = _slug(protocol.get("title", "protocol")) + ".md"
+    return PlainTextResponse(
+        md,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@app.get("/api/project/{project_id}/materials.csv", dependencies=_READONLY)
+def project_materials_csv(project_id: str) -> PlainTextResponse:
+    _project, cur = _current_version_or_404(project_id)
+    protocol = cur.result.get("protocol") or {}
+    csv_text = materials_to_csv(protocol)
+    fname = _slug(protocol.get("title", "protocol")) + "-materials.csv"
+    return PlainTextResponse(
+        csv_text,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+def _current_version_or_404(project_id: str):
+    try:
+        project = _STORE.get_project(project_id)
+    except ProjectNotFound:
+        raise HTTPException(404, _PROJECT_404)
+    versions = _STORE.list_protocol_versions(project_id)
+    cur = _current_version(project, versions)
+    if cur is None:
+        raise HTTPException(404, "No protocol generated for this project yet.")
+    return project, cur

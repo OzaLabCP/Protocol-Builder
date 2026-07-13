@@ -90,6 +90,45 @@ review follow-ups sit next to the protocol: **Design review** (the experiment ar
 **Test a hypothesis** (does it directly test your hypothesis); **Re-review & fix** re-runs the
 audit on demand (e.g. after a manual refine).
 
+## Projects & intake (durable layer)
+
+Above the in-memory run engine sits a thin, **durable projects layer** (SQLite). A
+**project** is the persistent record of one piece of work: what you submitted, which
+workflow was detected, and every protocol version that was generated for it. Unlike a
+session, a project **survives an application restart** and can be reopened by URL
+(`?project=<id>`).
+
+- **Universal intake — `POST /api/project`.** Instead of committing to a screen up front,
+  you drop in *anything* — free text, a DOI/PMID/URL, a pasted protocol, a hypothesis, a
+  measurement goal, or a PDF — and a **deterministic, model-free classifier** picks the
+  workflow. This intake path **never calls the model** (its only host-side cost is PDF text
+  extraction), so classifying is instant and free.
+- **Seven workflows.** `reproduce`, `adapt`, `design`, `measure`, `review`, `troubleshoot`,
+  `scale`. Detection auto-emits five of them (a DOI/PMID/PDF ⇒ *reproduce*, a pasted
+  protocol ⇒ *adapt*, a hypothesis ⇒ *design*, a measurement goal ⇒ *measure*, review
+  intent ⇒ *review*); *troubleshoot* and *scale* are reachable via the workflow cards. Each
+  workflow maps to an **entry mode** (`paper` or `hypothesis`) that routes into the existing
+  run engine — the engine itself is unchanged.
+- **Confirm / override — `POST /api/project/{id}/workflow`.** When the classifier is
+  unsure it asks you to confirm; you can also override to any of the seven. Changing the
+  workflow **preserves every submitted input** — nothing is cleared or re-extracted.
+- **Versioned protocols.** Every time the engine finishes a protocol for a project it writes
+  an immutable **protocol version** (the full result snapshot, verbatim), bumps the project's
+  `version`, and points `current_protocol_version_id` at the newest. `GET /api/project/{id}`
+  rehydrates the latest result so a reopened project renders exactly as before, and
+  `GET /api/project/{id}/protocol.md` / `…/materials.csv` serve restart-safe downloads.
+- **Isolation & concurrency.** Projects never share transcript or protocol state. Writes use
+  **optimistic concurrency** (a per-row `row_version`): a stale write loses the race and the
+  API returns **409**; an unknown project id returns **404**.
+- **Migrations.** Two orthogonal layers, both fail-closed: a DDL layer keyed on
+  `PRAGMA user_version` and an app-data layer keyed on each project's JSON `schema_version`.
+  A database or payload stamped newer than the running code supports is rejected rather than
+  silently mis-read.
+
+The classic session endpoints still work standalone — `analyze`/`discover` transparently
+attach-or-create a project behind the scenes, and a stale project id never blocks a
+generation.
+
 ### Deploy (Docker)
 
 ```bash
@@ -99,7 +138,9 @@ docker run -p 8000:8000 -e OPENROUTER_API_KEY=sk-or-... methods-gap-filler
 
 Sessions are in memory, so run **one worker** (the image does). `GET /healthz` reports
 liveness, the model, and which grounding sources are enabled. Sessions expire after
-`GAPFILLER_SESSION_TTL` seconds (default 3600).
+`GAPFILLER_SESSION_TTL` seconds (default 3600); **projects are durable** and persist in the
+SQLite database at `GAPFILLER_DB_PATH` (default `./projects.db`) — mount it on a volume to
+keep projects across container restarts.
 
 ### Configuration
 
@@ -123,6 +164,7 @@ liveness, the model, and which grounding sources are enabled. Sessions expire af
 | `GAPFILLER_ENABLE_PREPRINTS` | `1` | Set `0` to disable bioRxiv/medRxiv (Europe PMC) search. |
 | `NCBI_API_KEY` | — | Optional; raises the E-utilities rate limit (3→10 req/s). |
 | `PROTOCOLS_IO_TOKEN` | — | protocols.io developer token; when set, enables `search_protocols`. |
+| `GAPFILLER_DB_PATH` | `./projects.db` | SQLite file for the durable **projects** layer (intake, detected workflow, protocol versions). Projects survive restarts; put it on a persistent volume in Docker. `:memory:` is honored for ephemeral/test use. |
 | `GAPFILLER_AUTH_TOKEN` | — | If set, `/api/*` requires it (`Authorization: Bearer` or `X-API-Key`). Off by default. |
 | `GAPFILLER_RATE_LIMIT` | `0` | Per-client requests/minute on the model-driving endpoints; `0` disables. |
 | `GAPFILLER_TRUST_PROXY` | `0` | Set `1` to read the client IP from `X-Forwarded-For` (only behind a proxy you control). |
@@ -130,11 +172,16 @@ liveness, the model, and which grounding sources are enabled. Sessions expire af
 ## Tests
 
 ```bash
-python tests/test_validation.py
+python tests/test_validation.py            # or any tests/test_*.py
 ```
 
-The validation suite (citation resolution, provenance invariants, `assumptions_log`
-consistency) runs without the network — the bibliographic resolver is injected.
+Every suite runs **without the network** (resolvers/LLM clients are injected or the path
+is model-free) and against a throwaway SQLite DB, so nothing touches a real provider or
+`./projects.db`. The validation suite covers citation resolution, provenance invariants,
+and `assumptions_log` consistency; `tests/test_store.py` and
+`tests/test_projects_acceptance.py` cover the projects layer's acceptance criteria —
+**restart survival, input preservation across a workflow change, per-project isolation,
+404 on unknown ids, 409 on concurrent updates, and migration/version handling**.
 
 ## Layout
 
@@ -147,9 +194,11 @@ app/
   resolvers.py    # DOI/PMID resolution (Crossref -> DataCite / PubMed)
   validation.py   # host-side citation validation + invariants + consistency
   render.py       # protocol -> Markdown export
-  server.py       # FastAPI endpoints (analyze/resolve/revise/export) + sessions
+  projects.py     # projects/intake domain model + deterministic workflow classifier
+  store.py        # durable SQLite projects store (versions, optimistic concurrency, migrations)
+  server.py       # FastAPI endpoints (analyze/resolve/revise/export + projects) + sessions
 static/index.html # paste/PDF UI, provenance render, export + refine controls
-tests/            # 119 tests across validation, grounding, agent loop, render, HTTP
+tests/            # 161 tests across validation, grounding, agent loop, render, HTTP, projects
 Dockerfile        # single-worker container; /healthz healthcheck
 ```
 
@@ -167,6 +216,12 @@ Dockerfile        # single-worker container; /healthz healthcheck
 | `POST` | `/api/apply_fixes` | (granular) apply a prior review's fixes and rebuild the protocol |
 | `POST` | `/api/align` | does the protocol directly test the hypothesis? |
 | `GET` | `/api/protocol/{id}.md` | download the protocol as Markdown |
+| `POST` | `/api/project` | universal intake: classify the workflow & create a durable project (no model call) |
+| `GET` | `/api/projects` | list recent projects (most-recently-updated first) |
+| `GET` | `/api/project/{id}` | restore a project (survives restart) — latest result, versions, lifecycle |
+| `POST` | `/api/project/{id}/workflow` | confirm/override the workflow (preserves all inputs) |
+| `GET` | `/api/project/{id}/protocol.md` | restart-safe protocol download for the project's current version |
+| `GET` | `/api/project/{id}/materials.csv` | restart-safe materials CSV for the project's current version |
 
 ## Notes & next steps
 
@@ -200,7 +255,11 @@ Dockerfile        # single-worker container; /healthz healthcheck
   light phases (clarifications, assay discovery) run on the provider's fast model (Sonnet) while
   the heavy emit + reviews + fixes keep the strong one (Opus) — spending the top tier only where
   the reasoning earns it. Override either side with `LLM_MODEL` / `LLM_MODEL_FAST`.
-- **Sessions** are in-memory (single process) — fine for a demo, swap for a store to scale.
+- **Sessions vs projects:** live *sessions* (the in-flight run engine) are in-memory and
+  single-process, but *projects* — intake, detected workflow, and every emitted protocol
+  version — are **durable in SQLite** (`GAPFILLER_DB_PATH`) and survive restarts, with
+  optimistic-concurrency writes and fail-closed schema migrations. A restored project whose
+  session has since expired re-renders from its stored latest version.
 - **Latency:** Phase 2 can run for a minute or two while it searches, drafts, audits and
   fixes. The UI shows a **live activity feed** — the server records each stage (searching a
   source, drafting, auditing, applying N fixes) to a per-session buffer that the browser
