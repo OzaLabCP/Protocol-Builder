@@ -320,6 +320,53 @@ corrects a bad value flips the gate `blocked → ok`, and an edit that introduce
 `ok → blocked` — the readiness card always reflects the freshly re-validated, server-returned
 protocol, never an optimistic local guess.
 
+### Clarification, PDF review, value locks & recovery
+
+Four honesty-preserving controls sit around the reconstruction loop. Each is **additive and
+degrades gracefully** — an older payload, a missing field, or a disabled endpoint falls back
+to prior behavior.
+
+- **Clarification with no implicit defaults.** Each gap is answered through a three-choice
+  control — **Answer**, **Use the suggested default** (only offered when the model actually
+  proposed one), or **Leave unresolved** — instead of a single skip box. The host stamps every
+  gap with an **`outcome_critical`** flag (the model's own signal OR-combined with a
+  conservative host heuristic: `user_dependent`, a dosing/readout/control keyword, or a numeric
+  gap with a plausible range). An outcome-critical gap **blocks submission** until you make an
+  explicit choice, announced via an assertive `#gate-error` region. The cardinal rule is that
+  **an empty field is never a default**: `_normalize_answer` (the single backend source of
+  truth) maps an absent mode + empty value to `unresolved`, downgrades `answered`+empty to
+  `unresolved`, and maps every legacy skip/plain-value shape deterministically — so a blank box
+  becomes a `default_verify` open question, never a silently invented number. A **preflight**
+  panel summarizes what you answered, what defaults you accepted, and what you left unresolved
+  before the protocol is generated.
+
+- **PDF review before analysis.** `POST /api/extract_pdf` extracts a PDF's text **host-side**
+  (no model) and reports `pages`, `chars_total`/`chars_included`, a `truncated` flag, and an
+  **`is_image_only`** flag for scanned/photographed pages. You review and **correct** the
+  extracted Methods text in place; the corrected text then flows into `/api/analyze`
+  (`is_full_paper=true`) **without re-extraction**. OCR is a clean **seam**: `_ocr_available()`
+  returns `False` and `_ocr_pdf` raises `NotImplementedError` with a paste-instead message —
+  a future OCR drop-in flips the flag with no caller edits. Direct PDF upload to `/api/analyze`
+  still works unchanged.
+
+- **Value locks.** Any material amount/unit or critical-parameter value can be **locked**
+  (🔒, persisted per project/session in `localStorage`). The locked id set is sent as
+  `locked_ids` on every revise/apply. After the model returns, `_enforce_locks` **restores** a
+  locked value the model changed (matched by stable id) and returns the restored ids; if a
+  revision makes a locked entity **disappear** it aborts with a `409` and the last valid
+  protocol is left untouched. The same set is subtracted client-side so a locked value never
+  gates as an "unrelated change."
+
+- **Deep diff, unrelated-change gate & recovery.** After a revise, a field-by-field **deep
+  diff** (matched by stable id, so it survives list reordering) detects unit, value,
+  provenance, and citation-identifier changes plus warning add/remove. Changes **not** named in
+  your instruction and **not** locked raise a confirm gate with a host-only **Revert unrelated**
+  action (`POST /api/protocol/{id}/restore`, no model call, provenance intact). Every mutating
+  op is **cancellable** (an in-flight `AbortController`; a cancel reads as "your last protocol is
+  unchanged," never an error), **retryable** (Retry re-invokes the last op), and a soft
+  **Start over** clears transient panels while preserving the last valid protocol, session, and
+  locks. A failed or cancelled op **always** preserves the last valid protocol.
+
 ## Projects & intake (durable layer)
 
 Above the in-memory run engine sits a thin, **durable projects layer** (SQLite). A
@@ -431,6 +478,32 @@ edit sets `user_input` provenance and re-runs the gate (flipping `blocked → ok
 `ok → blocked`), resolution **by either positional or stable id**, the error paths
 (`404`/`409`/`422`), idempotency, and durable `ProtocolVersion` persistence with
 `source_op="edit"`.
+
+The **clarification / PDF / locks / recovery** controls have their own no-network suites.
+`tests/test_clarify_modes.py` covers the host `outcome_critical` heuristic and the
+`_normalize_answer` invariant that **an empty field is never a default** (across every legacy
+skip/value shape); `tests/test_phase1_critical_stamp.py` (fake LLM) confirms both the paper and
+`choose_assay` phase-1 paths stamp every gap and honor the model's own flag;
+`tests/test_continue_modes.py` proves `continue_with_answers` emits the correct per-mode host
+directive (`default`/`unresolved`/`answered`), appends **no** directive on the empty-answers
+fast path, and carries `mode` onto `session.decisions`; `tests/test_resolve_modes.py` asserts
+the served three-choice/preflight/gate markup and that `/api/resolve` accepts `mode` (and a
+legacy no-`mode` answer). `tests/test_extract_pdf.py` (monkeypatched extractor/OCR seam) covers
+the report fields, truncation, image-only + unparseable-but-valid-magic, the `400`/`422` guards,
+the OCR seam raising cleanly and wiring on without endpoint edits, corrected text flowing to
+`/api/analyze`, and direct-PDF back-compat. `tests/test_locks.py` covers `_enforce_locks`
+(restore-on-change, `409`-on-disappearance, ignore-unknown) and an end-to-end `/api/revise` that
+preserves a locked value the model tried to change; `tests/test_restore.py` covers the host-only
+`/restore` rollback (unrelated change persists, provenance intact, `404` on unknown id) and the
+recovery invariant that a **failed op preserves the last valid protocol**. The frontend controls
+are asserted structurally over the served `static/index.html`: `tests/test_locks_ui.py` (lock
+toggle gated on a stable id, `localStorage` persistence, `locked_ids` on every POST),
+`tests/test_deep_diff.py` (unit/provenance/citation/warning tracking, stable-id matching, and the
+accessible caption + `thead`/`tbody` table), `tests/test_unrelated_confirm.py` (the pure
+unrelated-vs-related classification and the revise-armed gate), `tests/test_recovery_ui.py`
+(cancel/abort/retry/start-over), and `tests/test_a11y_tables.py` (every protocol table wrapped in
+a scrollable `.table-wrap` region, the assertive `#sr-alert`, and a plain-language provenance
+legend per tier).
 
 ## Layout
 
