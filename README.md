@@ -24,8 +24,15 @@ Every filled value carries one of five provenance tiers — `stated`,
 `literature_grounded`, `best_practice`, `user_input`, `default_verify` — and the tool
 never presents an invented value as if it came from the source. Crucially, it doesn't
 just *claim* a citation: after the model emits the protocol, the host **resolves every
-DOI/PMID** against PubMed (Crossref for DOIs) and downgrades anything that doesn't
-resolve to `default_verify`. Verified citations get a ✓ badge; the rest are flagged.
+DOI/PMID** against PubMed (Crossref for DOIs), confirms the retrieved title/year match
+the cited ones, and downgrades anything that doesn't resolve — or resolves to a clearly
+different work — to `default_verify`. A resolved identifier with matching metadata earns
+a `✓ citation metadata verified` badge; this attests the reference is real and points to
+the cited work, **not** that the source's text supports the specific value. When the
+retrieved source exposes an abstract/description whose text actually contains that value,
+the host attaches it as a supporting excerpt and adds `✓ supporting excerpt attached`;
+otherwise the value stays grounded but is flagged `⚠ evidence unavailable`. Citations
+that don't resolve or point to a different work are flagged and downgraded.
 
 ## How it works
 
@@ -77,7 +84,8 @@ depends on your setup and wasn't already clarified). An **adversarial correctnes
 attacks it for both **correctness** (logic/value/unit/ordering/missing-control errors) and
 **practicality** (missing detail, unclear or impractical steps), and its fixes are applied
 before you ever see it — so you receive an already-corrected protocol with the findings shown
-for transparency (clearly labeled model-generated; any cited evidence host-verified). Then two
+for transparency (clearly labeled model-generated; any cited identifiers host-resolved and their
+metadata checked). Then two
 review follow-ups sit next to the protocol: **Design review** (the experiment around it) and
 **Test a hypothesis** (does it directly test your hypothesis); **Re-review & fix** re-runs the
 audit on demand (e.g. after a manual refine).
