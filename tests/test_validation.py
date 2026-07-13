@@ -429,6 +429,137 @@ def test_alignment_defensive_list_coercion():
     assert a["alignment_gaps"] == [] and a["confounds"] == [] and a["recommended_changes"] == []
 
 
+# --- Epic 1: claim-support status (evidence relevance) ---------------------
+
+def _matched_resolver():
+    return fake_resolver(
+        {"12345678": ResolvedCitation("12345678", "pmid", "A study of X", 2020, "pubmed")}
+    )
+
+
+def _lit_material(citation, value="2", unit="mM", name="Mg"):
+    return {"name": name, "value": value, "unit": unit,
+            "provenance": "literature_grounded", "citation": citation}
+
+
+def test_unrelated_real_citation_cannot_be_supported():
+    resolver = _matched_resolver()
+
+    # sub-case A: the citation resolves + metadata matches, but NO evidence is attached.
+    c = cite("12345678")
+    c["evidence"] = None
+    mat = _lit_material(c)
+    p = base_protocol(materials=[mat])
+    validate_and_finalize(p, resolver)
+    assert mat["claim_support_status"] == "evidence_unavailable"
+    assert mat["claim_support_status"] != "supported"
+    assert mat["provenance"] == "literature_grounded"
+    assert mat["identifier_verified"] is True
+    assert mat["metadata_matched"] is True
+    assert mat["citation_verified"] is True
+
+    # sub-case B: evidence present, evidence_type="abstract", excerpt does NOT contain "2".
+    c2 = cite("12345678")
+    c2["evidence"] = {"excerpt": "The optimal magnesium concentration was five millimolar.",
+                      "section": "Abstract", "evidence_type": "abstract",
+                      "source_type": "peer_reviewed"}
+    mat2 = _lit_material(c2)
+    p2 = base_protocol(materials=[mat2])
+    validate_and_finalize(p2, resolver)
+    assert mat2["claim_support_status"] == "evidence_unavailable"
+    assert mat2["claim_support_status"] != "supported"
+    assert mat2["provenance"] == "literature_grounded"
+    assert mat2["identifier_verified"] is True
+    assert mat2["metadata_matched"] is True
+
+
+def test_metadata_only_evidence_not_supported():
+    c = cite("12345678")
+    c["evidence"] = {"excerpt": "", "section": None,
+                     "evidence_type": "metadata_only", "source_type": "peer_reviewed"}
+    mat = _lit_material(c)
+    p = base_protocol(materials=[mat])
+    validate_and_finalize(p, _matched_resolver())
+    assert mat["claim_support_status"] == "evidence_unavailable"
+    assert mat["metadata_matched"] is True
+
+
+def test_abstract_supported():
+    c = cite("12345678")
+    c["evidence"] = {"excerpt": "Reactions were optimal at 2 mM Mg2+ in the assay buffer.",
+                     "section": "Abstract", "evidence_type": "abstract",
+                     "source_type": "peer_reviewed"}
+    mat = _lit_material(c)
+    p = base_protocol(materials=[mat])
+    report = validate_and_finalize(p, _matched_resolver())
+    assert mat["claim_support_status"] == "supported"
+    assert mat["provenance"] == "literature_grounded"
+    assert mat["citation_verified"] is True
+    assert "materials[0] 'Mg'" in report["support"]["supported"]
+
+
+def test_unresolved_identifier_fields():
+    c = cite("99999999")
+    c["evidence"] = None
+    mat = _lit_material(c)
+    p = base_protocol(materials=[mat])
+    validate_and_finalize(p, fake_resolver({}))  # resolves to nothing
+    assert mat["identifier_verified"] is False
+    assert mat["metadata_matched"] is False
+    assert mat["claim_support_status"] == "unchecked"
+    assert mat["provenance"] == "default_verify"
+    assert mat["citation"] is None
+
+
+def test_mismatched_work_fields():
+    # resolves to a real record, but a clearly different work (title + year mismatch).
+    c = cite("12345678", title="An unrelated paper about zebrafish", year=1990)
+    mat = _lit_material(c)
+    p = base_protocol(materials=[mat])
+    report = validate_and_finalize(p, _matched_resolver())
+    assert mat["identifier_verified"] is True
+    assert mat["metadata_matched"] is False
+    assert mat["claim_support_status"] == "mismatch"
+    assert mat["provenance"] == "default_verify"
+    assert mat["citation"] is None
+    assert "materials[0] 'Mg'" in report["support"]["mismatch"]
+
+
+def test_citation_verified_alias_semantics():
+    resolver = _matched_resolver()
+    matched = _lit_material(cite("12345678"), name="Mg")
+    mismatched = _lit_material(cite("12345678", title="unrelated", year=1990), name="K", value="5")
+    p = base_protocol(materials=[matched, mismatched])
+    validate_and_finalize(p, resolver)
+    # matched entry -> alias True
+    assert matched["citation_verified"] is True
+    assert matched["citation_verified"] == bool(
+        matched["identifier_verified"] and matched["metadata_matched"])
+    # mismatched entry -> alias False
+    assert mismatched["citation_verified"] is False
+    assert mismatched["citation_verified"] == bool(
+        mismatched["identifier_verified"] and mismatched["metadata_matched"])
+    # unresolved entry -> alias False
+    unresolved = _lit_material(cite("00000000"), name="Na", value="1")
+    p2 = base_protocol(materials=[unresolved])
+    validate_and_finalize(p2, resolver)
+    assert unresolved["citation_verified"] is False
+    assert unresolved["citation_verified"] == bool(
+        unresolved["identifier_verified"] and unresolved["metadata_matched"])
+
+
+def test_backcompat_old_json_no_evidence():
+    # a citation with no `evidence` key at all (old payload) that resolves + matches.
+    c = cite("12345678")  # note: no evidence key
+    assert "evidence" not in c
+    mat = _lit_material(c)
+    p = base_protocol(materials=[mat])
+    report = validate_and_finalize(p, _matched_resolver())  # must not raise
+    assert mat["claim_support_status"] == "evidence_unavailable"
+    assert mat["claim_support_status"] != "supported"
+    assert report["support"]["supported"] == []
+
+
 if __name__ == "__main__":
     import traceback
 

@@ -10,6 +10,13 @@ def _safe_url(u: str) -> str:
     return s if s.lower().startswith(("http://", "https://")) else ""
 
 
+_SOURCE_MARKER = {
+    "peer_reviewed": "peer-reviewed",
+    "preprint": "preprint (not peer-reviewed)",
+    "protocol": "protocol",
+}
+
+
 def _cite(entry: dict) -> str:
     c = entry.get("citation")
     if not c:
@@ -21,10 +28,49 @@ def _cite(entry: dict) -> str:
     )
     label = f"{c.get('authors','')} {c.get('year','')} — {ident}".strip()
     link = f"[{label}]({url})" if url else label
-    badge = " ✓ verified" if entry.get("citation_verified") else (
-        " ⚠ unverified" if entry.get("provenance") == "literature_grounded" else ""
-    )
+
+    # Metadata verified = the cited identifier resolved to the cited work. Read the derived
+    # alias with a back-compat fallback to the raw host fields.
+    status = entry.get("claim_support_status")
+    metadata_verified = bool(entry.get("citation_verified")) or bool(
+        entry.get("identifier_verified") and entry.get("metadata_matched"))
+
+    badges: list[str] = []
+    if metadata_verified:
+        badges.append("✓ citation metadata verified")
+    if status == "supported":
+        badges.append("✓ supporting excerpt attached")
+    elif metadata_verified and status == "evidence_unavailable":
+        badges.append("⚠ evidence unavailable")
+    elif not metadata_verified and entry.get("provenance") == "literature_grounded":
+        # Unverified literature_grounded (e.g. old JSON never re-validated) keeps the
+        # original generic marker; a missing claim_support_status never reads as "supported".
+        badges.append("⚠ unverified")
+
+    ev = c.get("evidence")
+    src = _SOURCE_MARKER.get(ev.get("source_type")) if isinstance(ev, dict) else None
+    if src:
+        badges.append(src)
+
+    badge = (" " + " ".join(badges)) if badges else ""
     return f" ({link}{badge})"
+
+
+def _evidence(entry: dict) -> str:
+    """Collapsible supporting-excerpt block, rendered ONLY for excerpt-supported values.
+    Emitted outside table cells (on its own line) so it never breaks a Markdown table."""
+    if entry.get("claim_support_status") != "supported":
+        return ""
+    ev = (entry.get("citation") or {}).get("evidence")
+    if not isinstance(ev, dict):
+        return ""
+    excerpt = ev.get("excerpt")
+    if not excerpt:
+        return ""
+    text = " ".join(str(excerpt).split()).replace("|", r"\|").replace("`", "ˋ")
+    label = ev.get("section") or ev.get("evidence_type") or ""
+    return (f"\n<details><summary>supporting excerpt</summary>\n\n"
+            f"> {text}  — {label}\n\n</details>")
 
 
 def _tier(entry: dict) -> str:
@@ -128,6 +174,10 @@ def protocol_to_markdown(p: dict) -> str:
                 f"| {m.get('name','')} | {amt or '—'} | {m.get('vendor_or_grade') or '—'} | "
                 f"{_tier(m)}{_cite(m)}{_anchor(m)}{_mat_flags(m)} |"
             )
+            ev = _evidence(m)
+            if ev:
+                out.append("")
+                out.append(ev)
         out.append("")
 
     if p.get("equipment"):
@@ -155,7 +205,7 @@ def protocol_to_markdown(p: dict) -> str:
                 continue
             val = " ".join(str(x) for x in [cp.get("value"), cp.get("unit")] if x not in (None, ""))
             note = f" — {cp['provenance_note']}" if cp.get("provenance_note") else ""
-            out.append(f"- **{cp.get('name','')}:** {val} {_tier(cp)}{_cite(cp)}{_anchor(cp)}{note}{_flag_suffix(cp)}")
+            out.append(f"- **{cp.get('name','')}:** {val} {_tier(cp)}{_cite(cp)}{_anchor(cp)}{note}{_flag_suffix(cp)}{_evidence(cp)}")
         for ss in s.get("substeps", []):
             if not isinstance(ss, dict):
                 continue
@@ -203,6 +253,10 @@ def protocol_to_markdown(p: dict) -> str:
                 f"| {a.get('parameter','')} | {a.get('value','')} | {_tier(a)}{_cite(a)} | "
                 f"{a.get('basis','')}{verify} |"
             )
+            ev = _evidence(a)
+            if ev:
+                out.append("")
+                out.append(ev)
         out.append("")
 
     if p.get("open_questions"):
@@ -276,7 +330,8 @@ def materials_to_csv(p: dict) -> str:
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["reagent", "amount", "unit", "vendor_or_grade",
-                "provenance", "citation_identifier", "citation_verified", "note"])
+                "provenance", "claim_support_status", "citation_identifier",
+                "citation_verified", "note"])
     for m in p.get("materials") or []:
         if not isinstance(m, dict):
             continue
@@ -287,6 +342,7 @@ def materials_to_csv(p: dict) -> str:
             m.get("unit") or "",
             m.get("vendor_or_grade") or "",
             m.get("provenance") or "",
+            m.get("claim_support_status") or "",
             c.get("identifier", "") if c else "",
             "yes" if m.get("citation_verified") else "",
             m.get("provenance_note") or "",

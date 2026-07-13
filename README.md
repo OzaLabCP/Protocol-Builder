@@ -6,7 +6,9 @@ Paste a paper's **Methods** section. The tool reconstructs the protocol, classif
 every parameter by how well the source specifies it, **asks you only about the gaps
 that actually matter**, searches the literature to ground the values it fills, then
 emits an executable, protocols.io-style protocol where **every value is
-provenance-tagged and every citation is verified against a real database.**
+provenance-tagged and every citation is resolved against a real database — its
+identifier and metadata checked, with a supporting excerpt attached when the source
+exposes one.**
 
 Model-agnostic: the agentic tool-use loop speaks the **OpenAI-compatible
 chat-completions** protocol, so it works with any provider that does. Set

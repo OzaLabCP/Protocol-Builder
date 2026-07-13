@@ -71,6 +71,10 @@
   .cite { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
   .badge-ok { color: var(--stated); font-weight: 700; }
   .badge-warn { color: var(--verify); font-weight: 700; }
+  .badge-src { color: var(--muted); font-weight: 600; font-size: 11.5px; border: 1px solid var(--line); border-radius: 6px; padding: 0 5px; margin-left: 4px; }
+  details.evidence { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+  details.evidence summary { cursor: pointer; color: var(--lit); font-weight: 600; }
+  details.evidence blockquote { margin: 6px 0 0; padding-left: 10px; border-left: 2px solid var(--line); }
   .cp { font-size: 13px; color: var(--muted); margin-top: 4px; }
   .warn { color: var(--verify); font-size: 13px; margin-top: 4px; }
   .pnote { color: var(--muted); font-size: 12.5px; font-family: ui-monospace, monospace; }
@@ -462,7 +466,7 @@ function renderAssays(opts) {
     if (a.materials_burden) box.appendChild(el("div", "kv", `<b>Materials:</b> ${esc(a.materials_burden)}`));
     if (a.equipment_burden) box.appendChild(el("div", "kv", `<b>Equipment:</b> ${esc(a.equipment_burden)}`));
     box.appendChild(el("div", "kv", `<b>Key limitation:</b> ${esc(a.key_limitation)}`));
-    const prov = el("div", "kv"); prov.innerHTML = tierPill(a.provenance) + citeInline(a); box.appendChild(prov);
+    const prov = el("div", "kv"); prov.innerHTML = tierPill(a.provenance) + citeInline(a) + evidenceInline(a); box.appendChild(prov);
     const btn = el("button", "btn", a.id === rec ? "Use this assay (recommended)" : "Use this assay");
     btn.onclick = () => chooseAssay(a.id, btn);
     box.appendChild(el("div", "row", "")).appendChild(btn);
@@ -694,7 +698,7 @@ function renderProtocol(p) {
     const meta = [s.duration ? "⏱ " + esc(s.duration) : "", s.temperature ? "🌡 " + esc(s.temperature) : ""].filter(Boolean).join(" · ");
     if (meta) d.appendChild(el("div", "cp", meta));
     (s.critical_parameters || []).forEach((cp) => {
-      const line = el("div", "cp", `${esc(cp.name)}: <b>${esc([cp.value, cp.unit].filter(Boolean).join(" "))}</b> ${tierPill(cp.provenance)} ${citeInline(cp)}${anchorInline(cp)}${flagInline(cp)}`);
+      const line = el("div", "cp", `${esc(cp.name)}: <b>${esc([cp.value, cp.unit].filter(Boolean).join(" "))}</b> ${tierPill(cp.provenance)} ${citeInline(cp)}${anchorInline(cp)}${flagInline(cp)}${evidenceInline(cp)}`);
       if (cp.provenance_note) line.appendChild(el("div", "pnote", esc(cp.provenance_note)));
       d.appendChild(line);
     });
@@ -1053,7 +1057,7 @@ function renderDesign(d) {
       tr.appendChild(el("td", null, esc(c.name)));
       tr.appendChild(el("td", null, esc(c.type)));
       tr.appendChild(el("td", null, esc(c.rules_out)));
-      const p = el("td"); p.innerHTML = tierPill(c.provenance || "best_practice") + citeInline(c);
+      const p = el("td"); p.innerHTML = tierPill(c.provenance || "best_practice") + citeInline(c) + evidenceInline(c);
       tr.appendChild(p);
       tbl.appendChild(tr);
     });
@@ -1175,14 +1179,44 @@ function diffBox(changes) {
 
 function tierPill(t) { return `<span class="tier t-${esc(t)}">${esc((t || "").replace(/_/g, " "))}</span>`; }
 
+const SOURCE_MARKER = {
+  peer_reviewed: "peer-reviewed",
+  preprint: "preprint (not peer-reviewed)",
+  protocol: "protocol",
+};
+
 function citeInline(entry) {
   if (!entry.citation) return "";
   const c = entry.citation;
   const label = `${esc(c.authors || "")} ${esc(c.year || "")} — ${esc(c.identifier || "")}`;
-  const badge = entry.citation_verified ? ' <span class="badge-ok">✓ verified</span>' : ' <span class="badge-warn">⚠ unverified</span>';
+  const status = entry.claim_support_status;
+  // Metadata verified = the cited identifier resolved to the cited work. Back-compat: old JSON
+  // exposes only citation_verified; the raw host fields are the modern source of truth.
+  const metadataVerified = !!entry.citation_verified || !!(entry.identifier_verified && entry.metadata_matched);
+  const badges = [];
+  if (metadataVerified) badges.push('<span class="badge-ok">✓ citation metadata verified</span>');
+  if (status === "supported") {
+    badges.push('<span class="badge-ok">✓ supporting excerpt attached</span>');
+  } else if (metadataVerified && status === "evidence_unavailable") {
+    badges.push('<span class="badge-warn">⚠ evidence unavailable</span>');
+  } else if (!metadataVerified && entry.provenance === "literature_grounded") {
+    badges.push('<span class="badge-warn">⚠ unverified</span>');
+  }
+  const src = SOURCE_MARKER[(c.evidence || {}).source_type];
+  if (src) badges.push(`<span class="badge-src">${esc(src)}</span>`);
+  const badge = badges.length ? " " + badges.join(" ") : "";
   const u = safeUrl(c.url);
   const link = u ? `<a href="${esc(u)}" target="_blank" rel="noopener">${label}</a>` : `<span class="cite">${label}</span>`;
   return `<div class="cite">${link}${badge}</div>`;
+}
+
+// Collapsible supporting excerpt — rendered ONLY for excerpt-supported values.
+function evidenceInline(entry) {
+  if (!entry || entry.claim_support_status !== "supported") return "";
+  const ev = (entry.citation || {}).evidence;
+  if (!ev || !ev.excerpt) return "";
+  const label = ev.section || ev.evidence_type || "";
+  return `<details class="evidence"><summary>supporting excerpt</summary><blockquote>“${esc(ev.excerpt)}” <span class="muted small">${esc(label)}</span></blockquote></details>`;
 }
 
 // A verified verbatim source quote — shown only when the host confirmed it.
@@ -1203,7 +1237,7 @@ function provCell(entry) {
   const td = el("td");
   td.innerHTML = tierPill(entry.provenance);
   if (entry.provenance_note) td.appendChild(el("div", "pnote", esc(entry.provenance_note)));
-  td.insertAdjacentHTML("beforeend", citeInline(entry) + anchorInline(entry) + flagInline(entry));
+  td.insertAdjacentHTML("beforeend", citeInline(entry) + anchorInline(entry) + flagInline(entry) + evidenceInline(entry));
   return td;
 }
 
@@ -1214,6 +1248,9 @@ function validationSummary(r) {
   // leave the whole protocol panel hidden with no error).
   box.appendChild(el("div", "stat", `<b>${(r.verified || []).length}</b><div class="muted">citations verified</div>`));
   box.appendChild(el("div", "stat", `<b>${(r.downgraded || []).length}</b><div class="muted">downgraded (unverifiable)</div>`));
+  const support = r.support || {};
+  box.appendChild(el("div", "stat", `<b>${(support.supported || []).length}</b><div class="muted">excerpt-supported</div>`));
+  box.appendChild(el("div", "stat", `<b>${(support.evidence_unavailable || []).length}</b><div class="muted">metadata-only (no excerpt)</div>`));
   box.appendChild(el("div", "stat", `<b>${r.citations_checked || 0}</b><div class="muted">citations checked</div>`));
   const c = r.consistency || {};
   const cons = ((c.inline_missing_from_log || []).length + (c.log_missing_from_inline || []).length);
