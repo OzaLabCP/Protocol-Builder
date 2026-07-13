@@ -108,10 +108,16 @@ def _evidence_relevant(entry: dict, evidence) -> bool:
         return False
     if any(entry.get(k) not in (None, "") for k in ("value", "amount")):
         return _value_tokens_present(entry, excerpt)
-    name = entry.get("name") or entry.get("parameter") or ""
-    sig = [w for w in _WORD_RE.findall(name.lower()) if len(w) >= 4]
+    # Prose entry: require a significant DESCRIPTIVE word to appear in the excerpt. Pull the
+    # text from every field an entry type uses for its label — steps/substeps hold theirs in
+    # title/instruction, not name; omitting those made this return True vacuously and let an
+    # UNRELATED excerpt "support" a grounded step. With no descriptive text at all, relevance
+    # cannot be shown -> False (never a vacuous "supported").
+    desc = " ".join(str(entry.get(k) or "") for k in
+                    ("name", "parameter", "title", "instruction", "variable"))
+    sig = [w for w in _WORD_RE.findall(desc.lower()) if len(w) >= 4]
     if not sig:
-        return True
+        return False
     return any(w in excerpt for w in sig)
 
 

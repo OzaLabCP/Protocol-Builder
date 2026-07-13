@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.resolvers import ResolvedCitation, classify_identifier, resolve_doi  # noqa: E402
 from app.validation import (  # noqa: E402
+    _evidence_relevant,
     validate_and_finalize,
     validate_assay_options,
     validate_design_alignment,
@@ -471,6 +472,24 @@ def test_unrelated_real_citation_cannot_be_supported():
     assert mat2["provenance"] == "literature_grounded"
     assert mat2["identifier_verified"] is True
     assert mat2["metadata_matched"] is True
+
+
+def test_evidence_relevance_step_substep_not_vacuous():
+    # Regression: a step/substep stores its text in title/instruction (not name), and has no
+    # scalar value — so an UNRELATED excerpt must NOT vacuously "support" it.
+    unrelated = {"evidence_type": "abstract", "source_type": "peer_reviewed",
+                 "excerpt": "The weather in Paris was sunny and pleasant throughout the afternoon."}
+    relevant = {"evidence_type": "abstract", "source_type": "peer_reviewed",
+                "excerpt": "Incubate the reaction mixture for 30 minutes at 37 C."}
+    step = {"title": "Incubate the reaction mixture", "provenance": "literature_grounded"}
+    substep = {"number": "3a", "instruction": "Add the quench buffer to each well"}
+    assert _evidence_relevant(step, unrelated) is False          # was True (vacuous) before the fix
+    assert _evidence_relevant(step, relevant) is True            # genuinely relevant
+    assert _evidence_relevant(substep, {"evidence_type": "abstract", "source_type": "other",
+                                        "excerpt": "quench the reaction with EDTA buffer"}) is True
+    assert _evidence_relevant({}, unrelated) is False            # no descriptive text -> not supported
+    assert _evidence_relevant(step, {"evidence_type": "metadata_only", "source_type": "other",
+                                     "excerpt": ""}) is False    # metadata-only never supports
 
 
 def test_metadata_only_evidence_not_supported():
