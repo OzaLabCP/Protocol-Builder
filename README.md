@@ -220,16 +220,80 @@ quote positive evidence to call a defect fixed.
   re-sorting) that the model can't forge, rename, or invent: keys it didn't receive are dropped,
   and any finding the model stays silent on defaults to `still_present`. The verifier also reports
   new defects its own fixes introduced.
-- **`review_status`.** The host — not the model — adjudicates the result into a single
-  `fix_verification` object plus a compact string mirror `review_status` ∈
+- **`fix_verification.status`.** The host — not the model — adjudicates the result into a single
+  `fix_verification` object whose `status` ∈
   `verified_clean` (every finding `confirmed_fixed`/`not_applicable`, no new defects),
   `issues_remain` (something is still open), or `not_reviewed` (the pass couldn't run). A verifier
   failure never blocks delivery — the corrected protocol is still returned, marked `not_reviewed`.
+  (This three-value object is a distinct axis from the response-level five-value `review_status`
+  label — see [Review gate configuration & idempotency](#review-gate-configuration--idempotency).)
 - **It gates the project.** `review_status` feeds `ValidationSummary.status` monotonically toward
   `blocked`: an unresolved **critical/major** prior or new finding escalates the summary to
   `blocked`; a minor-only `issues_remain` escalates a `clean` summary to `warnings`;
   `verified_clean` and `not_reviewed` never loosen it. This stays a **distinct axis** from the
   deterministic Epic-2 quality gate — both feed the one status.
+
+### Review gate configuration & idempotency
+
+**Reviewer tier (`GAPFILLER_REVIEW_MODEL`).** Both the adversarial correctness review and
+the post-fix verifier run on their own model tier. It defaults to `LLM_MODEL` — already
+resolved to the right per-provider slug — so out of the box the reviewer *is* the main model
+and behaves byte-identically on OpenRouter and the Anthropic-direct endpoint. Point it at a
+different, provider-appropriate slug to get a genuine **second opinion**: the review reads
+only the artifact plus host-owned ground truth (source, protocol JSON, captured user
+decisions, retrieved-evidence log, the deterministic quality gate) on a **fresh transcript**
+that never contains the authoring reasoning, so a different model audits without inheriting
+the first model's blind spots. The slug is used verbatim — no provider mangling.
+
+**Failure policy (`GAPFILLER_REVIEW_REQUIRED`).** A review is best-effort by default: if it
+raises (provider hiccup, tool-contract miss), the host **degrades** — it stamps
+`review_status="unavailable"`, attaches a human `review_warning`, appends a single deduped
+`[REVIEW UNAVAILABLE] …` line to the protocol's `open_questions`, and **still returns the
+protocol** (HTTP 200). Set `GAPFILLER_REVIEW_REQUIRED=1` and the same failure instead
+**blocks delivery** with `HTTP 424 (Failed Dependency)` — an actionable message naming the
+env var, and **no protocol body** — so on a locked-down instance a protocol is never shipped
+unreviewed. `424` is deliberately distinct from the `409` reserved for per-session state
+conflicts, and the block raises **inside** the session lock and propagates out, so the lock
+releases and the transactional rollback/retry semantics are untouched.
+
+**`review_status` vocabulary.** Every completed response carries a single host-decided
+`review_status` string (never chosen by a model). It is a pure projection of the deterministic
+quality gate plus the fix-verification outcome, first-match-wins:
+
+| `review_status` | Meaning |
+|-----------------|---------|
+| `skipped` | The response carries no protocol (clarification questions, `/discover` assay options, design-review-only, alignment-only). |
+| `unavailable` | A review was attempted but couldn't run (audit or verifier raised) — see the accompanying `review_warning`. |
+| `failed` | The deterministic gate is `blocked`, **or** a fresh re-review left an unresolved finding (blocking or otherwise, including any `unconfirmed`). |
+| `passed_with_findings_fixed` | Findings existed, fixes were applied, and the independent re-review confirmed every one resolved. |
+| `passed` | Ran clean with nothing to fix (no findings, or a gate that only `warnings`). |
+
+This is a separate axis from the `fix_verification` object (whose own three-value `status` —
+`verified_clean` / `issues_remain` / `not_reviewed` — is unchanged and still attached
+verbatim whenever a verify pass ran). Per-finding outcomes gained one value, `unconfirmed`
+("I cannot determine this fix landed"), which counts as unresolved and blocks a clean verdict —
+a proposed fix that remains present is marked `still_present`/`unconfirmed`, **never** promoted
+to fixed just because a re-emit completed.
+
+**Idempotency keys.** The mutating endpoints (`/api/resolve`, `/api/revise`, `/api/design`,
+`/api/critique`, `/api/apply_fixes`, `/api/align`, `/api/choose_assay`) accept an optional
+`idempotency_key` in the request body. On a repeat of the same key **on the same session**, the
+server returns the **byte-identical** prior result — same `protocol_version_id`, same
+`fix_verification` — **without invoking the model again** (no second `ProtocolVersion`, no
+duplicate lifecycle advance). The check, the model work, and the record all happen under one
+continuous hold of the reentrant per-session lock, so a double-click can't race; the record
+happens **only on success**, so a failed or `424`-blocked op is never cached and stays
+retryable. The cache is a bounded per-session LRU (keys namespaced by operation), so it is
+inherently **per-session** — the same key string on a different session does fresh work — and is
+reclaimed with the session. Omit the field and behavior is exactly as before.
+
+**UI control-locking.** While any session-mutating operation is in flight the front-end disables
+**every** mutating control (analyze, build, revise, design review, re-review & fix, apply fixes,
+align, discover, choose-assay, inline-edit save) via a single global guard, released on both the
+success and error paths of the same progress plumbing every long op already runs through. This is
+the client-side complement to the server's per-session lock + idempotency: a second click can't
+even fire, and if one somehow does the key/lock make it a no-op. Read-only controls (downloads,
+print, load-example) stay live.
 
 ### Readiness card, views & inline editing
 
@@ -321,6 +385,8 @@ keep projects across container restarts.
 | `GAPFILLER_REASONING_EFFORT_FAST` | `low` | `reasoning.effort` for the **light** phases (clarifications, assay discovery) — spend thinking tokens only where they add value; `""` to omit reasoning there. |
 | `GAPFILLER_SEND_REASONING` | on for `openrouter` | Whether to send the OpenRouter-only `reasoning` field; auto-off for other providers. Set `1`/`0` to force. |
 | `GAPFILLER_AUTO_REVIEW` | `1` (on) | Run the adversarial correctness + practicality audit and auto-apply its fixes as part of every generation, so the user receives an already-corrected protocol. Adds ~2 model calls per run; set `0` to make it the manual "Re-review & fix" button instead. |
+| `GAPFILLER_REVIEW_MODEL` | `LLM_MODEL` | Model tier for the adversarial correctness review **and** the post-fix verifier. Defaults to the (already provider-resolved) `LLM_MODEL`, so byte-identical by default; set a provider-appropriate slug for an **independent second-opinion** model. Used verbatim — never provider-mangled. |
+| `GAPFILLER_REVIEW_REQUIRED` | `0` (off) | When a review **cannot run**: off degrades to `review_status="unavailable"` and still delivers the protocol; on **blocks delivery** with `HTTP 424` (no protocol body) so a review is never silently skipped. |
 | `GAPFILLER_PROMPT_CACHE` | on for `openrouter` | Cache the stable prefix (system prompt + source text) so multi-phase runs re-read it instead of re-billing it. Big input saving, identical output. Off by default for non-OpenRouter providers whose compat endpoint may not honor `cache_control`. |
 | `GAPFILLER_MAX_TOKENS` | `16000` | Base output ceiling. You only pay for tokens actually generated. |
 | `GAPFILLER_MAX_TOKENS_CAP` | `32000` | A truncated emit auto-retries at 2× the budget, up to this cap — so a large protocol completes instead of erroring, while normal ones stay cheap. Set `== GAPFILLER_MAX_TOKENS` to disable escalation. |
