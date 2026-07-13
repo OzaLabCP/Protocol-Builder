@@ -348,7 +348,10 @@ function clearPdf() {
 $("#clear-pdf").onclick = clearPdf;
 
 /* ---------- mode toggle ---------- */
+let MODE = "paper";
 function setMode(mode) {
+  if (mode === MODE) return;  // re-clicking the active tab must not wipe a shown result
+  MODE = mode;
   const paper = mode === "paper";
   $("#mode-paper").classList.toggle("active", paper);
   $("#mode-hyp").classList.toggle("active", !paper);
@@ -388,6 +391,7 @@ async function runDiscover(autoPick) {
   try {
     const r = await postJSON("/api/discover", body);
     handlePhase(r);
+    discStatus("");                // clear only on success
   } catch (e) { discStatus(e.message, true); }
   discLock(false);
   stopProgress();
@@ -395,7 +399,9 @@ async function runDiscover(autoPick) {
 $("#discover").onclick = () => runDiscover(false);
 $("#autopick").onclick = () => runDiscover(true);
 function discStatus(msg, isErr) { const s = $("#disc-status"); s.textContent = msg || ""; s.className = isErr ? "err" : "muted"; setToast(msg, isErr); }
-function discLock(on, msg) { $("#discover").disabled = on; $("#autopick").disabled = on; discStatus(on ? (msg || "Working…") : ""); }
+// on=true shows the working message; on=false only re-enables the buttons and does NOT
+// clear the status — so an error set in a catch survives (callers clear on success).
+function discLock(on, msg) { $("#discover").disabled = on; $("#autopick").disabled = on; if (on) discStatus(msg || "Working…"); }
 
 $("#analyze").onclick = async () => {
   const file = $("#pdf").files[0];
@@ -414,7 +420,8 @@ $("#analyze").onclick = async () => {
     HYP = hyp;
     const r = await postForm("/api/analyze", fd);
     handlePhase(r);
-  } catch (e) { setStatus(e.message, true); }
+    setStatus("");                 // clear the working message only on success
+  } catch (e) { setStatus(e.message, true); }  // error survives — lock(false) no longer wipes it
   lock(false);
   stopProgress();
 };
@@ -432,6 +439,8 @@ function handlePhase(r) {
   if (r.phase === "assays") { renderAssays(r.assay_options); return; }
   if (r.phase === "questions") { renderQuestions(r.phase1); return; }
   if (r.phase === "complete") { renderResult(r); return; }
+  // Unknown/missing phase — surface it instead of silently doing nothing.
+  showResultMessage("Unexpected response", "The tool returned a step this page doesn't recognize. Please try again; if it persists, check the server logs.");
 }
 
 const LEVEL = { high: "hi", medium: "med", low: "lo" };
@@ -484,15 +493,29 @@ async function chooseAssay(assayId, btn) {
 }
 
 function renderResult(r) {
+  if (!r || !r.protocol) {  // never render half a result silently
+    showResultMessage("No protocol returned", "The server responded without a protocol. Please try again; if it persists, check the server logs.");
+    return;
+  }
   // capture the just-rendered protocol so the next rebuild can diff against it
   PREV_PROTOCOL = CURR_PROTOCOL;
   CURR_PROTOCOL = r.protocol;
   MD_URL = r.markdown_url || null;
   CSV_URL = r.materials_csv_url || null;
   GLOG = r.grounding_log || [];
-  renderProtocol(r.protocol);
+  try {
+    renderProtocol(r.protocol);
+  } catch (e) {
+    showResultMessage("Couldn't display the protocol", "The protocol came back in an unexpected shape. It may still be downloadable; otherwise please rebuild.");
+    return;
+  }
   // The audit runs in the pipeline; if this result carries one, show what it caught/fixed.
   if (r.correctness_review) renderCritique(r.correctness_review, !!r.auto_review && (r.fixes_applied || 0) > 0, r.fixes_applied || 0);
+  // Honest signal when the automatic audit couldn't run (S7).
+  else if (r.audit_status === "unavailable") {
+    const host = $("#critique-anchor");
+    if (host) { host.innerHTML = ""; host.appendChild(el("p", "hint", "⚠ The automatic correctness audit couldn't run this time. Use “Re-review & fix” to run it manually.")); }
+  }
 }
 
 function renderQuestions(p1) {
@@ -591,6 +614,7 @@ $("#submit-answers").onclick = async () => {
     const r = await postJSON("/api/resolve", { session_id: SESSION, answers });
     renderResult(r);
     hide("#questions-panel");
+    setStatus("");                 // clear only on success
   } catch (e) { setStatus(e.message, true); }
   lock(false);
   stopProgress();
@@ -774,12 +798,14 @@ function toolbar() {
 
 async function requestDesign(btn) {
   btn.disabled = true; setStatus("Building the experiment-design review… (this can take a minute)");
+  startProgress(SESSION);
   try {
     const r = await postJSON("/api/design", { session_id: SESSION });
     renderDesign(r.design_review);
     setStatus("");
   } catch (e) { setStatus(e.message, true); }
   btn.disabled = false;
+  stopProgress();
 }
 
 // Apply the fixes the audit already proposed (no re-audit) — used when auto-apply didn't run.
@@ -892,8 +918,12 @@ function requestAlignment(btn) {
   box.scrollIntoView({ behavior: "smooth" });
 }
 
+let ALIGN_BUSY = false;
 async function runAlignment(hyp) {
+  if (ALIGN_BUSY) return;  // don't double-fire on repeated clicks (F5)
+  ALIGN_BUSY = true;
   setStatus("Checking whether the protocol directly tests the hypothesis… (this can take a minute)");
+  startProgress(SESSION);
   try {
     const body = { session_id: SESSION };
     if (hyp) body.hypothesis = hyp;
@@ -901,6 +931,8 @@ async function runAlignment(hyp) {
     renderAlignment(r.design_alignment);
     setStatus("");
   } catch (e) { setStatus(e.message, true); }
+  stopProgress();
+  ALIGN_BUSY = false;
 }
 
 const VERDICT = {
@@ -977,11 +1009,17 @@ function recRow(c) {
     startProgress(SESSION);
     try {
       const r = await postJSON("/api/revise", { session_id: SESSION, instruction: c.change });
-      row.classList.add("applied");
-      btn.textContent = "✓ Applied — protocol rebuilt below";
+      // renderResult rebuilds #result-panel, which the alignment panel lives inside — so the
+      // (now-stale) alignment is replaced by a note explaining the rebuild + next step, rather
+      // than silently vanishing with the "✓ Applied" confirmation the user never sees.
       renderResult(r);
+      const host = $("#align-anchor");
+      if (host) {
+        host.innerHTML = "";
+        host.appendChild(el("p", "hint", `✓ Applied “${esc(c.change)}”. The protocol was rebuilt below. Re-run “Test my hypothesis” to re-check alignment against the updated protocol.`));
+      }
+      setStatus("");
     } catch (e) { setStatus(e.message, true); btn.disabled = false; }
-    setStatus("");
     stopProgress();
   };
   row.appendChild(btn);
@@ -1088,8 +1126,8 @@ function refineBox() {
     try {
       const r = await postJSON("/api/revise", { session_id: SESSION, instruction });
       renderResult(r);
+      setStatus("");               // clear only on success — keep the error otherwise
     } catch (e) { setStatus(e.message, true); btn.disabled = false; }
-    setStatus("");
     stopProgress();
   };
   box.appendChild(btn);
@@ -1172,10 +1210,13 @@ function provCell(entry) {
 function validationSummary(r) {
   const box = el("div", "summary");
   if (!r) return box;
-  box.appendChild(el("div", "stat", `<b>${r.verified.length}</b><div class="muted">citations verified</div>`));
-  box.appendChild(el("div", "stat", `<b>${r.downgraded.length}</b><div class="muted">downgraded (unverifiable)</div>`));
-  box.appendChild(el("div", "stat", `<b>${r.citations_checked}</b><div class="muted">citations checked</div>`));
-  const cons = (r.consistency.inline_missing_from_log.length + r.consistency.log_missing_from_inline.length);
+  // Guard every sub-field: a present-but-partial report must not throw mid-render (that would
+  // leave the whole protocol panel hidden with no error).
+  box.appendChild(el("div", "stat", `<b>${(r.verified || []).length}</b><div class="muted">citations verified</div>`));
+  box.appendChild(el("div", "stat", `<b>${(r.downgraded || []).length}</b><div class="muted">downgraded (unverifiable)</div>`));
+  box.appendChild(el("div", "stat", `<b>${r.citations_checked || 0}</b><div class="muted">citations checked</div>`));
+  const c = r.consistency || {};
+  const cons = ((c.inline_missing_from_log || []).length + (c.log_missing_from_inline || []).length);
   box.appendChild(el("div", "stat", `<b>${cons}</b><div class="muted">log/inline mismatches</div>`));
   if ((r.stated_downgrades || []).length) {
     box.appendChild(el("div", "stat", `<b>${r.stated_downgrades.length}</b><div class="muted">stated → verify (no source)</div>`));
@@ -1276,7 +1317,9 @@ function stopProgress() {
   const panel = $("#activity-panel");
   if (panel) panel.classList.add("hidden");
 }
-function lock(on, msg) { $("#analyze").disabled = on; $("#submit-answers").disabled = on; setStatus(on ? (msg || "Working…") : ""); }
+// on=false only re-enables; it must NOT clear the status, or an error set in a catch is
+// wiped in the same tick and the user sees nothing. Callers clear the status on success.
+function lock(on, msg) { $("#analyze").disabled = on; $("#submit-answers").disabled = on; if (on) setStatus(msg || "Working…"); }
 function show(sel) { $(sel).classList.remove("hidden"); }
 function hide(sel) { $(sel).classList.add("hidden"); }
 </script>
