@@ -33,6 +33,7 @@ from pydantic import BaseModel
 
 from . import config
 from .agent import AgentError, GapFillerAgent, Session, _pdf_text
+from .checks import ensure_ids
 from .projects import (
     WORKFLOWS,
     LifecycleStatus,
@@ -307,6 +308,13 @@ class DiscoverRequest(BaseModel):
 class ChooseAssayRequest(BaseModel):
     session_id: str
     assay_id: str
+
+
+class EditPatchRequest(BaseModel):
+    target_id: str
+    field: str
+    value: Any = None
+    unit: Optional[str] = None
 
 
 @app.get("/")
@@ -836,6 +844,80 @@ def _finish(
     return r
 
 
+ALLOWED_FIELDS = {
+    "material": {"amount", "unit", "concentration"},
+    "critical_parameter": {"value", "unit"},
+}
+
+
+def _coerce_scalar(v):
+    if v is None:
+        return ""
+    return str(v).strip()
+
+
+def _find_entity_by_id(protocol: dict, target_id: str):
+    """Return (entity_dict, kind) or (None, None). kind is 'material' /
+    'critical_parameter' for editable kinds, else a non-editable kind label
+    so the handler can distinguish unknown-id (404) from known-but-locked (422)."""
+    for mat in protocol.get("materials", []) or []:
+        if mat.get("_id") == target_id:
+            return mat, "material"
+    for step in protocol.get("steps", []) or []:
+        if step.get("_id") == target_id:
+            return step, "step"
+        for cp in step.get("critical_parameters", []) or []:
+            if cp.get("_id") == target_id:
+                return cp, "critical_parameter"
+        for ss in step.get("substeps", []) or []:
+            if ss.get("_id") == target_id:
+                return ss, "substep"
+    ts = protocol.get("titration_series")
+    if ts:
+        if ts.get("_id") == target_id:
+            return ts, "titration"
+        for pt in ts.get("points", []) or []:
+            if pt.get("_id") == target_id:
+                return pt, "titration"
+            for comp in pt.get("components", []) or []:
+                if comp.get("_id") == target_id:
+                    return comp, "titration"
+    return None, None
+
+
+@app.post("/api/protocol/{session_id}/edit", dependencies=_MUTATING)
+def edit_value(session_id: str, req: EditPatchRequest) -> dict:
+    store = _get(session_id)  # 404 unknown/expired session
+    if store.protocol is None:
+        raise HTTPException(409, "Generate a protocol first, then edit a value.")
+    with store.lock:
+        ensure_ids(store.protocol)  # idempotent
+        entity, kind = _find_entity_by_id(store.protocol, req.target_id)
+        if entity is None:
+            raise HTTPException(404, "Unknown value id for this protocol.")
+        if kind not in ALLOWED_FIELDS:
+            raise HTTPException(422, "This value type is not inline-editable.")
+        if req.field not in ALLOWED_FIELDS[kind]:
+            raise HTTPException(422, f"Field '{req.field}' cannot be edited on this value.")
+        new_val = _coerce_scalar(req.value)
+        if new_val == "":
+            raise HTTPException(422, "Value cannot be empty.")
+        old_val = entity.get(req.field)
+        entity[req.field] = new_val
+        if req.field != "unit" and req.unit is not None:
+            u = _coerce_scalar(req.unit)
+            entity["unit"] = u or None
+        # HONESTY: the user is now the source. Flip provenance, strip stale grounding.
+        entity["provenance"] = "user_input"
+        entity["provenance_note"] = f"Corrected by you (was {old_val!r})."  # SET, not append
+        entity["citation"] = None
+        entity["citation_verified"] = False
+        entity["quote_verified"] = False
+        entity["needs_user_input"] = False
+        entity.pop("evidence", None)
+        return _finish(session_id, store, store.protocol, source_op="edit")
+
+
 def _slug(title: str) -> str:
     keep = [c.lower() if c.isalnum() else "-" for c in (title or "protocol")]
     s = "".join(keep).strip("-")
@@ -988,6 +1070,7 @@ _PROVENANCE_BY_OP = {
     "apply_fixes": "apply_fixes",
     "critique_apply": "critique_apply",
     "revise": "revise",
+    "edit": "user_edit",
 }
 
 

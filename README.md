@@ -155,6 +155,31 @@ quote positive evidence to call a defect fixed.
   `verified_clean` and `not_reviewed` never loosen it. This stays a **distinct axis** from the
   deterministic Epic-2 quality gate — both feed the one status.
 
+### Readiness card, views & inline editing
+
+Every reconstructed protocol is topped with a **readiness card** that gives one honest
+verdict — `ready`, `attention`, or `blocked` — derived from a single classifier the card,
+the screen-reader announcement, and the server all share. The **worst signal dominates**:
+a result with no quality gate, or one whose independent fix-verification isn't clean, can
+**never** read `ready`. Only a passing gate *plus* a clean/N-A review *plus* a real majority
+of independently grounded values earns `ready`, and even then the card says "verify at the
+bench — this is not a guarantee." The card lists the specific blocking/warning reasons and
+links to the flagged value.
+
+Two **views** toggle the same DOM with a CSS class flip (no re-render): **Evidence** (default,
+byte-identical to before — full provenance tiers, citations, and grounding log) and **Bench**
+(the clean run/print layout with provenance chrome hidden). The choice persists in
+`localStorage`; the tabs are a keyboard-operable `tablist`, and print always emits the Bench
+layout.
+
+Any material amount/unit/concentration or critical-parameter value/unit can be **edited inline**
+(`POST /api/protocol/{session_id}/edit`). An edit doesn't just swap the number: the server flips
+that value's provenance to **`user_input`** ("corrected by you"), strips its now-stale citation
+and grounding, then **re-runs the full deterministic gate** and re-renders. So an edit that
+corrects a bad value flips the gate `blocked → ok`, and an edit that introduces one flips it
+`ok → blocked` — the readiness card always reflects the freshly re-validated, server-returned
+protocol, never an optimistic local guess.
+
 ## Projects & intake (durable layer)
 
 Above the in-memory run engine sits a thin, **durable projects layer** (SQLite). A
@@ -247,6 +272,10 @@ and `assumptions_log` consistency; `tests/test_store.py` and
 `tests/test_projects_acceptance.py` cover the projects layer's acceptance criteria —
 **restart survival, input preservation across a workflow change, per-project isolation,
 404 on unknown ids, 409 on concurrent updates, and migration/version handling**.
+`tests/test_edit.py` covers the inline-edit endpoint: a valid edit sets `user_input`
+provenance and re-runs the gate (flipping `blocked → ok` and `ok → blocked`), the error
+paths (`404`/`409`/`422`), idempotency, and durable `ProtocolVersion` persistence with
+`source_op="edit"`.
 
 ## Layout
 

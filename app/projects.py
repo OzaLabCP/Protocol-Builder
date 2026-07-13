@@ -94,6 +94,7 @@ class Provenance(str, Enum):
     apply_fixes = "apply_fixes"
     auto_review = "auto_review"
     critique_apply = "critique_apply"
+    user_edit = "user_edit"
 
 
 # ---------------------------------------------------------------------------

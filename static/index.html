@@ -199,10 +199,54 @@
     .panel { border: 0; background: #fff; margin: 0; padding: 0; }
     main { max-width: 100%; padding: 0; }
     a { color: #000; text-decoration: underline; }
-    .tier { border: 1px solid #999; color: #000 !important; background: #fff !important; }
+    /* Print always uses the clean bench layout — hide the provenance chrome (same closed set as
+       §7.3, but ungated by .view-bench so it applies regardless of the on-screen view). */
+    .viewbar { display: none !important; }
+    #result-panel .tier, #result-panel .cite, #result-panel details.evidence, #result-panel .pnote,
+    #result-panel .badge-src, #result-panel .legend, #result-panel .summary, #result-panel .gnd { display: none !important; }
+    #result-panel table.materials th:nth-child(4), #result-panel table.materials td:nth-child(4) { display: none !important; }
     #project-header { display: block !important; border: 0; padding: 0 0 8px; }
     #project-header .ph-badge { border: 1px solid #999; color: #000 !important; background: #fff !important; }
   }
+  /* ---------- Epic-4: readiness card + flash (additive) ---------- */
+  .readiness{border:1px solid var(--border,var(--line));border-left-width:5px;border-radius:8px;padding:12px 14px;margin:0 0 14px;}
+  .readiness-head{margin:0 0 4px;font-size:1.15rem;}
+  .readiness-rationale{margin:0 0 6px;}
+  .readiness-why{margin:6px 0 0;padding-left:20px;}
+  .readiness-why li{margin:2px 0;}
+  .readiness-jump{font-size:.85em;margin-left:4px;}
+  .readiness-ready{border-left-color:var(--user,#35c2c2);}
+  .readiness-attention{border-left-color:var(--verify,#f2b13a);}
+  .readiness-blocked{border-left-color:#e5534b;}
+  .flash{outline:2px solid var(--verify,#f2b13a);transition:outline .3s;}
+  /* ---------- Epic-4: bench / evidence view toggle ---------- */
+  .viewbar{display:flex;gap:8px;margin:0 0 14px;}
+  .viewbtn{flex:1;background:var(--panel2);color:var(--muted);border:1px solid var(--line);
+    border-radius:10px;padding:10px 14px;cursor:pointer;text-align:left;font-weight:600;font-size:14px;}
+  .viewbtn.active{border-color:var(--accent);color:var(--text);background:rgba(110,168,254,.10);}
+  .viewbtn small{display:block;font-weight:400;color:var(--muted);font-size:12px;margin-top:2px;}
+  #result-panel.view-bench .tier,
+  #result-panel.view-bench .cite,
+  #result-panel.view-bench details.evidence,
+  #result-panel.view-bench .pnote,
+  #result-panel.view-bench .badge-src,
+  #result-panel.view-bench .legend,
+  #result-panel.view-bench .summary,
+  #result-panel.view-bench .gnd { display:none !important; }
+  #result-panel.view-bench table.materials th:nth-child(4),
+  #result-panel.view-bench table.materials td:nth-child(4) { display:none !important; }
+  #result-panel.view-bench .step { padding:9px 0; }
+  #result-panel.view-bench table.materials td,
+  #result-panel.view-bench table.materials th { padding:6px 8px; }
+  /* ---------- Epic-4: inline value editing + focus + a11y ---------- */
+  .btn-inline{background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:6px;cursor:pointer;font-size:12px;line-height:1;padding:2px 6px;margin-left:6px;}
+  .btn-inline:hover{color:var(--text);border-color:var(--accent);}
+  .inline-edit{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:4px;}
+  .inline-edit input{font:inherit;padding:3px 6px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--text);width:auto;}
+  .inline-edit button{padding:4px 10px;font-size:12.5px;}
+  .visually-hidden{position:absolute !important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0;}
+  .viewbtn:focus-visible,.modebtn:focus-visible,.btn:focus-visible,#result-panel button:focus-visible,#result-panel a:focus-visible,#result-panel summary:focus-visible,[tabindex="-1"]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px;}
+  [tabindex="-1"]:focus{outline:none;}
 </style>
 </head>
 <body>
@@ -344,16 +388,18 @@
 
   <section class="panel hidden noprint" id="activity-panel">
     <h2>Working… <span class="muted small" style="font-weight:400">live activity — what the model is doing</span></h2>
-    <ul id="activity" class="activity"></ul>
+    <ul id="activity" class="activity" role="log" aria-live="polite" aria-atomic="false" aria-label="Live activity"></ul>
   </section>
 
-  <section class="panel hidden" id="result-panel"></section>
+  <section class="panel hidden" id="result-panel" role="region" aria-label="Reconstructed protocol"></section>
 </main>
 
 <div id="busy" class="busy hidden noprint" role="status" aria-live="polite">
   <span class="spin"></span><span class="busy-msg"></span>
   <button type="button" class="busy-x hidden" aria-label="Dismiss">✕</button>
 </div>
+
+<div id="sr-announce" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <script>
 const $ = (s) => document.querySelector(s);
@@ -643,6 +689,15 @@ function renderResult(r) {
   }
   // Independent fix-verification block (Epic-3). Absent key (older result or verify skipped) ⇒ nothing rendered.
   if (r.fix_verification) renderFixVerification(r.fix_verification);
+  // Epic-4 tail — fixed order: readiness card first, then sync view, announce, focus.
+  try {                                                    // 1. readiness card as first child
+    const P = $("#result-panel");
+    const card = renderReadiness(r);
+    if (card && P) P.insertBefore(card, P.firstChild);
+  } catch (e) { /* readiness is non-critical chrome */ }
+  applyView(currentView());                                // 2. sync view class + tab ARIA from storage
+  announceReadiness(r);                                    // 3. set the single polite SR message
+  focusResult();                                           // 4. move focus onto #readiness
   if (PROJECT) onProtocolRendered(r);
 }
 
@@ -774,6 +829,320 @@ function collectAnswer(g) {
   return { id: g.id, value: v || null, skipped: !v };
 }
 
+/* ===================== Epic-4: honest readiness + views + inline edit (additive) ===================== */
+
+/* Mirror the backend constants verbatim (validation.py). */
+const _UNRESOLVED   = new Set(["still_present","partially_addressed","regressed"]);
+const _BLOCKING_SEV = new Set(["critical","major"]);
+
+function _readinessSignals(r) {
+  r = r || {};
+  const gate = (r.validation_report && r.validation_report.quality_gate) || null;
+  const gateStatus = gate ? gate.status : null;                 // "ok"|"warnings"|"blocked"|null
+  const gateErrors = (gate && Array.isArray(gate.errors))   ? gate.errors   : [];
+  const gateWarns  = (gate && Array.isArray(gate.warnings)) ? gate.warnings : [];
+
+  const fv = (r.fix_verification && typeof r.fix_verification === "object") ? r.fix_verification : null;
+  const reviewStatus = r.review_status || (fv && fv.status) || null;
+  const unresolvedBlocking = !!(fv && fv.unresolved_blocking);
+  const fvFindings = (fv && Array.isArray(fv.findings))     ? fv.findings     : [];
+  const fvNew      = (fv && Array.isArray(fv.new_findings)) ? fv.new_findings : [];
+  const reviewNA = !fv;                                          // axis absent ⇒ pre-Epic-3 result
+
+  const cov = countGrounding(CURR_PROTOCOL);
+  return { gate, gateStatus, gateErrors, gateWarns, fv, reviewStatus,
+           unresolvedBlocking, fvFindings, fvNew, reviewNA, cov };
+}
+
+/* ----- the ONE grounding coverage counter (reads CURR_PROTOCOL) ----- */
+function _classifyEntity(e) {
+  if (!e || typeof e !== "object") return null;
+  const tier = e.provenance;
+  if (!tier) return null;                                   // no tier ⇒ not a groundable value; skip
+  const support = e.claim_support_status;                   // "supported"|"evidence_unavailable"|undef
+  const metaVerified = !!e.citation_verified ||
+                       !!(e.identifier_verified && e.metadata_matched);
+  const anchored = !!e.source_quote && !!e.quote_verified;
+
+  // UNVERIFIED — "verify before use" (worst)
+  if (e.needs_user_input) return "unverified";
+  if (tier === "default_verify") return "unverified";
+  if (tier === "literature_grounded" && !metaVerified) return "unverified";
+  if (tier === "literature_grounded" && support === "evidence_unavailable" && !metaVerified) return "unverified";
+
+  // VERIFIED — user-owned, source-anchored, or independently confirmed (best)
+  if (tier === "user_input") return "verified";
+  if (tier === "stated" && anchored) return "verified";
+  if (tier === "literature_grounded" && metaVerified && support === "supported") return "verified";
+
+  // SUPPORTED — reasonable but not independently confirmed (middle)
+  return "supported";
+}
+
+function countGrounding(p) {
+  const c = { total:0, verified:0, supported:0, unverified:0, unverifiedItems:[] };
+  if (!p || typeof p !== "object") return c;
+  const bump = (e) => {
+    const k = _classifyEntity(e); if (!k) return;
+    c.total++; c[k]++;
+    if (k === "unverified" && c.unverifiedItems.length < 6)
+      c.unverifiedItems.push({ _id:e._id, label:e.name || e.title || (e.number!=null?("step "+e.number):"value") });
+  };
+  (p.materials || []).forEach(bump);
+  (p.steps || []).forEach((s) => { bump(s);
+    (s.critical_parameters || []).forEach(bump);
+    (s.substeps || []).forEach(bump); });
+  const ts = p.titration_series;
+  if (ts) (ts.points || []).forEach((pt) => { bump(pt); (pt.components || []).forEach(bump); });
+  return c;
+}
+
+// "strong" = nothing flagged for the bench AND a real majority independently confirmed.
+function _groundingStrong(cov) {
+  return cov.total > 0 && cov.unverified === 0 && cov.verified >= Math.ceil(cov.total / 2);
+}
+
+/* ----- the ONE verdict classifier ----- */
+function _readinessVerdict(s) {
+  const cov = s.cov;
+  const reviewBlocks = s.reviewStatus === "issues_remain" &&
+    (s.unresolvedBlocking ||
+     s.fvFindings.some(f => _UNRESOLVED.has(f.outcome) && _BLOCKING_SEV.has(f.severity)) ||
+     s.fvNew.some(f => _BLOCKING_SEV.has(f.severity)));
+  if (s.gateStatus === "blocked" || reviewBlocks) return "blocked";
+
+  const reviewOk = s.reviewStatus === "verified_clean" || s.reviewNA;
+  if (s.gateStatus === "ok" && reviewOk && _groundingStrong(cov)) return "ready";
+
+  return "attention";
+}
+
+const _READINESS_META = {
+  ready:     { cls:"readiness-ready",     icon:"✅", head:"Looks ready — verify at the bench" },
+  attention: { cls:"readiness-attention", icon:"⚠️", head:"Needs attention" },
+  blocked:   { cls:"readiness-blocked",   icon:"⛔", head:"Not ready — blocked" },
+};
+
+function _readinessRationale(v, s) {
+  const cov = s.cov;
+  if (v === "ready")
+    return `All automated checks pass, fixes were independently verified, and ${cov.verified}/${cov.total} values are grounded. Still confirm critical values at the bench — this is not a guarantee.`;
+  if (v === "blocked") {
+    const bits = [];
+    if (s.gateStatus === "blocked") bits.push("a deterministic check found an arithmetic/unit error");
+    bits.push("an unresolved critical/major review finding remains");
+    return "Fix before running: " + bits.join("; and ") + ".";
+  }
+  const bits = [];
+  if (s.cov.unverified > 0) bits.push(`${s.cov.unverified} value(s) need bench verification`);
+  if (s.gateStatus === "warnings") bits.push("automated checks raised warnings");
+  if (!s.reviewNA && s.reviewStatus !== "verified_clean") bits.push("the correctness audit is not clean");
+  if (s.gateStatus === null) bits.push("automated checks did not run");
+  return (bits.length ? bits.join("; ") : "Review the items below") + " — verify before running.";
+}
+
+function _idIfAnchor(loc){ return (typeof loc==="string" && /^(mat:|step:|tit)/.test(loc)) ? loc : null; }
+
+function _readinessReasons(v, s) {
+  const out = [];
+  s.gateErrors.slice(0,4).forEach(f => out.push({ text:`Blocking: ${f.message||f.code||"error"} (${f.location||"?"})`, id:f.id }));
+  if (v !== "blocked")
+    s.gateWarns.slice(0,3).forEach(f => out.push({ text:`Warning: ${f.message||f.code||"warning"} (${f.location||"?"})`, id:f.id }));
+  s.fvFindings.filter(f => _UNRESOLVED.has(f.outcome)).slice(0,3).forEach(f =>
+    out.push({ text:`Unresolved (${f.severity}): ${f.problem||f.category||"review finding"}`, id:_idIfAnchor(f.location) }));
+  s.fvNew.slice(0,2).forEach(f =>
+    out.push({ text:`New defect (${f.severity}): ${f.problem||f.category||"introduced by a fix"}`, id:_idIfAnchor(f.location) }));
+  if (s.reviewStatus === "not_reviewed" && !s.reviewNA)
+    out.push({ text:"The independent fix-verification couldn't run — fixes are unconfirmed." });
+  if (s.cov.unverified > 0) {
+    out.push({ text:`${s.cov.unverified} of ${s.cov.total} values are unverified and flagged "verify before use".` });
+    s.cov.unverifiedItems.slice(0,3).forEach(it => out.push({ text:`• ${it.label}`, id:it._id }));
+  }
+  return out.slice(0,6);
+}
+
+/* ----- readiness card DOM ----- */
+function _domId(_id){ return _id ? "ent-"+String(_id).replace(/[^A-Za-z0-9_-]/g,"_") : null; }
+
+function _entityLink(_id) {
+  const a = el("a","readiness-jump","jump to it");
+  a.href = "#"; a.setAttribute("role","button");
+  a.setAttribute("aria-label","Scroll to the flagged value");
+  a.addEventListener("click",(ev)=>{ ev.preventDefault();
+    const t = document.getElementById(_domId(_id)); if(!t) return;   // inert if no target
+    t.scrollIntoView({behavior:"smooth",block:"center"});
+    t.classList.add("flash"); setTimeout(()=>t.classList.remove("flash"),1600);
+  });
+  return a;
+}
+
+function renderReadiness(r) {
+  const s = _readinessSignals(r);
+  const v = _readinessVerdict(s);
+  const meta = _READINESS_META[v];
+
+  const card = el("div","readiness "+meta.cls);
+  card.id = "readiness";                              // focus target
+  card.setAttribute("role","region");
+  card.setAttribute("aria-label", meta.head);        // NO aria-live — the polite announce is #sr-announce
+  card.setAttribute("tabindex","-1");
+
+  card.appendChild(el("h2","readiness-head", `${meta.icon} ${esc(meta.head)}`));
+  card.appendChild(el("p","readiness-rationale muted", esc(_readinessRationale(v,s))));
+
+  const reasons = _readinessReasons(v,s);
+  if (reasons.length) {
+    const ul = el("ul","readiness-why");
+    reasons.forEach((rn)=>{ const li = el("li"); li.innerHTML = esc(rn.text);
+      if (rn.id){ li.appendChild(document.createTextNode(" ")); li.appendChild(_entityLink(rn.id)); }
+      ul.appendChild(li); });
+    card.appendChild(ul);
+  }
+  return card;
+}
+
+/* ----- SR announcement + focus (single polite announcer, verdict-unified) ----- */
+function announceReadiness(r) {
+  const s = _readinessSignals(r);
+  const v = _readinessVerdict(s);
+  const cov = s.cov;
+  let msg;
+  if (v === "blocked")        msg = "Not ready to run — blocking issues found. See the readiness card at the top.";
+  else if (v === "attention") msg = "Built, but needs attention before running — see the readiness card.";
+  else                        msg = `Built. Automated checks pass and ${cov.verified} of ${cov.total} values are grounded; still verify critical values at the bench.`;
+  const n = $("#sr-announce"); if (n) n.textContent = msg;
+}
+
+function focusResult() {
+  const target = $("#readiness") || $("#result-panel h2") || $("#result-panel");
+  if (!target) return;
+  if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex","-1");
+  target.focus({ preventScroll:false });
+}
+
+/* ----- bench / evidence view toggle ----- */
+const VIEW_KEY = "gf_protocol_view";                     // "bench" | "evidence"; absent ⇒ evidence
+function currentView(){ try { return localStorage.getItem(VIEW_KEY) === "bench" ? "bench" : "evidence"; } catch(e){ return "evidence"; } }
+
+function applyView(v) {                                   // paint only; no persist, no focus
+  const P = $("#result-panel"); if (!P) return;
+  const bench = v === "bench";
+  P.classList.toggle("view-bench", bench);
+  P.classList.toggle("view-evidence", !bench);
+  const b = $("#view-bench"), e = $("#view-evidence");
+  if (b && e) {
+    b.classList.toggle("active", bench);  e.classList.toggle("active", !bench);
+    b.setAttribute("aria-selected", bench?"true":"false");
+    e.setAttribute("aria-selected", !bench?"true":"false");
+    b.tabIndex = bench?0:-1;               e.tabIndex = bench?-1:0;   // roving tabindex
+  }
+}
+function setView(v) {                                     // user action: persist + paint + focus tab
+  try { localStorage.setItem(VIEW_KEY, v); } catch(e){ /* private mode — paint anyway */ }
+  applyView(v);
+  const btn = v==="bench" ? $("#view-bench") : $("#view-evidence"); if (btn) btn.focus();
+}
+
+function viewToggle() {
+  const bar = el("div","viewbar noprint");
+  bar.setAttribute("role","tablist"); bar.setAttribute("aria-label","Protocol view");
+  const mk = (id, icon, label, sub) => {
+    const b = el("button","viewbtn", `<span aria-hidden="true">${icon}</span> ${label}<small>${sub}</small>`);
+    b.id = id; b.type = "button"; b.setAttribute("role","tab"); b.setAttribute("aria-controls","result-panel");
+    return b;
+  };
+  const bench = mk("view-bench","🧪","Bench","run &amp; print");
+  const evid  = mk("view-evidence","🔎","Evidence","provenance &amp; citations");
+  bench.onclick = () => setView("bench");
+  evid.onclick  = () => setView("evidence");
+  bar.append(bench, evid);
+  bar.addEventListener("keydown",(e)=>{ let t=null;
+    if (["ArrowLeft","ArrowUp","Home"].includes(e.key)) t="bench";
+    else if (["ArrowRight","ArrowDown","End"].includes(e.key)) t="evidence";
+    else return;
+    e.preventDefault(); setView(t);
+  });
+  return bar;
+}
+
+/* ----- inline value editing ----- */
+function editButton(labelText) {
+  const b = el("button","btn-inline noprint","✎");
+  b.type = "button";
+  b.setAttribute("aria-label","Edit "+labelText);
+  b.title = "Edit this value";
+  return b;
+}
+
+let _OPEN_EDIT = null;   // { form, restore } — single-editor invariant
+function _closeOpenEdit() {
+  if (_OPEN_EDIT && _OPEN_EDIT.form && _OPEN_EDIT.form.parentNode) {
+    try { _OPEN_EDIT.restore && _OPEN_EDIT.restore(); } catch(e){ /* best-effort */ }
+    _OPEN_EDIT.form.remove();
+  }
+  _OPEN_EDIT = null;
+}
+
+function openInlineEdit(anchorEl, entity, kind, field) {
+  _closeOpenEdit();                                   // single open editor at a time
+  if (!anchorEl || !entity) return;
+  const hasUnit = (field === "amount" || field === "value");
+  const form = el("form","inline-edit");
+  form.setAttribute("aria-label", "Edit value");
+
+  const vId = "ie-val-" + Math.random().toString(36).slice(2,8);
+  const vLab = el("label","visually-hidden","New value"); vLab.setAttribute("for", vId);
+  const vInp = el("input","inline-edit-val"); vInp.type = "text"; vInp.id = vId;
+  vInp.value = (entity[field] != null ? String(entity[field]) : "");
+
+  form.appendChild(vLab); form.appendChild(vInp);
+
+  let uInp = null;
+  if (hasUnit) {
+    const uId = "ie-unit-" + Math.random().toString(36).slice(2,8);
+    const uLab = el("label","visually-hidden","Unit"); uLab.setAttribute("for", uId);
+    uInp = el("input","inline-edit-unit"); uInp.type = "text"; uInp.id = uId;
+    uInp.placeholder = "unit";
+    uInp.value = (entity.unit != null ? String(entity.unit) : "");
+    form.appendChild(uLab); form.appendChild(uInp);
+  }
+
+  const save = el("button","btn","Save"); save.type = "submit";
+  const cancel = el("button","btn secondary","Cancel"); cancel.type = "button";
+  form.appendChild(save); form.appendChild(cancel);
+
+  const restore = () => {};   // non-destructive: we only appended a form; removing it restores the line
+  _OPEN_EDIT = { form, restore };
+
+  cancel.onclick = () => { _closeOpenEdit(); if (anchorEl.focus) anchorEl.focus(); };
+  form.addEventListener("keydown",(e)=>{ if (e.key === "Escape"){ e.preventDefault(); cancel.onclick(); } });
+  form.addEventListener("submit",(e)=>{
+    e.preventDefault();
+    const nv = vInp.value;
+    const nu = hasUnit ? uInp.value : undefined;
+    submitValueEdit(entity, kind, field, nv, nu, form);
+  });
+
+  anchorEl.appendChild(form);
+  vInp.focus(); vInp.select && vInp.select();
+}
+
+async function submitValueEdit(entity, kind, field, newValue, newUnit, formEl) {
+  if (formEl) formEl.querySelectorAll("input,button").forEach((x)=> x.disabled = true);
+  setStatus("Applying your edit and re-checking…");
+  try {
+    const body = { target_id: entity._id, field, value: newValue };
+    if (field !== "unit" && newUnit !== undefined) body.unit = newUnit;
+    const r = await postJSON(`/api/protocol/${SESSION}/edit`, body);
+    _OPEN_EDIT = null;                       // the whole panel is about to be rebuilt
+    renderResult(r);                         // single re-render entry point; card + view + announce refresh
+    setStatus("Value updated; readiness re-checked.");
+  } catch (e) {
+    if (formEl) formEl.querySelectorAll("input,button").forEach((x)=> x.disabled = false);
+    setStatus(e.message, true);              // old DOM untouched; CURR_PROTOCOL never mutated locally
+  }
+}
+
 /* ---------- protocol render ---------- */
 function renderProtocol(p) {
   const P = $("#result-panel"); P.innerHTML = "";
@@ -781,6 +1150,7 @@ function renderProtocol(p) {
   if (p.summary) P.appendChild(el("p", "muted", esc(p.summary)));
   if (p.estimated_duration) P.appendChild(el("p", "muted", "Estimated duration: " + esc(p.estimated_duration)));
 
+  P.appendChild(viewToggle());
   P.appendChild(toolbar());
   P.appendChild(el("div", null, "")).id = "align-anchor";
   P.appendChild(el("div", null, "")).id = "design-anchor";
@@ -794,13 +1164,20 @@ function renderProtocol(p) {
   // Materials
   if ((p.materials || []).length) {
     P.appendChild(el("h3", null, "Materials"));
-    const tbl = el("table");
+    const tbl = el("table", "materials");
     tbl.innerHTML = "<tr><th>Reagent</th><th>Amount</th><th>Grade/vendor</th><th>Provenance</th></tr>";
     (p.materials).forEach((m) => {
       const tr = el("tr");
+      if (m._id) tr.id = _domId(m._id);
       const amt = [m.amount, m.unit].filter((x) => x != null && x !== "").join(" ");
       tr.appendChild(el("td", null, esc(m.name)));
-      tr.appendChild(el("td", null, esc(amt)));
+      const amtCell = el("td", null, esc(amt));
+      if (m._id) {
+        const eb = editButton((m.name || "material") + " amount");
+        eb.onclick = () => openInlineEdit(amtCell, m, "material", "amount");
+        amtCell.appendChild(eb);
+      }
+      tr.appendChild(amtCell);
       tr.appendChild(el("td", null, esc(m.vendor_or_grade || "—")));
       tr.appendChild(provCell(m));
       tbl.appendChild(tr);
@@ -818,16 +1195,23 @@ function renderProtocol(p) {
   const steps = el("div");
   (p.steps || []).forEach((s) => {
     const d = el("div", "step");
+    if (s._id) d.id = _domId(s._id);
     d.appendChild(el("div", null, `<span class="num">${esc(s.number)}.</span> <b>${esc(s.title)}</b> ${tierPill(s.provenance)}${anchorInline(s)}`));
     d.appendChild(el("div", null, esc(s.instruction)));
     const meta = [s.duration ? "⏱ " + esc(s.duration) : "", s.temperature ? "🌡 " + esc(s.temperature) : ""].filter(Boolean).join(" · ");
     if (meta) d.appendChild(el("div", "cp", meta));
     (s.critical_parameters || []).forEach((cp) => {
       const line = el("div", "cp", `${esc(cp.name)}: <b>${esc([cp.value, cp.unit].filter(Boolean).join(" "))}</b> ${tierPill(cp.provenance)} ${citeInline(cp)}${anchorInline(cp)}${flagInline(cp)}${evidenceInline(cp)}`);
+      if (cp._id) {
+        line.id = _domId(cp._id);
+        const eb = editButton(cp.name || "critical parameter");
+        eb.onclick = () => openInlineEdit(line, cp, "critical_parameter", "value");
+        line.appendChild(eb);
+      }
       if (cp.provenance_note) line.appendChild(el("div", "pnote", esc(cp.provenance_note)));
       d.appendChild(line);
     });
-    (s.substeps || []).forEach((ss) => d.appendChild(el("div", "cp", `${esc(ss.number)} ${esc(ss.instruction)} ${tierPill(ss.provenance)}${anchorInline(ss)}${flagInline(ss)}`)));
+    (s.substeps || []).forEach((ss) => { const sl = el("div", "cp", `${esc(ss.number)} ${esc(ss.instruction)} ${tierPill(ss.provenance)}${anchorInline(ss)}${flagInline(ss)}`); if (ss._id) sl.id = _domId(ss._id); d.appendChild(sl); });
     (s.warnings || []).forEach((w) => d.appendChild(el("div", "warn", "⚠ " + esc(w))));
     steps.appendChild(d);
   });
@@ -847,6 +1231,7 @@ function renderProtocol(p) {
     ts.points.forEach((pt) => {
       const vols = {}; (pt.components || []).forEach((c) => (vols[c.name] = c.volume));
       const tr = el("tr");
+      if (pt._id) tr.id = _domId(pt._id);
       tr.appendChild(el("td", null, esc(pt.label || "")));
       tr.appendChild(el("td", null, esc(pt.target_concentration || "—")));
       comp.forEach((n) => tr.appendChild(el("td", null, esc(vols[n] != null ? vols[n] : "—"))));
@@ -876,8 +1261,8 @@ function renderProtocol(p) {
   }
 
   if (GLOG.length) {
-    P.appendChild(el("h3", "noprint", "How values were grounded"));
-    const ul = el("ul", "noprint");
+    P.appendChild(el("h3", "noprint gnd", "How values were grounded"));
+    const ul = el("ul", "noprint gnd");
     GLOG.forEach((g) => ul.appendChild(el("li", "muted", esc(g))));
     P.appendChild(ul);
   }
