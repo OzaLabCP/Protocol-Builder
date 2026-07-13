@@ -537,30 +537,37 @@ class GapFillerAgent:
             raise AgentError("Session has no pending clarification to answer.")
         state = RunState(session=session, searches_left=config.PUBMED_BUDGET, progress=progress)
 
+        # Transactional (mirrors _followup): if the emit fails, restore the pending
+        # clarification and drop the appended answer so retrying "Build protocol" works
+        # instead of dying with "Session has no pending clarification to answer".
+        saved_request = session.request_tool_use_id
+        saved_len = len(session.messages)
         # Answer the request_clarifications call with the user's answers.
         session.messages.append(
             {"role": "tool", "tool_call_id": session.request_tool_use_id,
              "content": json.dumps({"answers": answers})}
         )
         session.request_tool_use_id = None  # prevent a second answer submission
-
-        tools = _grounding_tools() + [EMIT_PROTOCOL_TOOL]
-        block = self._run(session.messages, tools, "emit_protocol", state,
-                          system=self.system_emit, model=self.model, effort=self.effort)
-        if block is not None:
-            session.pending_tool_use_id = block.id
-            return dict(block.input)
-
-        # Model stopped with text — nudge once, forcing emit_protocol (no search tools).
-        session.messages.append(
-            {"role": "user", "content": "Your research is complete. Call emit_protocol now "
-             "with the finalized, provenance-tagged protocol."}
-        )
-        block = self._run(session.messages, [EMIT_PROTOCOL_TOOL], "emit_protocol", state,
-                          system=self.system_emit, force_terminal=True, model=self.model,
-                          effort=self.effort)
-        if block is None:
-            raise AgentError("Phase 3 ended without calling emit_protocol.")
+        try:
+            tools = _grounding_tools() + [EMIT_PROTOCOL_TOOL]
+            block = self._run(session.messages, tools, "emit_protocol", state,
+                              system=self.system_emit, model=self.model, effort=self.effort)
+            if block is None:
+                # Model stopped with text — nudge once, forcing emit_protocol (no search tools).
+                session.messages.append(
+                    {"role": "user", "content": "Your research is complete. Call emit_protocol "
+                     "now with the finalized, provenance-tagged protocol."}
+                )
+                block = self._run(session.messages, [EMIT_PROTOCOL_TOOL], "emit_protocol", state,
+                                  system=self.system_emit, force_terminal=True, model=self.model,
+                                  effort=self.effort)
+                if block is None:
+                    raise AgentError("Phase 3 ended without calling emit_protocol.")
+        except Exception:
+            del session.messages[saved_len:]
+            session.request_tool_use_id = saved_request
+            session.pending_tool_use_id = None
+            raise
         session.pending_tool_use_id = block.id
         return dict(block.input)
 

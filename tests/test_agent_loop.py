@@ -379,6 +379,25 @@ def test_followup_restores_session_on_failure():
     assert out["title"] == "Fixed"
 
 
+def test_continue_with_answers_restores_on_failure():
+    # If the emit fails (even after the forced nudge), the session must stay retryable:
+    # the pending clarification is re-armed and the appended answer/nudge are dropped.
+    session = Session(messages=[{"role": "user", "content": "seed"}], request_tool_use_id="c1")
+    before_len = len(session.messages)
+    agent = make_agent([text_msg("no tool"), text_msg("still no tool")])  # emit + nudge both fail
+    try:
+        agent.continue_with_answers(session, answers=[])
+        assert False, "expected AgentError"
+    except AgentError:
+        pass
+    assert session.request_tool_use_id == "c1"     # pending clarification re-armed
+    assert len(session.messages) == before_len     # appended answer + nudge dropped
+    # a retry now succeeds on the restored session
+    agent2 = make_agent([tool_msg(("emit_protocol", PROTO, "e1"))])
+    out = agent2.continue_with_answers(session, answers=[])
+    assert out["title"] == "P"
+
+
 def test_grounding_results_compacted_on_followup():
     big = "PMID 1 — Grounding source (Doe 2020) " + "x" * 500
     session = Session(

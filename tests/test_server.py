@@ -327,6 +327,34 @@ def test_discover_progress_feed_pre_session():
         srv._PRE.pop(pid, None)
 
 
+def test_autopick_feed_includes_build_notes_via_mirror():
+    # auto_pick runs discover+choose+build in one request; the build's session-keyed notes
+    # must mirror into the pre-session feed the client polls, so it doesn't go silent.
+    opts = {"usable": True, "hypothesis_restated": "H",
+            "assays": [{"id": "fp", "name": "FP", "measures": "m", "why_tests_hypothesis": "w",
+                        "critical_comparison": "c", "throughput": "high", "difficulty": "low",
+                        "materials_burden": "cheap", "key_limitation": "k", "provenance": "best_practice"}],
+            "recommended_assay_id": "fp", "recommendation_rationale": "r"}
+    proto = {"title": "P", "summary": "s", "estimated_duration": "1 h",
+             "materials": [], "steps": [], "assumptions_log": []}
+    _install_agent([
+        _tool_msg("emit_assay_options", opts, "a1"),
+        _tool_msg("request_clarifications", {"usable": True, "gaps": []}, "c1"),
+        _tool_msg("emit_protocol", proto, "e1"),
+    ])
+    pid = "pid-auto"
+    try:
+        r = client.post("/api/discover", json={"hypothesis": "Does X increase Y binding?",
+                                               "auto_pick": True, "progress_id": pid})
+        assert r.status_code == 200
+        msgs = [s["msg"] for s in client.get(f"/api/progress/{pid}").json()["steps"]]
+        assert any("candidate assays" in m for m in msgs)  # discovery phase (direct pre-note)
+        assert any("Drafting" in m for m in msgs)          # build phase (mirrored from store.note)
+    finally:
+        srv._agent = None
+        srv._PRE.pop(pid, None)
+
+
 def test_discover_autopick_runs_full_flow():
     opts = {"usable": True, "hypothesis_restated": "H",
             "assays": [{"id": "fp", "name": "FP", "measures": "m", "why_tests_hypothesis": "w",

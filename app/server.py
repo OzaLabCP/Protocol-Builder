@@ -135,6 +135,9 @@ class Store:
     # Live activity feed for the current long op: [{seq, msg}], polled by the client.
     progress: list = field(default_factory=list)
     _plock: Any = field(default_factory=threading.Lock)
+    # Optional second sink for notes (e.g. a pre-session pid feed the client is already
+    # polling on the auto_pick path, where discover→choose→build share one request).
+    mirror: Any = None
 
     def start_progress(self) -> None:
         """Clear the feed at the start of a new long op so the client (polling from 0)
@@ -145,8 +148,11 @@ class Store:
     def note(self, msg: str) -> None:
         """Append one activity line. Thread-safe: the op runs in Starlette's worker thread
         while the client polls concurrently."""
+        m = str(msg)
         with self._plock:
-            self.progress.append({"seq": len(self.progress) + 1, "msg": str(msg)})
+            self.progress.append({"seq": len(self.progress) + 1, "msg": m})
+        if self.mirror:  # outside the lock — mirror takes its own
+            self.mirror(m)
 
     def steps_after(self, seq: int) -> list:
         with self._plock:
@@ -504,6 +510,9 @@ def discover(req: DiscoverRequest) -> dict:
     report = validate_assay_options(opts)
     store.assay_options = opts
     if req.auto_pick:
+        # This request also runs choose+build; mirror those session-keyed notes into the
+        # pre-session feed the client is polling so the feed doesn't go silent mid-build.
+        store.mirror = note
         return _choose(session_id, opts.get("recommended_assay_id"))
     return {"session_id": session_id, "phase": "assays",
             "assay_options": opts, "validation_report": report}
