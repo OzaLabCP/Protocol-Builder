@@ -191,7 +191,10 @@ def protocol_to_markdown(p: dict) -> str:
         if not isinstance(s, dict):
             continue
         out.append(f"### {s.get('number')}. {s.get('title','')} {_tier(s)}{_anchor(s)}\n")
-        out.append(s.get("instruction", "") + "\n")
+        # Defensive guard: an empty instruction renders a visible [missing] marker,
+        # never a blank step (repair_structure normally fills a loud sentinel first).
+        _instr = s.get("instruction")
+        out.append((_instr if isinstance(_instr, str) and _instr.strip() else "[missing]") + "\n")
         meta = " · ".join(
             x for x in [
                 f"⏱ {s.get('duration')}" if s.get("duration") else "",

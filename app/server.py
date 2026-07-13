@@ -33,7 +33,7 @@ from pydantic import BaseModel
 
 from . import config
 from .agent import AgentError, GapFillerAgent, Session, _pdf_text
-from .checks import ensure_ids
+from .checks import assign_stable_ids, ensure_ids
 from .projects import (
     WORKFLOWS,
     LifecycleStatus,
@@ -860,27 +860,30 @@ def _find_entity_by_id(protocol: dict, target_id: str):
     """Return (entity_dict, kind) or (None, None). kind is 'material' /
     'critical_parameter' for editable kinds, else a non-editable kind label
     so the handler can distinguish unknown-id (404) from known-but-locked (422)."""
+    # An entity resolves by its positional _id OR its additive stable id
+    # (material_id/step_id/…). _id is tested first; the two id schemes have disjoint
+    # prefixes (mat:/step: vs m_/s_), so there is no ambiguity.
     for mat in protocol.get("materials", []) or []:
-        if mat.get("_id") == target_id:
+        if mat.get("_id") == target_id or mat.get("material_id") == target_id:
             return mat, "material"
     for step in protocol.get("steps", []) or []:
-        if step.get("_id") == target_id:
+        if step.get("_id") == target_id or step.get("step_id") == target_id:
             return step, "step"
         for cp in step.get("critical_parameters", []) or []:
-            if cp.get("_id") == target_id:
+            if cp.get("_id") == target_id or cp.get("parameter_id") == target_id:
                 return cp, "critical_parameter"
         for ss in step.get("substeps", []) or []:
-            if ss.get("_id") == target_id:
+            if ss.get("_id") == target_id or ss.get("substep_id") == target_id:
                 return ss, "substep"
     ts = protocol.get("titration_series")
     if ts:
         if ts.get("_id") == target_id:
             return ts, "titration"
         for pt in ts.get("points", []) or []:
-            if pt.get("_id") == target_id:
+            if pt.get("_id") == target_id or pt.get("point_id") == target_id:
                 return pt, "titration"
             for comp in pt.get("components", []) or []:
-                if comp.get("_id") == target_id:
+                if comp.get("_id") == target_id or comp.get("component_id") == target_id:
                     return comp, "titration"
     return None, None
 
@@ -892,6 +895,10 @@ def edit_value(session_id: str, req: EditPatchRequest) -> dict:
         raise HTTPException(409, "Generate a protocol first, then edit a value.")
     with store.lock:
         ensure_ids(store.protocol)  # idempotent
+        # Additive stable ids, so an /edit by material_id/step_id/… resolves and
+        # the edited entity keeps its stable id through the value/provenance flip
+        # (preservation), even though its positional _id may later shift.
+        assign_stable_ids(store.protocol)  # idempotent, preserving
         entity, kind = _find_entity_by_id(store.protocol, req.target_id)
         if entity is None:
             raise HTTPException(404, "Unknown value id for this protocol.")

@@ -16,7 +16,12 @@ from app.checks import (  # noqa: E402
     parse_quantity,
     run_checks,
 )
-from app.validation import _apply_quality_gate, _GATE_MARK  # noqa: E402
+from app.models import STEP_INSTR_PLACEHOLDER  # noqa: E402
+from app.validation import (  # noqa: E402
+    _apply_quality_gate,
+    _GATE_MARK,
+    _GATE_STATUS_LABEL,
+)
 
 
 # --- fixtures --------------------------------------------------------------
@@ -248,6 +253,163 @@ def test_gate_strips_prior_lines_no_accumulation():
     gate_lines = [q for q in oq if q.startswith(_GATE_MARK)]
     assert len(gate_lines) == 1                # not duplicated
     assert "a real open question" in oq        # pre-existing questions preserved
+
+
+# --- finding shape (§IV): four additive keys, existing seven byte-identical ----
+
+def test_finding_carries_location_id_alias_and_host_verified():
+    p = _correct_protocol()
+    p["steps"][0]["critical_parameters"][3]["value"] = "50"  # a blocking dilution
+    findings = run_checks(p)
+    assert findings  # something fired
+    for f in findings:
+        assert f["location_id"] == f["id"]      # alias of the id anchor (may be None)
+        assert f["host_verified"] is True       # run_checks is the sole producer
+        assert f["suggested_fix"] is not None    # never None
+
+
+def test_finding_severity_label_mapping():
+    # a protocol producing an error, a warning, and an assumption in one pass.
+    p = _correct_protocol()
+    p["steps"][0]["critical_parameters"][3]["value"] = "50"          # error: DIL_MISMATCH
+    p["materials"].append({"name": "salt", "amount": 5, "unit": None,  # warning: UNIT_MISSING
+                           "provenance": "stated"})
+    p["steps"].append(_step("Weigh", [
+        _cp("concentration", "10", "mM"), _cp("volume", "100", "uL"),
+        _cp("mass", "5", "mg")]))                                     # assumption: MOLAR_NO_MW
+    label = {f["severity"]: f["severity_label"] for f in run_checks(p)}
+    assert label.get("error") == "blocker"
+    assert label.get("warning") == "warning"
+    assert label.get("assumption") == "information"
+    # the internal `severity` vocab is untouched (legacy readers key off it).
+    assert set(label) <= {"error", "warning", "assumption", "info"}
+
+
+def test_finding_suggested_fix_is_deterministic():
+    p = _correct_protocol()
+    p["steps"][0]["critical_parameters"][3]["value"] = "50"
+    a = run_checks(p)
+    b = run_checks(copy.deepcopy(p))
+    assert [f["suggested_fix"] for f in a] == [f["suggested_fix"] for f in b]
+    dil = [f for f in a if f["code"] == "DIL_MISMATCH"][0]
+    assert dil["suggested_fix"]  # the computed-expected codes phrase an actionable fix
+
+
+def test_existing_severity_reads_unbroken():
+    # a legacy reader filtering on severity=="error" still selects the dilution error.
+    p = _correct_protocol()
+    p["steps"][0]["critical_parameters"][3]["value"] = "50"
+    errs = [f for f in run_checks(p) if f["severity"] == "error"]
+    assert [f["code"] for f in errs] == ["DIL_MISMATCH"]
+
+
+# --- gate status_label (§V): additive projection of status ---------------------
+
+def test_gate_status_label_ready():
+    r = _blank_report(); oq = []
+    _apply_quality_gate(r, oq, [_mk("PLATE_OK", "info")])
+    assert r["quality_gate"]["status"] == "ok"
+    assert r["quality_gate"]["status_label"] == "ready"
+
+
+def test_gate_status_label_ready_with_warnings():
+    r = _blank_report(); oq = []
+    _apply_quality_gate(r, oq, [_mk("UNIT_MISSING", "warning")])
+    assert r["quality_gate"]["status"] == "warnings"
+    assert r["quality_gate"]["status_label"] == "ready_with_warnings"
+
+
+def test_gate_status_label_blocked_and_counts_unchanged():
+    r = _blank_report(); oq = []
+    _apply_quality_gate(r, oq, [_mk("DIL_MISMATCH", "error", location="steps[0]")])
+    gate = r["quality_gate"]
+    assert gate["status"] == "blocked"
+    assert gate["status_label"] == "blocked"
+    # the label is a pure projection: counts/status untouched.
+    assert gate["counts"] == {"errors": 1, "warnings": 0, "assumptions": 0, "info": 0}
+    assert gate["status_label"] == _GATE_STATUS_LABEL[gate["status"]]
+
+
+# --- structural blocker (§I.4): a repaired placeholder blocks the gate --------
+
+def test_structure_blocker_on_placeholder_instruction():
+    p = _correct_protocol()
+    # simulate a repaired step whose instruction is the frozen sentinel.
+    p["steps"].append({"number": 2, "title": "Mystery", "instruction": STEP_INSTR_PLACEHOLDER,
+                       "provenance": "stated", "critical_parameters": []})
+    ensure_ids(p)
+    struct = [f for f in run_checks(p) if f["code"] == "STRUCT_STEP_NO_INSTRUCTION"]
+    assert len(struct) == 1
+    assert struct[0]["severity"] == "error"       # blocker -> a repaired protocol can't ship clean
+
+
+# --- prep/readout/control heuristics (§VI): fire, then demote on ambiguity -----
+
+def _codes_of(p):
+    ensure_ids(p)
+    return [f["code"] for f in run_checks(p)]
+
+
+def test_prep_missing_fires_then_demotes():
+    # fires: a "buffer" material with no recipe, no vendor, no prep step.
+    fire = {"title": "T", "materials": [{"name": "Assay buffer", "provenance": "stated"}],
+            "steps": [_step("Read fluorescence", [])]}
+    codes = _codes_of(fire)
+    assert "PREP_MISSING" in codes
+    assert "error" not in [f["severity"] for f in run_checks(fire)]  # warning-max
+
+    # demote: a recipe on the material.
+    recipe = {"title": "T", "materials": [{"name": "Assay buffer", "provenance": "stated",
+              "provenance_note": "50 mM Tris, 100 mM NaCl, pH 7.5"}],
+              "steps": [_step("Read fluorescence", [])]}
+    assert "PREP_MISSING" not in _codes_of(recipe)
+
+    # demote: a purchased reagent (vendor set).
+    bought = {"title": "T", "materials": [{"name": "Assay buffer", "provenance": "stated",
+              "vendor_or_grade": "Sigma"}], "steps": [_step("Read fluorescence", [])]}
+    assert "PREP_MISSING" not in _codes_of(bought)
+
+    # demote: a "Prepare assay buffer" step sharing a distinctive token.
+    prep = {"title": "T", "materials": [{"name": "Assay buffer", "provenance": "stated"}],
+            "steps": [_step("Prepare assay buffer", []), _step("Read fluorescence", [])]}
+    assert "PREP_MISSING" not in _codes_of(prep)
+
+
+def test_readout_missing_fires_then_demotes():
+    # fires: >=2 steps, none measuring/reading, no titration.
+    fire = {"title": "T", "materials": [],
+            "steps": [_step("Add reagent", []), _step("Incubate one hour", [])]}
+    assert "READOUT_MISSING" in _codes_of(fire)
+
+    # demote: a step that reads.
+    reads = {"title": "T", "materials": [],
+             "steps": [_step("Add reagent", []), _step("Read absorbance", [])]}
+    assert "READOUT_MISSING" not in _codes_of(reads)
+
+    # demote: a single-step protocol (too small to judge).
+    tiny = {"title": "T", "materials": [], "steps": [_step("Add reagent", [])]}
+    assert "READOUT_MISSING" not in _codes_of(tiny)
+
+
+def test_control_missing_fires_only_for_comparative():
+    # fires: a comparative (titration) design with no control arm anywhere.
+    fire = {"title": "T", "materials": [],
+            "steps": [_step("Read signal", [])],
+            "titration_series": {"variable": "conc", "unit": "nM",
+                                 "points": [{"label": "p1"}, {"label": "p2"}]}}
+    assert "CONTROL_MISSING" in _codes_of(fire)
+
+    # demote: a non-comparative design is skipped entirely.
+    noncomp = {"title": "T", "materials": [],
+               "steps": [_step("Read signal", []), _step("Add reagent", [])]}
+    assert "CONTROL_MISSING" not in _codes_of(noncomp)
+
+    # demote: the comparative design names a control ("BSA control").
+    withctrl = {"title": "T", "materials": [{"name": "BSA control", "provenance": "stated"}],
+                "steps": [_step("Read signal", [])],
+                "titration_series": {"variable": "conc", "unit": "nM",
+                                     "points": [{"label": "p1"}]}}
+    assert "CONTROL_MISSING" not in _codes_of(withctrl)
 
 
 if __name__ == "__main__":

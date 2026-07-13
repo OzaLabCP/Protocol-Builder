@@ -476,6 +476,69 @@ def test_parallel_grounding_answers_all_calls_in_one_turn():
     assert set(session.grounding_call_ids) == {"s1", "s2"}
 
 
+# --- Epic 2 §I.5: emit-boundary bounded repair (one re-emit, then hard fail) ----
+
+# A structurally UNUSABLE (FATAL-class) emit payload: empty title.
+_FATAL_EMIT = {"title": "", "summary": "s", "steps": [{"instruction": "x"}]}
+
+
+def test_emit_boundary_reemits_once_then_recovers():
+    # FATAL -> GOOD: a single bounded re-emit recovers, no partial render.
+    session = Session(messages=[{"role": "user", "content": "seed"}], request_tool_use_id="c1")
+    queue = [
+        tool_msg(("emit_protocol", _FATAL_EMIT, "e1")),   # structurally unusable
+        tool_msg(("emit_protocol", PROTO, "e2")),          # valid on the forced re-emit
+    ]
+    agent = make_agent(queue)
+    out = agent.continue_with_answers(session, answers=[])
+    assert out["title"] == "P"                              # recovered payload returned
+    assert session.pending_tool_use_id == "e2"              # armed on the good emit
+    assert len(agent.client.calls) == 2                     # exactly one re-emit
+    # the re-emit turn quoted the structural error back to the model.
+    assert any(m["role"] == "user" and isinstance(m["content"], str)
+               and "structurally unusable" in m["content"] for m in session.messages)
+
+
+def test_emit_boundary_bounded_repair_raises_actionable_failure():
+    # FATAL -> FATAL: after the single re-emit the payload is still unusable, so the
+    # agent raises an actionable AgentError (never a partial protocol), and the
+    # transactional rollback leaves the session retryable.
+    session = Session(messages=[{"role": "user", "content": "seed"}], request_tool_use_id="c1")
+    before_len = len(session.messages)
+    queue = [
+        tool_msg(("emit_protocol", _FATAL_EMIT, "e1")),
+        tool_msg(("emit_protocol", dict(_FATAL_EMIT), "e2")),  # still unusable
+    ]
+    agent = make_agent(queue)
+    try:
+        agent.continue_with_answers(session, answers=[])
+        assert False, "expected AgentError on a still-unusable re-emit"
+    except AgentError as e:
+        assert "structurally unusable" in str(e)           # actionable, names the failure
+    # rolled back: pending clarification re-armed, appended turns dropped.
+    assert session.request_tool_use_id == "c1"
+    assert session.pending_tool_use_id is None
+    assert len(session.messages) == before_len
+    # ...and a retry now succeeds on the restored session (it wasn't bricked).
+    agent2 = make_agent([tool_msg(("emit_protocol", PROTO, "e9"))])
+    out = agent2.continue_with_answers(session, answers=[])
+    assert out["title"] == "P"
+
+
+def test_emit_boundary_reemit_on_revise_path():
+    # the same bounded-repair gate guards the revise/_followup emit terminal.
+    session = Session(messages=[{"role": "user", "content": "seed"}], pending_tool_use_id="e0")
+    queue = [
+        tool_msg(("emit_protocol", _FATAL_EMIT, "e1")),        # unusable revise output
+        tool_msg(("emit_protocol", dict(PROTO, title="P2"), "e2")),
+    ]
+    agent = make_agent(queue)
+    out = agent.revise(session, "use 150 uL wells")
+    assert out["title"] == "P2"
+    assert session.pending_tool_use_id == "e2"
+    assert len(agent.client.calls) == 2
+
+
 if __name__ == "__main__":
     import traceback
 

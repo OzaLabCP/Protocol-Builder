@@ -35,7 +35,7 @@
       "critical_parameters": [
         {"name": "gSTEP concentration", "value": "75", "unit": "nM", "provenance": "stated", "selected_by_user": false, "provenance_note": "Stated; held identical across all variants.", "citation": null},
         {"name": "Number of gSTEP variants", "value": "2–8", "unit": null, "provenance": "user_input", "selected_by_user": true, "provenance_note": "User is screening a handful of variants; sets plate layout and whether a second plate is needed.", "citation": null},
-        {"name": "gSTEP working-solution volume per variant", "value": "~1 mL each", "unit": null, "provenance": "default_verify", "selected_by_user": false, "provenance_note": "Scaling per variant: 6 titrant points x 3 replicates = 18 wells; 18 x 100 uL = 1.8 mL... but a shared partner series means each variant only supplies its own 75 nM gSTEP to ~9 wells (partner added separately) -> ~1 mL + dead volume. Verify against your final layout.", "citation": null}
+        {"name": "gSTEP working-solution volume per variant", "value": "~1 mL each", "unit": null, "provenance": "default_verify", "selected_by_user": false, "provenance_note": "Scaling per variant: 6 titrant points x 3 replicates = 18 wells; gSTEP is dispensed at 50 uL/well as a 2x working stock (the shared STEPtag series supplies the other 50 uL), so 18 x 50 uL = 0.9 mL ~= ~1 mL including dead volume. Verify against your final layout.", "citation": null}
       ],
       "substeps": [], "warnings": ["Keep variants on ice and shielded from light until dispensed."]
     },

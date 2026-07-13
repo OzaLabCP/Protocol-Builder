@@ -18,7 +18,14 @@ from __future__ import annotations
 import re
 from typing import Callable, Iterator, Optional
 
-from .checks import ensure_ids, run_checks
+from .checks import (
+    assign_stable_ids,
+    compare_assumptions_log,
+    ensure_ids,
+    host_assumptions_log,
+    run_checks,
+)
+from .models import PROTOCOL_SCHEMA_VERSION, repair_structure
 from .resolvers import ResolvedCitation, resolve_citation
 
 Resolver = Callable[[str], Optional[ResolvedCitation]]
@@ -251,6 +258,18 @@ def validate_and_finalize(
             f"dropped from the model's output; regenerate if the protocol looks incomplete."
         )
 
+    # Per-entry structural repair (EPIC-2 §I.3): a step is never left without an
+    # instruction, a material without a name, a parameter without name/value, etc.
+    # Each incomplete field is filled with its frozen sentinel and a BLOCKED
+    # open_question is appended; run_checks(_check_structure) then emits the loud
+    # STRUCT_* blocker so a repaired-placeholder protocol can never ship clean.
+    # Idempotent: only empty fields are filled, so repeated runs add nothing.
+    repair_structure(protocol, open_questions)
+
+    # schema_version is host-authoritative: overwrite unconditionally with the string,
+    # namespaced emitted-protocol version (orthogonal to projects.CURRENT_SCHEMA_VERSION).
+    protocol["schema_version"] = PROTOCOL_SCHEMA_VERSION
+
     # SECURITY: quote_verified is a HOST-ONLY attestation. Never trust a model-supplied
     # value — strip it from every entry so only the verification pass below can set it.
     # (Item schemas are open, dict(block.input) is used verbatim, and the badge is the
@@ -442,7 +461,12 @@ def validate_and_finalize(
     # structural anchors on the converged protocol before run_checks reads them.
     # Every key below is ADDITIVE; no pre-existing report key is touched.
     ensure_ids(protocol)
+    # Additive, content-derived stable ids (material_id/step_id/parameter_id/…),
+    # parallel to the positional _id. Idempotent and preserving, so re-finalizing
+    # carries every id across a fresh re-emit or an in-place edit.
+    assign_stable_ids(protocol)
     report["id_scheme"] = "structural-path-v1"
+    report["stable_id_scheme"] = "content-hash-v1"
     report["assumptions"] = []
     findings = run_checks(protocol)              # pure, deterministic
     _apply_quality_gate(report, open_questions, findings)
@@ -462,8 +486,34 @@ def _canonical_url(resolved: ResolvedCitation) -> Optional[str]:
 
 
 def _consistency_check(protocol: dict, report: dict, open_questions: list) -> None:
-    """Surface parameters that appear inline but not in the assumptions_log (or
-    vice versa). Informational — we flag, we don't silently trust either copy."""
+    """Host-generated canonical assumptions log + the COMPLETE field-level
+    comparison against the model's emitted ``assumptions_log`` (EPIC-2 §III).
+
+    The model's log is never trusted as an independent copy: the host derives its
+    OWN canonical log from the inline non-stated entries (``host_assumptions_log``),
+    stores it on both the report and the protocol (the renderer consumes the host
+    copy), then ``compare_assumptions_log`` reports every field-level disagreement
+    (value/citation/unit/provenance/selected/verify, plus missing/extra/duplicate).
+
+    Back-compat: the existing name-based ``report["consistency"]`` keys are still
+    populated byte-identically, and the ``_CONSISTENCY_MARK`` open_questions and
+    idempotent-strip behavior are unchanged. This layer does NOT route the
+    disagreements through the quality gate (the ALOG_* gate findings are the next
+    layer); they are attached as additive data under ``report["consistency"]``."""
+    # Freeze the id anchors (positional + stable) before building the host log so
+    # each canonical row carries its entity's _id and stable_id. Both are idempotent
+    # and the quality gate re-runs them, so this is a safe no-op there.
+    ensure_ids(protocol)
+    assign_stable_ids(protocol)
+
+    # --- Host canonical log + complete comparison (additive) ---
+    host_log = host_assumptions_log(protocol)
+    report["host_assumptions_log"] = host_log
+    protocol["host_assumptions_log"] = host_log
+    disagreements = compare_assumptions_log(protocol, host_log)
+    report["consistency"]["disagreements"] = disagreements
+
+    # --- Existing name-based sets (kept byte-identical) ---
     inline_names: set[str] = set()
     for mat in protocol.get("materials") or []:
         if mat.get("provenance") not in (None, "stated"):
@@ -507,6 +557,13 @@ def _consistency_check(protocol: dict, report: dict, open_questions: list) -> No
 _GATE_MARK = "[QUALITY GATE] "
 _CONSISTENCY_MARK = "Consistency: "
 
+# Additive top-level gate label (§V): a pure projection of the existing status.
+_GATE_STATUS_LABEL = {
+    "ok": "ready",
+    "warnings": "ready_with_warnings",
+    "blocked": "blocked",
+}
+
 
 def _add_assumption(report, location, assumption, why, _id=None):
     """Project one assumption finding into the human-facing report['assumptions']
@@ -536,6 +593,9 @@ def _apply_quality_gate(report, open_questions, findings):
     report["quality_gate"] = {
         "version": 1,
         "status": status,
+        # Additive spec-facing label alongside the unchanged internal `status`;
+        # a pure projection, so every reader of `status`/`counts` is untouched.
+        "status_label": _GATE_STATUS_LABEL[status],
         "errors": errors,
         "warnings": warnings,
         "assumptions": assumptions,

@@ -44,7 +44,7 @@ def _material_protocol(amount="5", unit="uL", provenance="stated", **extra):
     return {
         "title": "P", "summary": "s", "estimated_duration": "1 h",
         "materials": [mat],
-        "steps": [{"name": "Mix", "description": "d", "critical_parameters": []}],
+        "steps": [{"title": "Mix", "instruction": "d", "critical_parameters": []}],
         "assumptions_log": [],
     }
 
@@ -58,7 +58,7 @@ def _cp_protocol(value, unit="%", provenance="stated", **extra):
     return {
         "title": "P", "summary": "s", "estimated_duration": "1 h",
         "materials": [],
-        "steps": [{"name": "Dilute", "description": "d", "critical_parameters": [cp]}],
+        "steps": [{"title": "Dilute", "instruction": "d", "critical_parameters": [cp]}],
         "assumptions_log": [],
     }
 
@@ -332,6 +332,61 @@ def test_edit_result_keys_unchanged():
         assert body["materials_csv_url"] == f"/api/protocol/{sid}/materials.csv"
     finally:
         srv._SESSIONS.pop(sid, None)
+
+
+# --- Epic 2 §II: /edit resolves a target by its content-stable id ------------
+
+def test_edit_resolves_by_stable_id():
+    from app.checks import assign_stable_ids, ensure_ids
+    # two materials; target the SECOND by its content-derived material_id (not _id).
+    proto = {
+        "title": "P", "summary": "s", "estimated_duration": "1 h",
+        "materials": [
+            {"name": "Tris", "amount": "5", "unit": "uL", "provenance": "stated"},
+            {"name": "Magnesium", "amount": "2", "unit": "mM", "provenance": "stated"},
+        ],
+        "steps": [{"title": "Mix", "instruction": "d", "critical_parameters": []}],
+        "assumptions_log": [],
+    }
+    probe = {"materials": [dict(m) for m in proto["materials"]]}
+    ensure_ids(probe); assign_stable_ids(probe)
+    mg_stable = probe["materials"][1]["material_id"]
+    assert mg_stable.startswith("m_")            # disjoint from the mat:1 positional id
+
+    sid = "editstable"
+    _seed(sid, proto)
+    try:
+        r = _edit(sid, mg_stable, "amount", "4", unit="mM")
+        assert r.status_code == 200
+        mats = r.json()["protocol"]["materials"]
+        # the SECOND material was edited (resolved by stable id, not position).
+        assert mats[1]["name"] == "Magnesium" and mats[1]["amount"] == "4"
+        assert mats[0]["amount"] == "5"          # first material untouched
+    finally:
+        srv._SESSIONS.pop(sid, None)
+
+
+def test_edit_by_stable_id_matches_edit_by_positional_id():
+    from app.checks import assign_stable_ids, ensure_ids
+    proto = _material_protocol(amount="5", unit="uL")
+    probe = {"materials": [dict(proto["materials"][0])]}
+    ensure_ids(probe); assign_stable_ids(probe)
+    stable = probe["materials"][0]["material_id"]
+
+    sid_a, sid_b = "editbypos", "editbystable"
+    _seed(sid_a, _material_protocol(amount="5", unit="uL"))
+    _seed(sid_b, _material_protocol(amount="5", unit="uL"))
+    try:
+        ra = _edit(sid_a, "mat:0", "amount", "9", unit="uL")
+        rb = _edit(sid_b, stable, "amount", "9", unit="uL")
+        assert ra.status_code == rb.status_code == 200
+        ma = ra.json()["protocol"]["materials"][0]
+        mb = rb.json()["protocol"]["materials"][0]
+        assert ma["amount"] == mb["amount"] == "9"
+        assert ma["provenance"] == mb["provenance"] == "user_input"
+    finally:
+        srv._SESSIONS.pop(sid_a, None)
+        srv._SESSIONS.pop(sid_b, None)
 
 
 if __name__ == "__main__":

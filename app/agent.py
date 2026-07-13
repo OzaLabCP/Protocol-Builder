@@ -31,6 +31,7 @@ from typing import Any, Optional
 from . import config, literature
 from .checks import finding_key
 from .llm import OpenRouterClient
+from .models import coerce_emit_payload
 from .prompts import (
     CHOOSE_ASSAY_INSTRUCTION,
     CORRECTNESS_REVIEW_INSTRUCTION,
@@ -570,6 +571,46 @@ class GapFillerAgent:
         return phase1
 
     # -- Phase 2 + 3 ------------------------------------------------------------
+    # -- Emit-boundary bounded repair (§I.5) ------------------------------------
+    def _gate_emit_payload(self, session: Session, block: "_ToolCall", state: "RunState",
+                           system: Optional[str] = None, model: Optional[str] = None,
+                           effort: Optional[str] = None) -> tuple:
+        """Gate an ``emit_protocol`` terminal at the boundary. If the payload is
+        structurally UNUSABLE (the FATAL class: not a dict / empty title / steps not
+        a list), re-emit exactly ONCE — appending a user turn quoting the errors and
+        forcing emit_protocol with no search tools (mirrors the nudge-once block) —
+        then re-check. A still-unusable result raises AgentError (surfaced by the
+        transactional rollback as a normal error, never a partial render).
+
+        Per-entry gaps are NOT fatal: they are repaired deterministically downstream
+        by repair_structure + STRUCT_* blocker, so model calls stay bounded. Returns
+        ``(raw, block)`` on success."""
+        raw = dict(block.input)
+        usable, fatal, _ = coerce_emit_payload(raw)
+        if usable:
+            return raw, block
+        summary = "; ".join(f"{e['loc']}: {e['msg']}" for e in fatal) or "structurally unusable"
+        session.messages.append(
+            {"role": "user", "content": (
+                "Your emit_protocol payload is structurally unusable and cannot be "
+                f"rendered ({summary}). Call emit_protocol ONCE more with a valid protocol: "
+                "a non-empty title and a steps array with at least one step. Do not search.")}
+        )
+        block2 = self._run(session.messages, [EMIT_PROTOCOL_TOOL], "emit_protocol", state,
+                           system=system or self.system_emit, force_terminal=True,
+                           model=model or self.model,
+                           effort=effort if effort is not None else self.effort)
+        if block2 is None:
+            raise AgentError(
+                "emit_protocol produced a structurally unusable protocol: " + summary)
+        raw2 = dict(block2.input)
+        usable2, fatal2, _ = coerce_emit_payload(raw2)
+        if not usable2:
+            summary2 = "; ".join(f"{e['loc']}: {e['msg']}" for e in fatal2) or summary
+            raise AgentError(
+                "emit_protocol produced a structurally unusable protocol: " + summary2)
+        return raw2, block2
+
     def continue_with_answers(self, session: Session, answers: list,
                               progress: Optional[Any] = None) -> dict:
         if session.request_tool_use_id is None:
@@ -602,13 +643,17 @@ class GapFillerAgent:
                                   effort=self.effort)
                 if block is None:
                     raise AgentError("Phase 3 ended without calling emit_protocol.")
+            # Emit-boundary bounded repair: at most one re-emit on a FATAL payload,
+            # else AgentError (rolled back below). Runs inside the try so a failure
+            # restores the pending clarification and drops the appended answer.
+            raw, block = self._gate_emit_payload(session, block, state)
         except Exception:
             del session.messages[saved_len:]
             session.request_tool_use_id = saved_request
             session.pending_tool_use_id = None
             raise
         session.pending_tool_use_id = block.id
-        return dict(block.input)
+        return raw
 
     # -- Continue after an emit (ack the pending tool call) ---------------------
     def _followup(self, session: Session, instruction: str, terminal: str, tool: dict,
@@ -641,12 +686,20 @@ class GapFillerAgent:
                               system=system, model=model, effort=effort)
             if block is None:
                 raise AgentError(f"Model ended without calling {terminal}.")
+            # Only emit_protocol follow-ups (revise/apply_fixes) pass through the
+            # emit-boundary gate; other terminals (design review/alignment) are not
+            # protocols. Runs inside the try so a fatal re-emit failure rolls back.
+            if terminal == "emit_protocol":
+                raw, block = self._gate_emit_payload(
+                    session, block, state, system=system, model=model, effort=effort)
+            else:
+                raw = dict(block.input)
         except Exception:
             del session.messages[saved_len:]           # drop the ack + instruction we appended
             session.pending_tool_use_id = saved_pending  # re-arm the emit so a retry works
             raise
         session.pending_tool_use_id = block.id
-        return dict(block.input)
+        return raw
 
     # -- Revise (edit-and-regenerate) -------------------------------------------
     def revise(self, session: Session, instruction: str, progress: Optional[Any] = None) -> dict:

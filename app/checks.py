@@ -21,6 +21,20 @@ import hashlib
 import re
 import unicodedata
 
+# Structural sentinels written by repair_structure. Importing them here (checks
+# depends on models; models imports nothing from checks -> no cycle) lets
+# _check_structure recognise a repaired-placeholder field and route it through the
+# gate as a blocker.
+from .models import (
+    MATERIAL_NAME_PLACEHOLDER,
+    PARAM_NAME_PLACEHOLDER,
+    PARAM_VALUE_PLACEHOLDER,
+    POINT_LABEL_PLACEHOLDER,
+    STEP_INSTR_PLACEHOLDER,
+    STRUCT_PLACEHOLDERS,
+    SUBSTEP_INSTR_PLACEHOLDER,
+)
+
 # ---------------------------------------------------------------------------
 # Frozen unit tables (§5)
 # ---------------------------------------------------------------------------
@@ -261,8 +275,185 @@ def ensure_ids(protocol: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Finding constructor (§2)
+# assign_stable_ids (§II) — content-hash, revision-stable, parallel to _id
 # ---------------------------------------------------------------------------
+#
+# ``ensure_ids`` above stamps POSITIONAL ids (``mat:0``, ``step:1/param:2``) that
+# move when the list shifts. ``assign_stable_ids`` stamps ADDITIVE, content-derived
+# sibling fields (``material_id``/``step_id``/…) that survive a re-emit or an
+# in-place edit. The two are independent: this function never reads or writes
+# ``_id``, and ``_id`` prefixes (``mat:``/``step:``) are disjoint from the stable
+# prefixes (``m_``/``s_``) so an id from one scheme can never be mistaken for the
+# other.
+#
+# Identity basis is the entity's *identity* (its name/label/instruction), NOT its
+# mutable quantity — so correcting a value keeps the same id. Idempotent (a second
+# run preserves every well-formed id -> byte-identical) and deterministic in
+# collision disambiguation (document-order ``_1``/``_2`` suffixes, never list index).
+
+# stable field name per entity kind (used by the server's /edit resolver too).
+_STABLE_FIELD = {
+    "material": "material_id",
+    "step": "step_id",
+    "critical_parameter": "parameter_id",
+    "substep": "substep_id",
+    "titration_point": "point_id",
+    "titration_component": "component_id",
+}
+
+# single-char prefixes; the id form is ``<pfx>_<8-hex>`` (e.g. ``m_1a2b3c4d``) and
+# a same-identity duplicate disambiguates as ``m_1a2b3c4d_1``.
+_STABLE_PREFIX = {
+    "material_id": "m",
+    "step_id": "s",
+    "parameter_id": "p",
+    "substep_id": "ss",
+    "point_id": "tp",
+    "component_id": "tc",
+}
+
+_STABLE_JOIN = "␟"  # ␟ U+241F symbol-for-unit-separator, matches finding_key
+
+
+def _stable_id(field: str, basis: str) -> str:
+    pfx = _STABLE_PREFIX[field]
+    return pfx + "_" + hashlib.sha256(basis.encode("utf-8")).hexdigest()[:8]
+
+
+def _stable_plan(protocol: dict):
+    """Yield ``(entity, field, basis)`` for every stable-id-bearing entity in
+    document order. Basis is identity-derived (name/label/instruction), never a
+    mutable quantity."""
+    for mat in protocol.get("materials") or []:
+        if isinstance(mat, dict):
+            yield mat, "material_id", "mat" + _STABLE_JOIN + _collapse(mat.get("name"))
+    for step in protocol.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        step_basis = "step" + _STABLE_JOIN + _collapse(step.get("title") or step.get("instruction"))
+        yield step, "step_id", step_basis
+        for cp in step.get("critical_parameters") or []:
+            if isinstance(cp, dict):
+                yield cp, "parameter_id", (
+                    step_basis + _STABLE_JOIN + "param" + _STABLE_JOIN + _collapse(cp.get("name")))
+        for ss in step.get("substeps") or []:
+            if isinstance(ss, dict):
+                yield ss, "substep_id", (
+                    step_basis + _STABLE_JOIN + "sub" + _STABLE_JOIN + _collapse(ss.get("instruction")))
+    ts = protocol.get("titration_series")
+    if isinstance(ts, dict):
+        for pt in ts.get("points") or []:
+            if not isinstance(pt, dict):
+                continue
+            point_basis = "tit" + _STABLE_JOIN + "pt" + _STABLE_JOIN + _collapse(pt.get("label"))
+            yield pt, "point_id", point_basis
+            for comp in pt.get("components") or []:
+                if isinstance(comp, dict):
+                    yield comp, "component_id", (
+                        point_basis + _STABLE_JOIN + "comp" + _STABLE_JOIN + _collapse(comp.get("name")))
+
+
+def assign_stable_ids(protocol: dict) -> None:
+    """Stamp additive, content-derived stable ids (``material_id``/``step_id``/…)
+    parallel to the positional ``_id``. In-place, idempotent, preserving.
+
+    Never reads or writes ``_id``. PASS 1 reserves every well-formed id already
+    present; PASS 2 (document order) preserves an existing well-formed id and
+    otherwise assigns ``<pfx>_<hash>``, appending ``_1``/``_2``/… while the
+    candidate collides (deterministic same-identity duplicate disambiguation)."""
+    if not isinstance(protocol, dict):
+        return
+    plan = list(_stable_plan(protocol))
+    used: set = set()
+    # PASS 1 — reserve every well-formed id already on an entity.
+    for entity, field, _basis in plan:
+        cur = entity.get(field)
+        if isinstance(cur, str) and cur.startswith(_STABLE_PREFIX[field] + "_"):
+            used.add(cur)
+    # PASS 2 — preserve existing well-formed ids; assign the rest in document order.
+    for entity, field, basis in plan:
+        cur = entity.get(field)
+        if isinstance(cur, str) and cur.startswith(_STABLE_PREFIX[field] + "_"):
+            continue  # preserve (survives a rename whose basis changed)
+        base = _stable_id(field, basis)
+        cand = base
+        n = 0
+        while cand in used:
+            n += 1
+            cand = f"{base}_{n}"
+        used.add(cand)
+        entity[field] = cand
+
+
+# ---------------------------------------------------------------------------
+# Finding constructor (§2, extended §IV)
+# ---------------------------------------------------------------------------
+#
+# A finding keeps its seven original keys byte-identical (code/severity/id/
+# location/message/expected/actual/detail) — every existing reader keys off
+# ``severity`` (the internal error/warning/assumption/info vocab) and off ``id``
+# — and gains four ADDITIVE keys: ``location_id`` (alias of the id anchor),
+# ``severity_label`` (the spec's blocker|warning|information vocab), a
+# deterministic per-code ``suggested_fix`` string, and ``host_verified`` (always
+# True — run_checks is the sole deterministic producer). Nothing keys off the new
+# fields for identity or ordering, so they cannot break a reader of ``severity``.
+
+# Internal severity -> spec-facing label. error is the only blocking tier; the two
+# non-actionable informational tiers (assumption/info) collapse to "information".
+_SEVERITY_LABEL = {
+    "error": "blocker",
+    "warning": "warning",
+    "assumption": "information",
+    "info": "information",
+}
+
+# Deterministic, per-code remediation strings. Pure function of the finding's own
+# scalars (code + expected/actual); never raises; "" for any unmapped code.
+_SUGGESTED_FIX_STATIC = {
+    "UNIT_MISSING": "Add an explicit unit to this value so the quantity can be verified.",
+    "PHYS_NEGATIVE": "Correct the sign — this physical quantity cannot be negative.",
+    "PHYS_PCT_OVER_100": "A single percentage cannot exceed 100%; correct the value.",
+    "PHYS_PH_RANGE": "Set the pH within the physical range 0-14.",
+    "PHYS_TEMP_BELOW_ABS_ZERO": "Correct the temperature; it is below absolute zero.",
+    "PCT_OVER_100": "Reduce the component percentages so they sum to at most 100%.",
+    "PCT_UNDER_100": "Confirm the remainder is solvent, or add the missing component(s).",
+    "MOLAR_MASS_MISMATCH": "Reconcile the stated mass with C*V*MW (or V*density).",
+    "DIL_NOT_A_DILUTION": "The final concentration exceeds the stock; correct C1/C2 — a dilution cannot concentrate.",
+    "PREP_MISSING": "Add a preparation step/recipe for this reagent, or mark it purchased ready-made.",
+    "READOUT_MISSING": "Add an explicit measurement/read step so the protocol produces data.",
+    "CONTROL_MISSING": "Add a control/blank/reference arm to this comparative design.",
+    "STRUCT_STEP_NO_INSTRUCTION": "Reconstruct the step instruction, or delete the step.",
+    "STRUCT_MATERIAL_NO_NAME": "Supply the material name, or delete the entry.",
+    "STRUCT_PARAM_INCOMPLETE": "Supply the parameter's name and value, or delete the parameter.",
+    "STRUCT_SUBSTEP_NO_INSTRUCTION": "Supply the substep instruction, or delete the substep.",
+    "STRUCT_TITRATION_POINT_NO_LABEL": "Supply the titration point label, or delete the point.",
+    "ALOG_VALUE_MISMATCH": "Reconcile the inline value with its assumptions_log entry.",
+    "ALOG_VALUE_UNVERIFIABLE": "Fill in a comparable value on both the inline entry and the log.",
+    "ALOG_CITATION_MISMATCH": "Reconcile the citation identifier between the inline value and the log.",
+    "ALOG_CITATION_MISSING": "Copy the inline citation into the assumptions_log entry.",
+    "ALOG_UNIT_MISMATCH": "Use the same unit on the inline value and the log entry.",
+    "ALOG_PROVENANCE_MISMATCH": "Use the same provenance tier on the inline value and the log entry.",
+    "ALOG_SELECTED_MISMATCH": "Reconcile selected_by_user between the inline value and the log.",
+    "ALOG_VERIFY_MISMATCH": "Recompute the log's verify flag to match the host-derived value.",
+    "ALOG_INLINE_MISSING": "Add this inline parameter to the assumptions_log.",
+    "ALOG_MODEL_EXTRA": "Remove the assumptions_log row, or add the matching inline parameter.",
+    "ALOG_DUPLICATE": "Remove the duplicate assumptions_log row.",
+}
+
+
+def _suggested_fix(code, expected, actual, message) -> str:
+    """Deterministic remediation hint for a finding. Pure; total (never raises).
+
+    A handful of codes phrase the fix in terms of the computed ``expected`` value;
+    the rest map to a static string. An unmapped code yields ``""``."""
+    if code == "DIL_MISMATCH":
+        return (f"Set the transfer volume to {_fmt(expected)} L (= C2*V2/C1), "
+                f"or correct C1/C2/V2.")
+    if code == "PLATE_OVER_CAPACITY":
+        return (f"Reduce the layout to at most {_fmt(expected)} wells, "
+                f"or move to a larger plate.")
+    return _SUGGESTED_FIX_STATIC.get(code, "")
+
 
 def _finding(code, severity, _id, location, message,
              expected=None, actual=None, detail=None):
@@ -275,6 +466,11 @@ def _finding(code, severity, _id, location, message,
         "expected": expected,
         "actual": actual,
         "detail": detail if isinstance(detail, dict) else {},
+        # --- additive (§IV); no reader keys off these for identity/order ---
+        "location_id": _id,
+        "severity_label": _SEVERITY_LABEL.get(severity, "information"),
+        "suggested_fix": _suggested_fix(code, expected, actual, message),
+        "host_verified": True,
     }
 
 
@@ -739,6 +935,234 @@ def _check_plate(protocol, findings):
 # run_checks (§1) — pure, deterministic, sorted
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Structural completeness (§I.4) — a repaired-placeholder or empty structural
+# field is a loud, blocking finding, never a silent gap.
+# ---------------------------------------------------------------------------
+
+def _struct_missing(v) -> bool:
+    """A structural field is missing when it is empty/whitespace OR carries a
+    repair sentinel. Total: never raises (deep-read only)."""
+    if not isinstance(v, str):
+        return True
+    return v.strip() == "" or v in STRUCT_PLACEHOLDERS
+
+
+def _check_structure(protocol, findings) -> None:
+    """Emit ``error`` findings for any structurally incomplete entry (a step with
+    no instruction, a material with no name, an incomplete parameter, a substep
+    with no instruction, a titration point with no label). Anchored on the stamped
+    ``_id``. Because they are errors, the gate is ``blocked`` -> a repaired protocol
+    can never ship clean."""
+    for i, mat in enumerate(protocol.get("materials") or []):
+        if not isinstance(mat, dict):
+            continue
+        if _struct_missing(mat.get("name")):
+            findings.append(_finding(
+                "STRUCT_MATERIAL_NO_NAME", "error", mat.get("_id"),
+                f"materials[{i}]",
+                "Material has no name (supply the material name or delete the entry).",
+            ))
+    for i, step in enumerate(protocol.get("steps") or []):
+        if not isinstance(step, dict):
+            continue
+        if _struct_missing(step.get("instruction")):
+            findings.append(_finding(
+                "STRUCT_STEP_NO_INSTRUCTION", "error", step.get("_id"),
+                f"steps[{i}]",
+                "Step has no instruction (reconstruct the instruction or delete the step).",
+            ))
+        for j, cp in enumerate(step.get("critical_parameters") or []):
+            if not isinstance(cp, dict):
+                continue
+            name_missing = _struct_missing(cp.get("name"))
+            val = cp.get("value")
+            value_missing = _struct_missing(val) and not isinstance(val, (int, float))
+            if name_missing or value_missing:
+                lacks = " and ".join(
+                    x for x in ["name" if name_missing else "", "value" if value_missing else ""] if x
+                )
+                findings.append(_finding(
+                    "STRUCT_PARAM_INCOMPLETE", "error", cp.get("_id"),
+                    f"steps[{i}].critical_parameters[{j}]",
+                    f"Critical parameter has no {lacks} (supply it or delete the parameter).",
+                ))
+        for k, ss in enumerate(step.get("substeps") or []):
+            if not isinstance(ss, dict):
+                continue
+            if _struct_missing(ss.get("instruction")):
+                findings.append(_finding(
+                    "STRUCT_SUBSTEP_NO_INSTRUCTION", "error", ss.get("_id"),
+                    f"steps[{i}].substeps[{k}]",
+                    "Substep has no instruction (supply it or delete the substep).",
+                ))
+    ts = protocol.get("titration_series")
+    if isinstance(ts, dict):
+        for p, pt in enumerate(ts.get("points") or []):
+            if not isinstance(pt, dict):
+                continue
+            if _struct_missing(pt.get("label")):
+                findings.append(_finding(
+                    "STRUCT_TITRATION_POINT_NO_LABEL", "error", pt.get("_id"),
+                    f"titration_series.points[{p}]",
+                    "Titration point has no label (supply it or delete the point).",
+                ))
+
+
+# ---------------------------------------------------------------------------
+# Conservative completeness heuristics (§VI) — warning-max, never a false blocker.
+# Each demotes to NO finding on any ambiguity: a correct protocol produces none.
+# ---------------------------------------------------------------------------
+
+# A material name that DENOTES a prepared solution (a buffer/stock/master-mix, or a
+# made-up reagent named by its working concentration like "50 mM Tris" / "10x PBS").
+_PREP_NAME_RE = re.compile(
+    r"\bbuffer\b|\bstock\b|\bmaster ?mix\b|\d\s*(?:mM|M|µM|μM|uM|nM|x)\b",
+    re.IGNORECASE,
+)
+# A step that DEFINES how a solution is made (shares a token with the candidate).
+_PREP_VERB_RE = re.compile(
+    r"\b(?:prepare|prepar|make|made|dilut|dissolv|reconstitut|mix|formulat)",
+    re.IGNORECASE,
+)
+# A number+unit inside a note/description reads as a composition recipe.
+_RECIPE_HINT_RE = re.compile(
+    r"\d\s*(?:mM|M|µM|μM|uM|nM|pM|%|mg|g|ug|µg|μg|mL|uL|µL|μL|L)\b",
+    re.IGNORECASE,
+)
+# ≥4-char alphabetic words are the "distinctive" tokens shared between a candidate
+# material name and a prep step (short words like "the"/"mix" are too generic).
+_SIG_WORD_RE = re.compile(r"[a-z]{4,}")
+
+
+def _sig_tokens(text) -> set:
+    return set(_SIG_WORD_RE.findall(str(text or "").lower()))
+
+
+def _material_has_recipe(mat: dict) -> bool:
+    """A material carries its own recipe when its provenance_note (or any prose
+    description) states a composition — i.e. contains a number+unit."""
+    for key in ("provenance_note", "description", "notes"):
+        v = mat.get(key)
+        if isinstance(v, str) and _RECIPE_HINT_RE.search(v):
+            return True
+    return False
+
+
+def _check_prep(protocol, findings) -> None:
+    """PREP_MISSING (warning, anchored at the material ``_id``): a material whose
+    name clearly denotes a *prepared* solution but which is neither defined by a
+    recipe nor made by a prep step nor bought ready-made. Demotes on any of those,
+    so a purchased reagent or a solution with a "Prepare ..." step never fires."""
+    steps = protocol.get("steps") or []
+    # Pre-index the significant tokens of every step that contains a prep verb.
+    prep_step_tokens: list = []
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        text = f"{step.get('title') or ''} {step.get('instruction') or ''}"
+        if _PREP_VERB_RE.search(text):
+            prep_step_tokens.append(_sig_tokens(text))
+
+    for i, mat in enumerate(protocol.get("materials") or []):
+        if not isinstance(mat, dict):
+            continue
+        name = mat.get("name")
+        if not isinstance(name, str) or not _PREP_NAME_RE.search(name):
+            continue  # not a prepared-solution name -> not a candidate
+        # Demote: bought ready-made (a vendor other than in-house preparation).
+        vendor = mat.get("vendor_or_grade")
+        if isinstance(vendor, str) and vendor.strip() and \
+                _collapse(vendor) != _collapse("prepared in-house"):
+            continue
+        # Demote: the material carries its own composition recipe.
+        if _material_has_recipe(mat):
+            continue
+        # Demote: a prep step shares a distinctive (≥4-char) token with this name.
+        cand_tokens = _sig_tokens(name)
+        if any(cand_tokens & toks for toks in prep_step_tokens):
+            continue
+        findings.append(_finding(
+            "PREP_MISSING", "warning", mat.get("_id"),
+            f"materials[{i}]",
+            f"'{name}' names a prepared solution but the protocol gives no recipe, "
+            f"no preparation step, and no vendor; its composition is undefined.",
+        ))
+
+
+# Any step whose text contains one of these tokens counts as an explicit readout.
+_READOUT_RE = re.compile(
+    r"\b(?:read|measur|record|acquir|imag|detect|readout|quantif|absorb"
+    r"|fluoresc|luminesc|od|signal|count|cq|ct|spectr)",
+    re.IGNORECASE,
+)
+# A design is "comparative" when its text screens/compares/titrates across a series.
+_COMPARATIVE_RE = re.compile(
+    r"\b(?:screen|compar|rank|versus|vs|dose|titrat|series)",
+    re.IGNORECASE,
+)
+# A control/reference arm anywhere satisfies the comparative-design control check.
+_CONTROL_RE = re.compile(
+    r"\b(?:control|blank|vehicle|negative|positive|reference|mock|untreated|no-|bsa|baseline)",
+    re.IGNORECASE,
+)
+
+
+def _protocol_text(protocol) -> str:
+    """Concatenate the human-readable text of every step, material, and critical
+    parameter — the haystack the readout/control heuristics scan."""
+    bits: list = []
+    for mat in protocol.get("materials") or []:
+        if isinstance(mat, dict):
+            bits.append(str(mat.get("name") or ""))
+    for step in protocol.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        bits.append(str(step.get("title") or ""))
+        bits.append(str(step.get("instruction") or ""))
+        for cp in step.get("critical_parameters") or []:
+            if isinstance(cp, dict):
+                bits.append(str(cp.get("name") or ""))
+    return " ".join(bits)
+
+
+def _check_readout_control(protocol, findings) -> None:
+    """Two protocol-level completeness heuristics (id=None, warning-max):
+
+    READOUT_MISSING — a multi-step protocol (≥2 steps) whose steps never measure,
+    read, or acquire anything and which has no titration_series. A single-step or
+    titration protocol demotes to no finding.
+
+    CONTROL_MISSING — a *clearly comparative* design (a titration_series, or text
+    that screens/compares/titrates a series) that names no control/blank/reference
+    arm anywhere. A non-comparative design is skipped entirely (ambiguity demotes)."""
+    steps = [s for s in (protocol.get("steps") or []) if isinstance(s, dict)]
+    has_titration = isinstance(protocol.get("titration_series"), dict)
+
+    # --- READOUT_MISSING ---
+    if len(steps) >= 2 and not has_titration:
+        readout_seen = any(
+            _READOUT_RE.search(f"{s.get('title') or ''} {s.get('instruction') or ''}")
+            for s in steps
+        )
+        if not readout_seen:
+            findings.append(_finding(
+                "READOUT_MISSING", "warning", None, "protocol",
+                "no step reads, measures, or acquires a result and there is no "
+                "titration series; the protocol may produce no data.",
+            ))
+
+    # --- CONTROL_MISSING (comparative designs only) ---
+    text = _protocol_text(protocol)
+    comparative = has_titration or bool(_COMPARATIVE_RE.search(text))
+    if comparative and not _CONTROL_RE.search(text):
+        findings.append(_finding(
+            "CONTROL_MISSING", "warning", None, "protocol",
+            "this looks like a comparative/screening design but names no control, "
+            "blank, or reference arm to interpret the comparison against.",
+        ))
+
+
 def run_checks(protocol: dict) -> list:
     """Run every check family over a finalized protocol and return a flat,
     deterministically-ordered ``list[Finding]``.
@@ -753,6 +1177,9 @@ def run_checks(protocol: dict) -> list:
     _check_molar(protocol, findings)
     _check_percent_sums(protocol, findings)
     _check_plate(protocol, findings)
+    _check_structure(protocol, findings)
+    _check_prep(protocol, findings)
+    _check_readout_control(protocol, findings)
 
     findings.sort(key=lambda f: (f.get("id") or "", f.get("location") or "", f.get("code")))
     return findings
@@ -824,3 +1251,260 @@ def finding_key(finding: dict) -> str:
     cat, loc, sig = _norm_finding_parts(finding)
     canon = "␟".join((cat, loc, sig))      # ␟-joined (unit-separator)
     return "f_" + hashlib.sha256(canon.encode("utf-8")).hexdigest()[:10]
+
+
+# ---------------------------------------------------------------------------
+# Host-generated canonical assumptions log (§III)
+# ---------------------------------------------------------------------------
+#
+# The model's ``assumptions_log`` is never trusted as an independent copy. The
+# host derives its OWN canonical log from the inline non-stated entries, then the
+# comparison below reports every field-level disagreement between the two. Both are
+# pure (deep-read only) and deterministic.
+
+# Inline provenance tiers that carry an assumption worth logging (mirrors the old
+# name-only _consistency_check scope, so no new false positives).
+_ALOG_SCOPE = frozenset({
+    "best_practice", "default_verify", "literature_grounded", "user_input",
+})
+
+_ALOG_WORD_RE = re.compile(r"[a-z0-9]+")
+
+
+def _norm_param(name) -> str:
+    """Normalize a parameter/material name for cross-log matching. Byte-identical
+    to ``validation._norm_param`` (kept in sync deliberately; replicated here to
+    avoid a checks<->validation import cycle)."""
+    return " ".join(_ALOG_WORD_RE.findall(str(name or "").lower()))
+
+
+def _derive_verify(entity: dict) -> bool:
+    """Deterministic ``verify`` derivation (§III.2) from host-stamped flags.
+
+    ``user_input`` the user selected, or a fully-verified ``literature_grounded``
+    value, need no re-verification -> ``False``; everything else -> ``True``.
+    Absent flags read falsy -> ``True`` (conservative in standalone unit paths)."""
+    prov = entity.get("provenance")
+    if prov == "user_input" and bool(entity.get("selected_by_user")):
+        return False
+    if (prov == "literature_grounded"
+            and bool(entity.get("identifier_verified"))
+            and bool(entity.get("metadata_matched"))):
+        return False
+    return True
+
+
+def _inline_entries(protocol: dict):
+    """Yield ``(entity, kind, name)`` for every in-scope inline entry (materials,
+    then each step's critical_parameters), document order."""
+    for mat in protocol.get("materials") or []:
+        if isinstance(mat, dict) and mat.get("provenance") in _ALOG_SCOPE:
+            yield mat, "material", mat.get("name")
+    for step in protocol.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        for cp in step.get("critical_parameters") or []:
+            if isinstance(cp, dict) and cp.get("provenance") in _ALOG_SCOPE:
+                yield cp, "critical_parameter", cp.get("name")
+
+
+def host_assumptions_log(protocol: dict) -> list:
+    """Build the host's canonical assumptions log from inline non-stated entries.
+
+    Pure, deterministic, document order. Each row mirrors an inline material or
+    critical parameter; ``verify`` is host-derived, ``stable_id`` is the entity's
+    content-hash id (present once ``assign_stable_ids`` has run)."""
+    log: list = []
+    if not isinstance(protocol, dict):
+        return log
+    for entity, kind, name in _inline_entries(protocol):
+        val = entity.get("value")
+        if val is None:
+            val = entity.get("amount")
+        citation = entity.get("citation") if isinstance(entity.get("citation"), dict) else None
+        citation_id = citation.get("identifier") if citation else None
+        stable_field = _STABLE_FIELD["critical_parameter"] if kind == "critical_parameter" else _STABLE_FIELD["material"]
+        log.append({
+            "parameter": name,
+            "param_norm": _norm_param(name),
+            "value": val,
+            "unit": entity.get("unit"),
+            "provenance": entity.get("provenance"),
+            "selected_by_user": bool(entity.get("selected_by_user")),
+            "citation_id": citation_id,
+            "verify": _derive_verify(entity),
+            "_id": entity.get("_id"),
+            "stable_id": entity.get(stable_field),
+        })
+    return log
+
+
+def _alog_value_equal(host_val, host_unit, model_val, model_unit):
+    """Return True/False if the two values definitely agree/disagree, or None if
+    the comparison is UNVERIFIABLE (either side empty or unparseable).
+
+    A separate ``unit`` field is folded into the value (``_qty``) so an inline
+    ``value="100", unit="uL"`` compares equal to a log ``value="100 uL"``. When
+    both sides parse to the SAME dimension we compare base magnitudes; otherwise we
+    fall back to normalized string equality on the raw value."""
+    hs = "" if host_val is None else str(host_val).strip()
+    ms = "" if model_val is None else str(model_val).strip()
+    if hs == "" or ms == "":
+        return None
+    hq = _qty(host_val, host_unit)
+    mq = _qty(model_val, model_unit)
+    if (hq and mq and hq.get("dim") is not None
+            and hq.get("dim") == mq.get("dim")
+            and hq.get("base") is not None and mq.get("base") is not None):
+        return abs(hq["base"] - mq["base"]) <= 1e-12 * max(1.0, abs(hq["base"]), abs(mq["base"]))
+    # Fall back to normalized string equality on the raw value scalars.
+    return _collapse(host_val) == _collapse(model_val)
+
+
+def _alog_disagreement(code, severity, host_row, message, host=None, model=None):
+    return {
+        "code": code,
+        "severity": severity,
+        "param_norm": host_row.get("param_norm") if host_row else "",
+        "id": host_row.get("_id") if host_row else None,
+        "stable_id": host_row.get("stable_id") if host_row else None,
+        "host": host,
+        "model": model,
+        "message": message,
+    }
+
+
+def compare_assumptions_log(protocol: dict, host_log: list) -> list:
+    """The COMPLETE field-level comparison of the host canonical log against the
+    model's emitted ``assumptions_log`` (§III.3). Returns a deterministically-ordered
+    list of disagreement dicts (data only — this layer does NOT route them through
+    the quality gate). Pure: deep-read, no mutation, no clock/RNG.
+
+    One disagreement per field-level difference, matched by ``param_norm``. Every
+    comparison demotes on ambiguity so a correct protocol yields an empty list."""
+    disagreements: list = []
+    if not isinstance(protocol, dict):
+        return disagreements
+    host_by_norm = {}
+    for row in host_log or []:
+        host_by_norm.setdefault(row.get("param_norm"), row)
+
+    model_rows = [a for a in (protocol.get("assumptions_log") or []) if isinstance(a, dict)]
+    model_first = {}       # first model row per norm (document order)
+    dup_seen = set()
+    for a in model_rows:
+        norm = _norm_param(a.get("parameter"))
+        if norm == "":
+            continue
+        if norm in model_first:
+            if norm not in dup_seen:
+                dup_seen.add(norm)
+                host_row = host_by_norm.get(norm) or {"param_norm": norm, "_id": None, "stable_id": None}
+                disagreements.append(_alog_disagreement(
+                    "ALOG_DUPLICATE", "warning", host_row,
+                    f"assumptions_log lists '{norm}' more than once; compared against the first."))
+            continue
+        model_first[norm] = a
+
+    # Field-level comparison for every inline (host) row.
+    for norm, host_row in host_by_norm.items():
+        if norm == "":
+            continue
+        model = model_first.get(norm)
+        if model is None:
+            disagreements.append(_alog_disagreement(
+                "ALOG_INLINE_MISSING", "warning", host_row,
+                f"'{norm}' is filled inline but absent from the model's assumptions_log.",
+                host=host_row.get("value"), model=None))
+            continue
+
+        # value (fold each side's separate unit field into the quantity)
+        model_val = model.get("value")
+        agree = _alog_value_equal(
+            host_row.get("value"), host_row.get("unit"), model_val, model.get("unit"))
+        if agree is None:
+            hs = host_row.get("value")
+            ms = model_val
+            if (hs is not None and str(hs).strip() != "") or (ms is not None and str(ms).strip() != ""):
+                disagreements.append(_alog_disagreement(
+                    "ALOG_VALUE_UNVERIFIABLE", "warning", host_row,
+                    f"value for '{norm}' could not be compared (empty or unparseable on one side).",
+                    host=hs, model=ms))
+        elif agree is False:
+            disagreements.append(_alog_disagreement(
+                "ALOG_VALUE_MISMATCH", "error", host_row,
+                f"value for '{norm}' disagrees: inline {host_row.get('value')!r} vs log {model_val!r}.",
+                host=host_row.get("value"), model=model_val))
+
+        # citation identifier
+        host_cite = host_row.get("citation_id")
+        model_cite_raw = model.get("citation")
+        model_cite = model_cite_raw.get("identifier") if isinstance(model_cite_raw, dict) else model_cite_raw
+        hc = "" if host_cite is None else str(host_cite).strip()
+        mc = "" if model_cite is None else str(model_cite).strip()
+        if hc and mc and hc != mc:
+            disagreements.append(_alog_disagreement(
+                "ALOG_CITATION_MISMATCH", "error", host_row,
+                f"citation identifier for '{norm}' disagrees: inline {hc!r} vs log {mc!r}.",
+                host=hc, model=mc))
+        elif not hc and mc:
+            # model asserts grounding the canonical lacks (fabricated grounding)
+            disagreements.append(_alog_disagreement(
+                "ALOG_CITATION_MISMATCH", "error", host_row,
+                f"assumptions_log claims citation {mc!r} for '{norm}' but the inline value has none.",
+                host=None, model=mc))
+        elif hc and not mc:
+            disagreements.append(_alog_disagreement(
+                "ALOG_CITATION_MISSING", "warning", host_row,
+                f"inline value for '{norm}' carries citation {hc!r} but the log omits it.",
+                host=hc, model=None))
+
+        # unit (both present)
+        hu = host_row.get("unit")
+        mu = model.get("unit")
+        if hu and mu and _collapse(hu) != _collapse(mu):
+            disagreements.append(_alog_disagreement(
+                "ALOG_UNIT_MISMATCH", "warning", host_row,
+                f"unit for '{norm}' disagrees: inline {hu!r} vs log {mu!r}.",
+                host=hu, model=mu))
+
+        # provenance tier
+        hp = host_row.get("provenance")
+        mp = model.get("provenance")
+        if hp is not None and mp is not None and _collapse(hp) != _collapse(mp):
+            disagreements.append(_alog_disagreement(
+                "ALOG_PROVENANCE_MISMATCH", "warning", host_row,
+                f"provenance for '{norm}' disagrees: inline {hp!r} vs log {mp!r}.",
+                host=hp, model=mp))
+
+        # selected_by_user
+        hsel = bool(host_row.get("selected_by_user"))
+        if "selected_by_user" in model:
+            msel = bool(model.get("selected_by_user"))
+            if hsel != msel:
+                disagreements.append(_alog_disagreement(
+                    "ALOG_SELECTED_MISMATCH", "warning", host_row,
+                    f"selected_by_user for '{norm}' disagrees: inline {hsel} vs log {msel}.",
+                    host=hsel, model=msel))
+
+        # verify
+        hv = bool(host_row.get("verify"))
+        if "verify" in model:
+            mv = bool(model.get("verify"))
+            if hv != mv:
+                disagreements.append(_alog_disagreement(
+                    "ALOG_VERIFY_MISMATCH", "warning", host_row,
+                    f"verify flag for '{norm}' disagrees: host-derived {hv} vs log {mv}.",
+                    host=hv, model=mv))
+
+    # model rows that match no inline entry
+    for norm, a in model_first.items():
+        if norm not in host_by_norm:
+            disagreements.append(_alog_disagreement(
+                "ALOG_MODEL_EXTRA", "warning",
+                {"param_norm": norm, "_id": None, "stable_id": None},
+                f"assumptions_log lists '{norm}' with no matching inline material or parameter.",
+                host=None, model=a.get("value")))
+
+    disagreements.sort(key=lambda d: (d.get("param_norm") or "", d.get("code") or ""))
+    return disagreements

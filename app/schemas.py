@@ -8,6 +8,12 @@ everywhere.
 
 from __future__ import annotations
 
+# Re-export the emitted-protocol schema version so callers can import it from the
+# schema module alongside EMIT_PROTOCOL_TOOL. This is the STRING, namespaced version
+# (never confuse with projects.CURRENT_SCHEMA_VERSION:int).
+from .models import PROTOCOL_SCHEMA_VERSION  # noqa: F401
+
+
 def as_openai_tool(tool: dict) -> dict:
     """Convert a `{name, description, input_schema}` tool (the source of truth used
     throughout this module) into OpenAI/OpenRouter function-calling shape. The
@@ -811,6 +817,11 @@ EMIT_PROTOCOL_TOOL = {
                 "plus any user/literature conflicts and any citation that failed "
                 "host validation.",
                 "items": {"type": "string"},
+            },
+            "schema_version": {
+                "type": "string",
+                "description": "host-managed; ignored if emitted. The host stamps the "
+                "authoritative emitted-protocol schema version during validation.",
             },
         },
         "required": [

@@ -699,6 +699,213 @@ def test_gate_blocked_report_yields_blocked_summary():
     assert summary.error_count >= 1
 
 
+# --- Epic 2 §III: host-generated canonical assumptions log + comparison --------
+
+def _inline_cp_step(name, value, unit=None, provenance="best_practice", **extra):
+    cp = {"name": name, "value": value, "unit": unit, "provenance": provenance}
+    cp.update(extra)
+    return {"number": 1, "title": "Add", "instruction": "add", "provenance": "stated",
+            "critical_parameters": [cp]}
+
+
+def _alog_disagreements(report):
+    return report["consistency"]["disagreements"]
+
+
+def test_host_assumptions_log_is_built_and_attached():
+    # the host derives its OWN canonical log from inline non-stated entries.
+    mat = {"name": "Magnesium", "value": "2", "unit": "mM", "provenance": "best_practice",
+           "selected_by_user": False}
+    p = base_protocol(materials=[mat], assumptions_log=[])
+    report = validate_and_finalize(p, fake_resolver({}))
+    log = report["host_assumptions_log"]
+    assert p["host_assumptions_log"] == log            # attached to the protocol too
+    assert len(log) == 1
+    row = log[0]
+    assert row["parameter"] == "Magnesium" and row["value"] == "2" and row["unit"] == "mM"
+    assert row["provenance"] == "best_practice"
+    assert row["_id"] == mat["_id"] and row["stable_id"] == mat["material_id"]
+
+
+def test_host_log_equals_model_log_when_consistent():
+    # a model assumptions_log that agrees with the inline entry -> NO disagreements.
+    step = _inline_cp_step("Mg concentration", "2", "mM", selected_by_user=False)
+    p = base_protocol(
+        steps=[step],
+        assumptions_log=[{"parameter": "Mg concentration", "value": "2", "unit": "mM",
+                          "provenance": "best_practice", "selected_by_user": False,
+                          "verify": True}])
+    report = validate_and_finalize(p, fake_resolver({}))
+    assert _alog_disagreements(report) == []           # canonical == model log
+
+
+def test_log_value_disagreement_detected():
+    # inline 10 mM vs model log 100 mM for the SAME parameter -> ALOG_VALUE_MISMATCH (error).
+    step = _inline_cp_step("Mg concentration", "10", "mM")
+    p = base_protocol(
+        steps=[step],
+        assumptions_log=[{"parameter": "Mg concentration", "value": "100", "unit": "mM",
+                          "provenance": "best_practice"}])
+    report = validate_and_finalize(p, fake_resolver({}))
+    dis = _alog_disagreements(report)
+    vm = [d for d in dis if d["code"] == "ALOG_VALUE_MISMATCH"]
+    assert len(vm) == 1
+    assert vm[0]["severity"] == "error"
+    assert str(vm[0]["host"]) == "10" and str(vm[0]["model"]) == "100"
+    assert vm[0]["id"] == step["critical_parameters"][0]["_id"]  # anchored on the inline entry
+
+
+def test_log_empty_value_is_unverifiable_not_blocker():
+    step = _inline_cp_step("Mg concentration", "10", "mM")
+    p = base_protocol(
+        steps=[step],
+        assumptions_log=[{"parameter": "Mg concentration", "value": "", "unit": "mM",
+                          "provenance": "best_practice"}])
+    report = validate_and_finalize(p, fake_resolver({}))
+    dis = _alog_disagreements(report)
+    assert any(d["code"] == "ALOG_VALUE_UNVERIFIABLE" and d["severity"] == "warning" for d in dis)
+    assert all(d["code"] != "ALOG_VALUE_MISMATCH" for d in dis)  # empty -> never a blocker
+
+
+def test_log_provenance_mismatch_detected():
+    step = _inline_cp_step("temp", "30", "C", provenance="best_practice")
+    p = base_protocol(
+        steps=[step],
+        assumptions_log=[{"parameter": "temp", "value": "30", "unit": "C",
+                          "provenance": "default_verify"}])
+    report = validate_and_finalize(p, fake_resolver({}))
+    pm = [d for d in _alog_disagreements(report) if d["code"] == "ALOG_PROVENANCE_MISMATCH"]
+    assert len(pm) == 1 and pm[0]["severity"] == "warning"
+    assert pm[0]["host"] == "best_practice" and pm[0]["model"] == "default_verify"
+
+
+def test_citation_identifier_mismatch_detected():
+    # A literature_grounded inline value whose log copy claims a DIFFERENT citation
+    # identifier -> ALOG_CITATION_MISMATCH (error). Exercised on the pure host functions
+    # so neither identifier is nulled by resolution (the mismatch is what we assert).
+    from app.checks import (assign_stable_ids, compare_assumptions_log, ensure_ids,
+                            host_assumptions_log)
+    p = base_protocol(
+        materials=[{"name": "Mg", "value": "2", "unit": "mM",
+                    "provenance": "literature_grounded",
+                    "citation": {"identifier": "12345678"}}],
+        assumptions_log=[{"parameter": "Mg", "value": "2", "unit": "mM",
+                          "provenance": "literature_grounded",
+                          "citation": {"identifier": "99999999"}}])
+    ensure_ids(p); assign_stable_ids(p)
+    dis = compare_assumptions_log(p, host_assumptions_log(p))
+    cm = [d for d in dis if d["code"] == "ALOG_CITATION_MISMATCH"]
+    assert len(cm) == 1 and cm[0]["severity"] == "error"
+    assert cm[0]["host"] == "12345678" and cm[0]["model"] == "99999999"
+
+
+def test_consistency_legacy_keys_preserved_on_clean_protocol():
+    # the pre-change name-based keys stay present and empty on a consistent protocol.
+    step = _inline_cp_step("Mg concentration", "2", "mM", selected_by_user=False)
+    p = base_protocol(
+        steps=[step],
+        assumptions_log=[{"parameter": "Mg concentration", "value": "2", "unit": "mM",
+                          "provenance": "best_practice", "selected_by_user": False}])
+    report = validate_and_finalize(p, fake_resolver({}))
+    assert report["consistency"]["inline_missing_from_log"] == []
+    assert report["consistency"]["log_missing_from_inline"] == []
+
+
+# --- Epic 2 §II: revision-stable ids (integrated through validate_and_finalize) -
+
+def test_stable_ids_additive_positional_id_intact():
+    mat = {"name": "Tris", "provenance": "stated"}
+    step = {"number": 1, "title": "Mix reagents", "instruction": "mix",
+            "provenance": "stated", "critical_parameters": [
+                {"name": "temp", "value": "30", "unit": "C", "provenance": "stated"}]}
+    p = base_protocol(materials=[mat], steps=[step])
+    validate_and_finalize(p, fake_resolver({}))
+    # additive stable fields present AND positional _id unchanged.
+    assert mat["_id"] == "mat:0" and mat["material_id"].startswith("m_")
+    assert step["_id"] == "step:0" and step["step_id"].startswith("s_")
+    cp = step["critical_parameters"][0]
+    assert cp["_id"] == "step:0/param:0" and cp["parameter_id"].startswith("p_")
+
+
+def test_stable_id_survives_simulated_revision():
+    # capture a step's stable id, prepend an unrelated step (its positional _id shifts),
+    # re-finalize -> the stable id is unchanged while the positional _id moved.
+    step = {"number": 1, "title": "Mix reagents", "instruction": "mix",
+            "provenance": "stated", "critical_parameters": []}
+    mat = {"name": "Tris", "provenance": "stated"}
+    p = base_protocol(materials=[mat], steps=[step])
+    validate_and_finalize(p, fake_resolver({}))
+    step_id_before = step["step_id"]
+    id_before = step["_id"]
+    mat_id_before = mat["material_id"]
+
+    p["steps"].insert(0, {"number": 0, "title": "Warm up the incubator",
+                          "instruction": "warm", "provenance": "stated",
+                          "critical_parameters": []})
+    validate_and_finalize(p, fake_resolver({}))
+    moved = [s for s in p["steps"] if s["title"] == "Mix reagents"][0]
+    assert moved["step_id"] == step_id_before          # content-derived id is stable
+    assert moved["_id"] != id_before                    # positional id moved (step:0 -> step:1)
+    assert mat["material_id"] == mat_id_before           # material id unchanged too
+
+
+def test_assign_stable_ids_idempotent_through_finalize():
+    p = base_protocol(
+        materials=[{"name": "Tris", "provenance": "stated"}],
+        steps=[{"number": 1, "title": "Mix", "instruction": "mix", "provenance": "stated",
+                "critical_parameters": []}])
+    validate_and_finalize(p, fake_resolver({}))
+    ids1 = (p["materials"][0]["material_id"], p["steps"][0]["step_id"])
+    validate_and_finalize(p, fake_resolver({}))
+    ids2 = (p["materials"][0]["material_id"], p["steps"][0]["step_id"])
+    assert ids1 == ids2
+    assert report_scheme(p) == "content-hash-v1"
+
+
+def report_scheme(p):
+    return p["validation_report"]["stable_id_scheme"]
+
+
+def test_duplicate_names_disambiguate_deterministically():
+    from app.checks import assign_stable_ids
+    p = {"materials": [{"name": "buffer"}, {"name": "buffer"}, {"name": "buffer"}]}
+    assign_stable_ids(p)
+    ids = [m["material_id"] for m in p["materials"]]
+    assert ids[0].startswith("m_")
+    assert ids[1] == ids[0] + "_1"
+    assert ids[2] == ids[0] + "_2"
+    assert len(set(ids)) == 3
+
+
+# --- Epic 2 §I: missing step instruction -> repaired + blocked, never silent ----
+
+def test_missing_step_instruction_is_repaired_and_blocked():
+    from app.models import STEP_INSTR_PLACEHOLDER
+    from app.render import protocol_to_markdown
+    step = {"number": 1, "title": "Mystery step", "instruction": "",
+            "provenance": "stated", "critical_parameters": []}
+    p = base_protocol(steps=[step])
+    report = validate_and_finalize(p, fake_resolver({}))
+    # repaired to the frozen sentinel (never left blank).
+    assert step["instruction"] == STEP_INSTR_PLACEHOLDER
+    # a loud STRUCT blocker -> gate blocked (a repaired protocol can't ship clean).
+    gate = report["quality_gate"]
+    assert gate["status"] == "blocked" and gate["status_label"] == "blocked"
+    assert any(f["code"] == "STRUCT_STEP_NO_INSTRUCTION" for f in gate["errors"])
+    # a BLOCKED open_question was appended (loud, not silent).
+    assert any(q.startswith("[BLOCKED] ") for q in p["open_questions"])
+    # the renderer shows a visible marker, never a blank step.
+    assert "MISSING INSTRUCTION" in protocol_to_markdown(p)
+
+
+def test_gate_status_label_ready_on_clean_protocol():
+    p = base_protocol(steps=[_dilution_step("10")],  # correct dilution
+                      conditions=4, replicates=3, plate="96-well")
+    report = validate_and_finalize(p, fake_resolver({}))
+    assert report["quality_gate"]["status"] == "ok"
+    assert report["quality_gate"]["status_label"] == "ready"
+
+
 if __name__ == "__main__":
     import traceback
 
