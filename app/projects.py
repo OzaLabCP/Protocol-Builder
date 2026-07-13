@@ -149,6 +149,12 @@ class ValidationSummary(BaseModel):
     unverified_citation_count: int = 0
     report: dict[str, Any] | None = None
     checked_at: datetime | None = None
+    # --- Epic-3 (additive, optional/defaulted → non-breaking) ------------------
+    # Independent fix-verification axis, distinct from the Epic-2 quality_gate.
+    review_status: Literal[
+        "unknown", "verified_clean", "issues_remain", "not_reviewed"
+    ] = "unknown"
+    unresolved_finding_count: int = 0
 
 
 # ---------------------------------------------------------------------------

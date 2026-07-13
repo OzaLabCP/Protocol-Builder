@@ -17,7 +17,9 @@ worst failure mode, so every check demotes on any missing/ambiguous premise.
 
 from __future__ import annotations
 
+import hashlib
 import re
+import unicodedata
 
 # ---------------------------------------------------------------------------
 # Frozen unit tables (§5)
@@ -754,3 +756,71 @@ def run_checks(protocol: dict) -> list:
 
     findings.sort(key=lambda f: (f.get("id") or "", f.get("location") or "", f.get("code")))
     return findings
+
+
+# ---------------------------------------------------------------------------
+# Finding identity — content hash (Epic 3, §4)
+# ---------------------------------------------------------------------------
+#
+# A correctness finding's identity is a pure host-computed content hash the model
+# cannot forge. It is deliberately tolerant: two independently-worded descriptions
+# of the same defect hash to the SAME key (biasing toward merging near-duplicates —
+# the safe direction for a skeptical verifier). Severity is intentionally NOT part
+# of the basis, so identity survives severity coercion/re-sort.
+
+# The 12-value correctness-finding category enum (mirrors the category enum on
+# EMIT_CORRECTNESS_REVIEW_TOOL / EMIT_FIX_VERIFICATION_TOOL in app/schemas.py). A
+# finding whose category falls outside this set normalizes to "other", so a garbage
+# or coerced category cannot fracture identity.
+_CORRECTNESS_CATEGORIES = frozenset({
+    "missing_control", "implausible_value", "unit_or_scaling", "ordering",
+    "logic", "internal_contradiction", "ambiguous_instruction",
+    "readout_mismatch", "safety", "missing_detail", "impractical", "other",
+})
+
+# Stopwords stripped from the problem signature so a reworded description of the same
+# defect still hashes identically. Digit/percent/unit tokens are always kept verbatim.
+_STOP = frozenset(
+    "a an the is are was were be to of for and or in on at "
+    "this that it its with as no not".split()
+)
+
+
+def _collapse(s) -> str:
+    """NFKC-normalize, lowercase, whitespace-collapse, and strip a scalar.
+
+    The one shared normalizer for finding identity. Total: coerces via ``str`` and
+    never raises."""
+    s = unicodedata.normalize("NFKC", str(s or ""))
+    return re.sub(r"\s+", " ", s).strip().lower()
+
+
+def _norm_finding_parts(finding: dict) -> tuple[str, str, str]:
+    """Reduce a correctness finding to its identity basis
+    ``(category_norm, location_norm, problem_sig)``.
+
+    ``problem_sig`` is an order-independent, de-duplicated, stopword-stripped token
+    set that keeps digit/percent/unit tokens (e.g. ``9``, ``37c``, ``5ml``, ``%``),
+    so two rewordings of one defect collapse to the same signature. Severity is
+    excluded by design."""
+    if not isinstance(finding, dict):
+        finding = {}
+    cat = _collapse(finding.get("category") or "other")
+    if cat not in _CORRECTNESS_CATEGORIES:
+        cat = "other"
+    loc = _collapse(finding.get("location") or "")
+    toks = [t for t in re.split(r"[^0-9a-z%./-]+", _collapse(finding.get("problem") or ""))
+            if t and t not in _STOP]
+    problem_sig = " ".join(sorted(set(toks)))
+    return cat, loc, problem_sig
+
+
+def finding_key(finding: dict) -> str:
+    """Deterministic content hash identifying a correctness finding.
+
+    Pure and idempotent: equal ``(category, location, problem)`` yields a
+    byte-identical ``f_``-prefixed key, independent of severity, wording order,
+    casing, whitespace, and list position. No clock, no RNG, no model id."""
+    cat, loc, sig = _norm_finding_parts(finding)
+    canon = "␟".join((cat, loc, sig))      # ␟-joined (unit-separator)
+    return "f_" + hashlib.sha256(canon.encode("utf-8")).hexdigest()[:10]

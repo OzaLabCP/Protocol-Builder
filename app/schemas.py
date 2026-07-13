@@ -883,3 +883,79 @@ EMIT_CORRECTNESS_REVIEW_TOOL = {
         "required": ["verdict", "summary", "findings"],
     },
 }
+
+
+# The same 12-value category enum carried by EMIT_CORRECTNESS_REVIEW_TOOL, so a
+# fix-introduced defect can flow back into apply_correctness_fixes unchanged.
+_CORRECTNESS_CATEGORY_ENUM = [
+    "missing_control", "implausible_value", "unit_or_scaling", "ordering",
+    "logic", "internal_contradiction", "ambiguous_instruction",
+    "readout_mismatch", "safety", "missing_detail", "impractical", "other",
+]
+
+
+EMIT_FIX_VERIFICATION_TOOL = {
+    "name": "emit_fix_verification",
+    "description": (
+        "Report an INDEPENDENT, skeptical re-audit of a CORRECTED protocol. For each supplied "
+        "finding_key, judge whether that specific defect is now resolved in the corrected "
+        "protocol; also report any NEW defect the fixes introduced. Judge only the corrected "
+        "protocol shown — never trust that any fix was actually applied."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "verdict": {                          # ADVISORY only; host recomputes the gate
+                "type": "string",
+                "enum": ["sound", "issues_found", "serious_issues"],
+                "description": "Your bottom-line advisory only; the host recomputes the "
+                "gate from the per-finding outcomes and ignores this for gating.",
+            },
+            "summary": {"type": "string", "description": "One-sentence bottom line."},
+            "checks": {
+                "type": "array",
+                "description": "One entry per supplied finding_key. Echo keys verbatim; do not "
+                               "add, drop, rename, or invent keys.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "finding_key": {"type": "string"},
+                        "outcome": {
+                            "type": "string",
+                            "enum": ["confirmed_fixed", "not_applicable", "still_present",
+                                     "partially_addressed", "regressed"],
+                            "description": "confirmed_fixed ONLY with positive evidence in the "
+                                           "corrected protocol. If you cannot confirm, return "
+                                           "still_present. Absence of evidence is still_present.",
+                        },
+                        "evidence": {
+                            "type": "string",
+                            "description": "Concrete pointer INTO the corrected protocol (quote "
+                                           "the step/value/id) justifying the outcome.",
+                        },
+                    },
+                    "required": ["finding_key", "outcome", "evidence"],
+                },
+            },
+            "new_findings": {
+                "type": "array",
+                "description": "NEW defects the fixes INTRODUCED, not in the supplied set. Empty "
+                               "unless genuinely new. Most severe first.",
+                "maxItems": 5,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "severity": {"type": "string", "enum": ["critical", "major", "minor"]},
+                        "category": {"type": "string", "enum": _CORRECTNESS_CATEGORY_ENUM},
+                        "location": {"type": "string"},
+                        "problem": {"type": "string"},
+                        "fix": {"type": "string"},
+                        "citation": CITATION_SCHEMA,
+                    },
+                    "required": ["severity", "category", "problem", "fix"],
+                },
+            },
+        },
+        "required": ["verdict", "summary", "checks"],
+    },
+}

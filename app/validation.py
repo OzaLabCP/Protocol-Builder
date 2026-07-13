@@ -755,6 +755,174 @@ def validate_correctness_review(review: dict, resolver: Resolver = resolve_citat
     return report
 
 
+# --- Independent fix-verification adjudication (Epic-3) ---------------------
+
+_VERIFY_OUTCOMES = ("confirmed_fixed", "not_applicable", "still_present",
+                    "partially_addressed", "regressed")
+# Most-skeptical-wins when two checks target one key (§7.2).
+_VERIFY_SKEPTIC_RANK = {"regressed": 4, "still_present": 3, "partially_addressed": 2,
+                        "not_applicable": 1, "confirmed_fixed": 0}
+_UNRESOLVED_OUTCOMES = frozenset({"still_present", "partially_addressed", "regressed"})
+_BLOCKING_SEVERITY = frozenset({"critical", "major"})
+
+
+def assign_finding_keys(findings: list) -> list:
+    """Stamp each finding with a stable, host-computed content-hash ``_key``
+    (see checks.finding_key). Order-independent collision handling: byte-identical
+    findings that collide keep one shared key (they *are* one defect); genuinely
+    distinct findings that collide disambiguate by a hash of their own (problem, fix)
+    text — never by list position. Mutates and returns ``findings``. Idempotent."""
+    import hashlib
+    from collections import defaultdict
+
+    from .checks import finding_key
+    buckets: dict = defaultdict(list)
+    for f in findings:
+        if isinstance(f, dict):
+            buckets[finding_key(f)].append(f)
+    for k, group in buckets.items():
+        if len(group) == 1:
+            group[0]["_key"] = k
+            continue
+        for f in group:  # distinct findings collided — disambiguate order-independently
+            raw = (str(f.get("problem", "")) + "␟" + str(f.get("fix", ""))).encode("utf-8")
+            f["_key"] = k + "." + hashlib.sha256(raw).hexdigest()[:4]
+    return findings
+
+
+def build_review_status(
+    prior_findings: list, verify_result: dict, checked: bool,
+    resolver: Resolver = resolve_citation,
+) -> dict:
+    """Host-adjudicate an independent fix-verification pass into the single, host-owned
+    ``fix_verification`` object (Epic-3 §6/§7). Pure function of its inputs. The model's
+    own ``verdict`` is advisory only — the host recomputes status/flags. Skeptical by
+    construction: forged keys are dropped, omitted keys default to ``still_present``, and
+    new findings with a bad/missing severity are treated as ``major`` (blocking)."""
+    prior_findings = [f for f in (prior_findings or []) if isinstance(f, dict)]
+    assign_finding_keys(prior_findings)  # ensure _key present (idempotent)
+    verify_result = verify_result or {}
+
+    # 7.1 authoritative key set — the model can only speak to keys the host issued.
+    issued: dict = {f["_key"]: f for f in prior_findings}
+
+    # 7.2 index the model's checks; drop forged keys; keep the most skeptical on a dup key.
+    chosen: dict = {}
+    for chk in (verify_result.get("checks") or []):
+        if not isinstance(chk, dict):
+            continue
+        key = chk.get("finding_key")
+        if key not in issued:
+            continue  # forged / unknown key — the model cannot smuggle identity
+        outcome = chk.get("outcome")
+        if outcome not in _VERIFY_OUTCOMES:
+            outcome = "still_present"
+        evidence = str(chk.get("evidence") or "")
+        prev = chosen.get(key)
+        if prev is None or _VERIFY_SKEPTIC_RANK[outcome] > _VERIFY_SKEPTIC_RANK[prev[0]]:
+            chosen[key] = (outcome, evidence)
+
+    # 7.3 fill omissions skeptically + assemble findings, ordered as issued.
+    findings: list = []
+    counts = {o: 0 for o in _VERIFY_OUTCOMES}
+    for key, pf in issued.items():
+        if key in chosen:
+            outcome, evidence = chosen[key]
+        else:
+            outcome = "still_present"
+            evidence = "no verification returned — defaulting to unresolved"
+        counts[outcome] += 1
+        findings.append({
+            "finding_key": key,
+            "severity": pf.get("severity") or "major",
+            "category": pf.get("category") or "other",
+            "location": pf.get("location") or "",
+            "problem": pf.get("problem") or "",
+            "outcome": outcome,
+            "evidence": evidence,
+        })
+
+    # 7.5 new findings: verify citations, dedup against issued keys.
+    from .checks import finding_key
+    citations_checked = 0
+    new_findings: list = []
+    for nf in (verify_result.get("new_findings") or [])[:5]:
+        if not isinstance(nf, dict):
+            continue
+        nkey = finding_key(nf)
+        if nkey in issued:
+            # Recomputed key collides with a prior — reclassify as that prior's
+            # still_present; do NOT list it in new_findings, do NOT double-count.
+            existing = next((x for x in findings if x["finding_key"] == nkey), None)
+            if existing is not None and existing["outcome"] not in _UNRESOLVED_OUTCOMES:
+                counts[existing["outcome"]] -= 1
+                counts["still_present"] += 1
+                existing["outcome"] = "still_present"
+                if not existing.get("evidence"):
+                    existing["evidence"] = "re-reported as a new defect on the same finding"
+            continue
+        sev = nf.get("severity")
+        if sev not in _BLOCKING_SEVERITY and sev != "minor":
+            sev = "major"  # bad/missing severity -> safe blocking direction
+        cit = nf.get("citation")
+        resolved_cit = None
+        if cit:
+            citations_checked += 1
+            ok, resolved, _reason = check_citation(cit, resolver)
+            if ok:
+                cit["citation_verified"] = True
+                cit["url"] = cit.get("url") or (_canonical_url(resolved) if resolved else None)
+                resolved_cit = cit
+        new_findings.append({
+            "finding_key": nkey,
+            "severity": sev,
+            "category": nf.get("category") or "other",
+            "location": nf.get("location") or "",
+            "problem": nf.get("problem") or "",
+            "fix": nf.get("fix") or "",
+            "citation": resolved_cit,
+        })
+
+    # 7.6 recompute status/flags (host-authoritative; ignore the model's verdict for gating).
+    if not checked:
+        status = "not_reviewed"
+    elif all(x["outcome"] in ("confirmed_fixed", "not_applicable") for x in findings) \
+            and not new_findings:
+        status = "verified_clean"
+    else:
+        status = "issues_remain"
+
+    unresolved_blocking = (
+        any(x["severity"] in _BLOCKING_SEVERITY
+            for x in findings if x["outcome"] in _UNRESOLVED_OUTCOMES)
+        or any(nf["severity"] in _BLOCKING_SEVERITY for nf in new_findings)
+    )
+    unresolved_count = (
+        sum(x["outcome"] in _UNRESOLVED_OUTCOMES for x in findings) + len(new_findings)
+    )
+    new_blocking = sum(nf["severity"] in _BLOCKING_SEVERITY for nf in new_findings)
+
+    counts_out = dict(counts)
+    counts_out["new"] = len(new_findings)
+    counts_out["new_blocking"] = new_blocking
+    counts_out["citations_checked"] = citations_checked
+
+    return {
+        "version": 1,
+        "status": status,
+        "checked": bool(checked),
+        "reason": None if prior_findings else "no_original_findings",
+        "verdict": verify_result.get("verdict"),
+        "summary": str(verify_result.get("summary") or ""),
+        "reviewed_count": len(findings),
+        "unresolved_count": unresolved_count,
+        "unresolved_blocking": unresolved_blocking,
+        "counts": counts_out,
+        "findings": findings,
+        "new_findings": new_findings,
+    }
+
+
 def validate_assay_options(opts: dict, resolver: Resolver = resolve_citation) -> dict:
     """Verify the citation on each candidate assay (hypothesis-first discovery). Keeps
     verified literature_grounded assays (with a canonical url), downgrades unverifiable

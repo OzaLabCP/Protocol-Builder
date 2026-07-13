@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from . import config, literature
+from .checks import finding_key
 from .llm import OpenRouterClient
 from .prompts import (
     CHOOSE_ASSAY_INSTRUCTION,
@@ -36,6 +37,7 @@ from .prompts import (
     DESIGN_ALIGNMENT_INSTRUCTION,
     DESIGN_REVIEW_INSTRUCTION,
     DISCOVERY_SYSTEM_PROMPT,
+    FIX_VERIFICATION_INSTRUCTION,
     SYSTEM_ASK,
     SYSTEM_EMIT,
     SYSTEM_PROMPT,
@@ -45,6 +47,7 @@ from .schemas import (
     EMIT_CORRECTNESS_REVIEW_TOOL,
     EMIT_DESIGN_ALIGNMENT_TOOL,
     EMIT_DESIGN_REVIEW_TOOL,
+    EMIT_FIX_VERIFICATION_TOOL,
     EMIT_PROTOCOL_TOOL,
     REQUEST_CLARIFICATIONS_TOOL,
     SEARCH_PREPRINTS_TOOL,
@@ -79,6 +82,7 @@ class Session:
     #                            False: lossy host extraction (PDF) — confirm-only, don't accuse
     assay_options: Optional[dict] = None  # validated emit_assay_options payload
     chosen_assay: Optional[dict] = None  # the picked assay dict (for brief + export)
+    protocol: Optional[dict] = None  # last emitted/corrected protocol (post-apply, ensure_ids'd)
     grounding_log: list = field(default_factory=list)  # queries the app ran
     grounding_call_ids: list = field(default_factory=list)  # tool_call_ids of grounding results (for compaction)
 
@@ -235,6 +239,41 @@ def _compact_grounding(session: Session) -> None:
                 and isinstance(msg.get("content"), str) and len(msg["content"]) > 400):
             msg["content"] = ("[earlier grounding-search results omitted to save tokens; "
                               "the grounded values and their citations are in the protocol above]")
+
+
+def _render_verification_input(corrected: dict, prior_findings: list) -> str:
+    """Build the ONE user message for an independent fix-verification run.
+
+    Contains exactly: (1) the corrected protocol as JSON (already ensure_ids'd by the
+    caller); (2) the prior findings to verify, each rendered with its host ``_key`` as
+    ``finding_key`` (verbatim, must be echoed) plus severity/category/location/problem and
+    the ``fix`` supposedly applied; (3) FIX_VERIFICATION_INSTRUCTION. It deliberately omits
+    the apply-instruction turn, the review's verdict/summary/strengths, and the original
+    pre-fix protocol body, so the verifier judges only the corrected artifact."""
+    findings_view = []
+    for f in prior_findings or []:
+        if not isinstance(f, dict):
+            continue
+        findings_view.append({
+            "finding_key": f.get("_key") or finding_key(f),
+            "severity": f.get("severity"),
+            "category": f.get("category"),
+            "location": f.get("location"),
+            "problem": f.get("problem"),
+            "fix": f.get("fix"),
+        })
+    parts = [
+        "=== CORRECTED PROTOCOL (JSON) ===",
+        json.dumps(corrected, indent=2, ensure_ascii=False, default=str),
+        "",
+        "=== PRIOR FINDINGS TO VERIFY ===",
+        "Each finding below was raised against an EARLIER draft and someone claims to have "
+        "fixed it. Echo each finding_key VERBATIM; return exactly one check per key.",
+        json.dumps(findings_view, indent=2, ensure_ascii=False, default=str),
+        "",
+        FIX_VERIFICATION_INSTRUCTION,
+    ]
+    return "\n".join(parts)
 
 
 class GapFillerAgent:
@@ -687,3 +726,31 @@ class GapFillerAgent:
         return self._followup(session, instruction, "emit_protocol", EMIT_PROTOCOL_TOOL,
                               compact=True, system=self.system_emit, model=self.model,
                               effort=self.effort, progress=progress)
+
+    # -- Independent fix verification (fresh, ephemeral context) ----------------
+    def verify_fixes(self, session: Session, prior_findings: list,
+                     progress: Optional[Any] = None) -> dict:
+        """Independent, fresh-context re-review of the CORRECTED protocol against the
+        prior findings. Builds its OWN throwaway transcript via ``_run`` — the live
+        session's apply turn and armed emit are NEVER shown to it and are NOT mutated,
+        so this is safe to run after apply. Returns the raw verification dict
+        (``dict(block.input)``); the host adjudicates it into ``fix_verification``.
+
+        Grounding tools are included so an implausible_value / unit_or_scaling claim can
+        be re-derived independently, bounded by PUBMED_BUDGET."""
+        corrected = session.protocol                      # post-apply, already ensure_ids'd
+        payload = _render_verification_input(corrected, prior_findings)
+        messages = [{"role": "user", "content": payload}]  # throwaway local list
+        state = RunState(session=session, searches_left=config.PUBMED_BUDGET, progress=progress)
+        block = self._run(
+            messages,
+            _grounding_tools() + [EMIT_FIX_VERIFICATION_TOOL],
+            "emit_fix_verification",
+            state,
+            system=self.system_prompt,
+            model=self.model,
+            effort=self.effort,
+        )
+        if block is None:
+            raise AgentError("Verifier ended without calling emit_fix_verification.")
+        return dict(block.input)

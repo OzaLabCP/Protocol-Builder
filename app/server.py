@@ -61,6 +61,7 @@ from .render import (
     protocol_to_markdown,
 )
 from .validation import (
+    build_review_status,
     validate_and_finalize,
     validate_assay_options,
     validate_correctness_review,
@@ -150,6 +151,7 @@ class Store:
     design_review: Optional[dict] = None
     design_alignment: Optional[dict] = None
     correctness_review: Optional[dict] = None
+    fix_verification: Optional[dict] = None  # last independent fix-verification outcome
     assay_options: Optional[dict] = None
     chosen_assay: Optional[dict] = None
     # Live activity feed for the current long op: [{seq, msg}], polled by the client.
@@ -511,9 +513,17 @@ def critique(req: CritiqueRequest) -> dict:
                 raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
             except Exception as exc:  # noqa: BLE001
                 raise HTTPException(500, _explain(exc))
-            result = _finish(req.session_id, store, protocol, source_op="critique_apply")
-            store.correctness_review = None  # the review is stale against the rebuilt protocol
-            return {**result, "correctness_review": review, "review_validation_report": report,
+            # Independent, fresh-context re-review of the corrected protocol against the
+            # ORIGINAL findings. Computed BEFORE _finish so the review gate feeds the
+            # persisted ProtocolVersion.result and the project's validation_summary.
+            fixv = _verify_fixes(store, findings)
+            result = _finish(req.session_id, store, protocol,
+                             source_op="critique_apply", fix_verification=fixv)
+            store.correctness_review = None  # stale as an actionable to-apply list
+            store.fix_verification = fixv    # retain the verification outcome
+            # result already carries fix_verification + review_status via _finish.
+            return {**result,
+                    "correctness_review": review, "review_validation_report": report,
                     "applied": True, "fixes_applied": len(fixable)}
 
         store.correctness_review = review
@@ -540,8 +550,14 @@ def apply_fixes(req: DesignRequest) -> dict:
             raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(500, _explain(exc))
-        store.correctness_review = None  # the review is stale against the rebuilt protocol
-        return _finish(req.session_id, store, protocol, source_op="apply_fixes")
+        # Independent re-review of the corrected protocol against the ORIGINAL findings,
+        # computed BEFORE _finish so the review gate feeds the persisted version/summary.
+        fixv = _verify_fixes(store, findings)
+        result = _finish(req.session_id, store, protocol,
+                         source_op="apply_fixes", fix_verification=fixv)
+        store.correctness_review = None  # stale as an actionable to-apply list
+        store.fix_verification = fixv    # retain the verification outcome
+        return result  # already carries fix_verification + review_status
 
 
 @app.post("/api/align", dependencies=_MUTATING)
@@ -749,7 +765,36 @@ def _auto_review(session_id: str, store: Store, result: dict) -> dict:
     return {**result, "correctness_review": review, "auto_review": True, "fixes_applied": applied}
 
 
-def _finish(session_id: str, store: Store, protocol: dict, source_op: str = "resolve") -> dict:
+def _verify_fixes(store: Store, original_findings: list) -> dict:
+    """Best-effort independent re-review of the CORRECTED protocol against the ORIGINAL
+    (pre-fix) findings. Runs on a fresh, ephemeral transcript (the apply turn is never
+    shown to it). Never blocks delivery — any failure yields a `not_reviewed`
+    fix_verification and the corrected protocol is still returned (mirrors the
+    _persist_protocol_version / _auto_review best-effort discipline)."""
+    fixable = [f for f in (original_findings or []) if isinstance(f, dict) and f.get("fix")]
+    if not fixable:
+        return build_review_status([], {}, checked=False)  # -> not_reviewed / no_original_findings
+    try:
+        # Feed the corrected protocol (already stored by _finish) to the independent verifier.
+        store.session.protocol = store.protocol
+        store.note("Independently re-checking that each fix actually landed…")
+        verification = get_agent().verify_fixes(store.session, fixable, progress=store.note)
+        return build_review_status(fixable, verification, checked=True)
+    except Exception as exc:  # noqa: BLE001 — best-effort, never block delivery
+        _log.warning("fix-verification skipped: %s", type(exc).__name__)
+        store.note("Independent re-check couldn't run — protocol delivered as corrected.")
+        fv = build_review_status(fixable, {}, checked=False)
+        fv["reason"] = "verifier_error"
+        return fv
+
+
+def _finish(
+    session_id: str,
+    store: Store,
+    protocol: dict,
+    source_op: str = "resolve",
+    fix_verification: dict | None = None,
+) -> dict:
     report = validate_and_finalize(
         protocol,
         allow_stated=(store.session.source_kind != "hypothesis"),
@@ -772,13 +817,19 @@ def _finish(session_id: str, store: Store, protocol: dict, source_op: str = "res
         "project_id": store.project_id,
         "protocol_version_id": None,
     }
+    if fix_verification is not None:
+        # Epic-3 additive keys: host-owned object + compact string mirror.
+        r["fix_verification"] = fix_verification
+        r["review_status"] = fix_verification.get("status")
     if store.project_id:
         # Server-authoritative persistence: one _finish == one ProtocolVersion. Best-effort —
         # a store failure never breaks protocol delivery (the response is still returned).
         try:
             vid = new_version_id()
             r["protocol_version_id"] = vid  # embed before snapshotting so result is complete
-            _persist_protocol_version(store, protocol, report, r, source_op, vid)
+            _persist_protocol_version(
+                store, protocol, report, r, source_op, vid, fix_verification
+            )
         except Exception as exc:  # noqa: BLE001
             _log.warning("protocol-version persist skipped: %s", type(exc).__name__)
             r["protocol_version_id"] = None
@@ -877,9 +928,16 @@ def _mark_failed(project_id: Optional[str]) -> None:
         _log.warning("mark_failed suppressed: %s", type(exc).__name__)
 
 
-def _validation_summary_from_report(report: dict) -> ValidationSummary:
+def _validation_summary_from_report(
+    report: dict, fix_verification: dict | None = None
+) -> ValidationSummary:
     """Denormalize the validation report into the project's ValidationSummary. Counts are
-    best-effort (the report has no top-level status); the full report is retained."""
+    best-effort (the report has no top-level status); the full report is retained.
+
+    The optional `fix_verification` (Epic-3) is a DISTINCT report axis from the Epic-2
+    `quality_gate`; both feed the single `status` via a monotone-toward-blocked combiner.
+    Legacy callers pass no `fix_verification` ⇒ escalation branches are dead and the
+    derived status/counts are byte-identical to before."""
     report = report or {}
     downgraded = len(report.get("downgraded") or [])
     stated = len(report.get("stated_downgrades") or [])
@@ -903,6 +961,15 @@ def _validation_summary_from_report(report: dict) -> ValidationSummary:
     else:
         status = "clean"
 
+    # --- Epic-3 review gate: monotone escalation toward `blocked` --------------
+    fv = fix_verification or {}
+    review_status = fv.get("status", "unknown")
+    unresolved = int(fv.get("unresolved_count", 0) or 0)
+    if fv.get("unresolved_blocking"):
+        status = "blocked"  # an unresolved critical/major review finding blocks
+    elif review_status == "issues_remain" and status == "clean":
+        status = "warnings"  # minor-only unresolved → warn, never block
+
     return ValidationSummary(
         status=status,
         error_count=error_count,
@@ -910,6 +977,8 @@ def _validation_summary_from_report(report: dict) -> ValidationSummary:
         unverified_citation_count=unverified_citation_count,
         report=report,
         checked_at=datetime.now(timezone.utc),
+        review_status=review_status,
+        unresolved_finding_count=unresolved,
     )
 
 
@@ -923,7 +992,13 @@ _PROVENANCE_BY_OP = {
 
 
 def _persist_protocol_version(
-    store: Store, protocol: dict, report: dict, result: dict, source_op: str, version_id: str
+    store: Store,
+    protocol: dict,
+    report: dict,
+    result: dict,
+    source_op: str,
+    version_id: str,
+    fix_verification: dict | None = None,
 ) -> None:
     """Write a ProtocolVersion row, then update the project (append version_id, set
     current_protocol_version_id, refresh validation_summary/title, advance lifecycle to
@@ -945,7 +1020,7 @@ def _persist_protocol_version(
     )
     _STORE.save_protocol_version(ver)
 
-    summary = _validation_summary_from_report(report)
+    summary = _validation_summary_from_report(report, fix_verification)
     title = (protocol.get("title") or "").strip()
 
     def mutate(p):

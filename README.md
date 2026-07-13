@@ -129,6 +129,32 @@ review follow-ups sit next to the protocol: **Design review** (the experiment ar
 **Test a hypothesis** (does it directly test your hypothesis); **Re-review & fix** re-runs the
 audit on demand (e.g. after a manual refine).
 
+### Review as a gate
+
+Applying fixes isn't taken on faith. After either apply path (`POST /api/critique {apply:true}`
+or `POST /api/apply_fixes`) rebuilds the corrected protocol, the host runs **one independent,
+fresh-context re-review** of the *corrected* artifact against the original findings. The verifier
+is a hostile auditor: it runs on a **from-scratch transcript** that never shows the "I just applied
+these fixes" turn, so it can't rubber-stamp — it judges only the protocol in front of it and must
+quote positive evidence to call a defect fixed.
+
+- **Per-finding verdicts.** Each original finding is judged into one of five outcomes —
+  `confirmed_fixed`, `not_applicable`, `still_present`, `partially_addressed`, or `regressed`.
+  Identity is a **host-computed content hash** (`finding_key`, severity-excluded so it survives
+  re-sorting) that the model can't forge, rename, or invent: keys it didn't receive are dropped,
+  and any finding the model stays silent on defaults to `still_present`. The verifier also reports
+  new defects its own fixes introduced.
+- **`review_status`.** The host — not the model — adjudicates the result into a single
+  `fix_verification` object plus a compact string mirror `review_status` ∈
+  `verified_clean` (every finding `confirmed_fixed`/`not_applicable`, no new defects),
+  `issues_remain` (something is still open), or `not_reviewed` (the pass couldn't run). A verifier
+  failure never blocks delivery — the corrected protocol is still returned, marked `not_reviewed`.
+- **It gates the project.** `review_status` feeds `ValidationSummary.status` monotonically toward
+  `blocked`: an unresolved **critical/major** prior or new finding escalates the summary to
+  `blocked`; a minor-only `issues_remain` escalates a `clean` summary to `warnings`;
+  `verified_clean` and `not_reviewed` never loosen it. This stays a **distinct axis** from the
+  deterministic Epic-2 quality gate — both feed the one status.
+
 ## Projects & intake (durable layer)
 
 Above the in-memory run engine sits a thin, **durable projects layer** (SQLite). A

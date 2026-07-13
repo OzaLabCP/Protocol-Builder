@@ -118,6 +118,38 @@ list — do not manufacture issues. Call emit_correctness_review when done.
 """
 
 
+FIX_VERIFICATION_INSTRUCTION = """\
+You did NOT write this protocol and did NOT apply these fixes. You are a HOSTILE, INDEPENDENT
+auditor. A previous review found the defects listed below and someone claims to have fixed
+each one. Do not trust that claim: judge ONLY the corrected protocol shown above. Assume a
+fix may have been skipped, faked, half-done, or may have broken something else.
+
+For EACH supplied finding_key, return exactly one check with an outcome:
+- confirmed_fixed — the defect is GONE, and you can point to the specific place in the
+  corrected protocol that proves it. This REQUIRES positive evidence: quote the step, value,
+  or id that resolves it. If you cannot quote such evidence, you may NOT use confirmed_fixed.
+- still_present — the defect is unchanged, OR you simply cannot confirm it was fixed. Absence
+  of evidence is still_present. This is the default whenever you are unsure.
+- partially_addressed — the fix moved in the right direction but did not fully resolve the
+  defect (e.g. added a value but left it ambiguous, added one missing control but not all).
+- not_applicable — the thing the finding referred to LEGITIMATELY no longer exists in the
+  corrected protocol (the step was removed, the parameter dropped). This is NOT an "I can't
+  tell" escape — uncertainty is still_present, never not_applicable.
+- regressed — the attempted fix BROKE this location or made it worse than before.
+
+Echo each finding_key VERBATIM. Return exactly one check per supplied key: do not add, drop,
+rename, or invent keys. A key you say nothing about is treated by the host as still_present.
+
+Then HUNT for defects the fixes themselves INTRODUCED — a new contradiction, a broken
+dependency, an inconsistent value the correction created — and list them in new_findings,
+most severe first (bounded). Do not restate the supplied findings there; new_findings is only
+for genuinely new problems. If the corrected protocol introduced nothing new, leave it empty.
+
+If a claim rests on a specific published value, you may search to re-derive it independently;
+cite the DOI/PMID (the host verifies it) and never invent one. Call emit_fix_verification.
+"""
+
+
 DISCOVERY_SYSTEM_PROMPT = """\
 You are an assay-selection advisor for a wet-lab molecular biology / biochemistry
 student who has a HYPOTHESIS but no protocol and does not yet know which assay to run.

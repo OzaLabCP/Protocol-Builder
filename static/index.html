@@ -71,6 +71,7 @@
   .cite { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
   .badge-ok { color: var(--stated); font-weight: 700; }
   .badge-warn { color: var(--verify); font-weight: 700; }
+  .badge-bad { color: #e5484d; font-weight: 700; }
   .badge-src { color: var(--muted); font-weight: 600; font-size: 11.5px; border: 1px solid var(--line); border-radius: 6px; padding: 0 5px; margin-left: 4px; }
   details.evidence { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
   details.evidence summary { cursor: pointer; color: var(--lit); font-weight: 600; }
@@ -640,6 +641,8 @@ function renderResult(r) {
     const host = $("#critique-anchor");
     if (host) { host.innerHTML = ""; host.appendChild(el("p", "hint", "⚠ The automatic correctness audit couldn't run this time. Use “Re-review & fix” to run it manually.")); }
   }
+  // Independent fix-verification block (Epic-3). Absent key (older result or verify skipped) ⇒ nothing rendered.
+  if (r.fix_verification) renderFixVerification(r.fix_verification);
   if (PROJECT) onProtocolRendered(r);
 }
 
@@ -782,6 +785,7 @@ function renderProtocol(p) {
   P.appendChild(el("div", null, "")).id = "align-anchor";
   P.appendChild(el("div", null, "")).id = "design-anchor";
   P.appendChild(el("div", null, "")).id = "critique-anchor";
+  P.appendChild(el("div", null, "")).id = "verify-anchor";
   const changes = protocolDiff(PREV_PROTOCOL, p);
   if (changes.length) P.appendChild(diffBox(changes));
   P.appendChild(validationSummary(p.validation_report));
@@ -1019,6 +1023,84 @@ function renderCritique(r, applied, count) {
   }
   host.appendChild(box);
   box.scrollIntoView({ behavior: "smooth" });
+}
+
+// Independent fix-verification (Epic-3). Host-owned `fix_verification` object. Every field access
+// is guarded so an older result, a partial object, or a skipped verify degrades to a sensible
+// panel (or nothing) rather than crashing renderResult.
+const _OUTCOME_META = {
+  confirmed_fixed: { cls: "badge-ok", label: "✓ fixed" },
+  not_applicable: { cls: "muted small", label: "— n/a" },
+  still_present: { cls: "badge-bad", label: "✗ still present" },
+  partially_addressed: { cls: "badge-warn", label: "◐ partial" },
+  regressed: { cls: "badge-warn", label: "⚠ regressed" },
+};
+
+function renderFixVerification(v) {
+  const host = $("#verify-anchor");
+  if (!host) return;                 // anchor absent (older DOM) — nothing to mount into
+  host.innerHTML = "";
+  if (!v || typeof v !== "object") return;  // guard against a truthy-but-unusable value
+
+  const c = (v.counts && typeof v.counts === "object") ? v.counts : {};
+  const num = (x) => (typeof x === "number" && isFinite(x)) ? x : 0;
+  const confirmed = num(c.confirmed_fixed);
+  const reviewed = num(v.reviewed_count);
+  const remaining = num(c.still_present) + num(c.partially_addressed);
+  const regressed = num(c.regressed);
+  const brandNew = num(c.new);
+
+  const box = el("div", "design");
+  box.appendChild(el("h2", null, "🛡 Independent fix verification"));
+  box.appendChild(el("p", "muted small", "A separate, fresh-context adversarial re-audit of the corrected protocol — it never saw the fixes being applied and confirms each defect against the corrected steps. Unconfirmable defects default to <b>still present</b>."));
+
+  // Headline (always renderable, even from an empty/partial object).
+  let headline = `${confirmed} of ${reviewed} issues verified fixed, ${remaining} still present`;
+  if (regressed) headline += `, ${regressed} regressed`;
+  if (brandNew) headline += `, ${brandNew} new`;
+  box.appendChild(el("p", null, "<b>" + esc(headline) + "</b>"));
+
+  // Status badge.
+  const status = v.status;
+  if (status === "verified_clean") box.appendChild(el("p", "badge-ok", "✅ All fixes independently verified"));
+  else if (status === "issues_remain") box.appendChild(el("p", "badge-warn", "⚠️ Some issues remain after fixes"));
+  else box.appendChild(el("p", "muted", "Independent re-check couldn't run — fixes are unconfirmed"));  // not_reviewed / absent / unknown
+
+  if (v.summary) box.appendChild(el("p", null, esc(v.summary)));
+
+  // Per-finding outcome rows.
+  const findings = Array.isArray(v.findings) ? v.findings.filter((f) => f && typeof f === "object") : [];
+  findings.forEach((f) => {
+    const om = _OUTCOME_META[f.outcome] || { cls: "muted", label: esc(f.outcome || "") };
+    const card = el("div", "finding");
+    const head = [
+      `<span class="${om.cls}">${om.label}</span>`,
+      f.location ? esc(f.location) : "",
+      f.category ? `<span class="muted small">(${esc(f.category)})</span>` : "",
+    ].filter(Boolean).join(" — ");
+    card.appendChild(el("div", "finding-head", head));
+    if (f.problem) card.appendChild(el("p", null, `<b>Problem.</b> ${esc(f.problem)}`));
+    if (f.evidence) card.appendChild(el("p", "muted small", `Evidence: ${esc(f.evidence)}`));
+    box.appendChild(card);
+  });
+
+  // Newly-introduced defects — rendered like renderCritique cards via _SEV_META.
+  const news = Array.isArray(v.new_findings) ? v.new_findings.filter((f) => f && typeof f === "object") : [];
+  if (news.length) {
+    box.appendChild(el("h3", null, "Newly introduced by the fixes"));
+    news.forEach((f) => {
+      const meta = _SEV_META[f.severity] || { label: esc(f.severity || ""), cls: "" };
+      const card = el("div", "finding " + meta.cls);
+      const head = [meta.label, f.location ? esc(f.location) : "", f.category ? `<span class="muted small">(${esc(f.category)})</span>` : ""].filter(Boolean).join(" — ");
+      card.appendChild(el("div", "finding-head", head));
+      if (f.problem) card.appendChild(el("p", null, `<b>Problem.</b> ${esc(f.problem)}`));
+      if (f.fix) card.appendChild(el("p", null, `<b>Fix.</b> ${esc(f.fix)}`));
+      if (f.citation) card.appendChild(el("p", "muted small", "Evidence: " + esc(f.citation.identifier || "") + (f.citation_verified ? " ✓" : "")));
+      box.appendChild(card);
+    });
+  }
+
+  host.appendChild(box);
 }
 
 function requestAlignment(btn) {
