@@ -231,8 +231,9 @@ class _FakeLLM:
     def __init__(self, queue):
         self.queue = list(queue); self.calls = []
 
-    def chat(self, messages, tools=None, tool_choice=None, model=None, effort=None):
-        self.calls.append({"tool_choice": tool_choice, "model": model, "effort": effort})
+    def chat(self, messages, tools=None, tool_choice=None, model=None, effort=None, max_tokens=None):
+        self.calls.append({"tool_choice": tool_choice, "model": model, "effort": effort,
+                           "max_tokens": max_tokens})
         return self.queue.pop(0)
 
 
@@ -276,6 +277,82 @@ def test_finish_keeps_stated_on_paper_session():
         assert r.json()["protocol"]["materials"][0]["provenance"] == "stated"
     finally:
         srv._SESSIONS.pop(sid, None); srv._agent = None
+
+
+def test_progress_feed_accumulates_and_filters():
+    proto = {"title": "P", "summary": "s", "estimated_duration": "1 h",
+             "materials": [], "steps": [], "assumptions_log": []}
+    _install_agent([_tool_msg("emit_protocol", proto, "e1")])  # audit skips (empty queue)
+    sid = "progfeed"
+    srv._SESSIONS[sid] = srv.Store(
+        session=Session(source_kind="paper", request_tool_use_id="c1",
+                        messages=[{"role": "user", "content": "seed"}]),
+        created=_time.time())
+    try:
+        # a poll for an unknown/expired session returns empty, never 404
+        assert client.get("/api/progress/nope").json() == {"steps": []}
+        r = client.post("/api/resolve", json={"session_id": sid, "answers": []})
+        assert r.status_code == 200
+        steps = client.get(f"/api/progress/{sid}").json()["steps"]
+        msgs = [s["msg"] for s in steps]
+        assert any("Drafting" in m for m in msgs)     # stage note emitted
+        assert msgs[-1] == "Done."
+        assert [s["seq"] for s in steps] == list(range(1, len(steps) + 1))  # monotonic
+        # `after` returns only newer steps; past the end -> empty
+        later = client.get(f"/api/progress/{sid}", params={"after": steps[0]["seq"]}).json()["steps"]
+        assert later and later[0]["seq"] == steps[0]["seq"] + 1
+        assert client.get(f"/api/progress/{sid}", params={"after": steps[-1]["seq"]}).json() == {"steps": []}
+    finally:
+        srv._SESSIONS.pop(sid, None); srv._agent = None
+
+
+def test_discover_progress_feed_pre_session():
+    opts = {"usable": True, "hypothesis_restated": "H",
+            "assays": [{"id": "fp", "name": "FP", "measures": "m", "why_tests_hypothesis": "w",
+                        "critical_comparison": "c", "throughput": "high", "difficulty": "low",
+                        "materials_burden": "cheap", "key_limitation": "k", "provenance": "best_practice"}],
+            "recommended_assay_id": "fp", "recommendation_rationale": "r"}
+    _install_agent([_tool_msg("emit_assay_options", opts, "a1")])
+    pid = "pid-abc"
+    try:
+        assert client.get(f"/api/progress/{pid}").json() == {"steps": []}  # nothing before the call
+        r = client.post("/api/discover", json={"hypothesis": "Does X increase Y binding?",
+                                               "progress_id": pid})
+        assert r.status_code == 200
+        steps = client.get(f"/api/progress/{pid}").json()["steps"]
+        assert any("candidate assays" in s["msg"] for s in steps)  # pre-session stage note recorded
+        assert [s["seq"] for s in steps] == list(range(1, len(steps) + 1))
+    finally:
+        srv._agent = None
+        srv._PRE.pop(pid, None)
+
+
+def test_autopick_feed_includes_build_notes_via_mirror():
+    # auto_pick runs discover+choose+build in one request; the build's session-keyed notes
+    # must mirror into the pre-session feed the client polls, so it doesn't go silent.
+    opts = {"usable": True, "hypothesis_restated": "H",
+            "assays": [{"id": "fp", "name": "FP", "measures": "m", "why_tests_hypothesis": "w",
+                        "critical_comparison": "c", "throughput": "high", "difficulty": "low",
+                        "materials_burden": "cheap", "key_limitation": "k", "provenance": "best_practice"}],
+            "recommended_assay_id": "fp", "recommendation_rationale": "r"}
+    proto = {"title": "P", "summary": "s", "estimated_duration": "1 h",
+             "materials": [], "steps": [], "assumptions_log": []}
+    _install_agent([
+        _tool_msg("emit_assay_options", opts, "a1"),
+        _tool_msg("request_clarifications", {"usable": True, "gaps": []}, "c1"),
+        _tool_msg("emit_protocol", proto, "e1"),
+    ])
+    pid = "pid-auto"
+    try:
+        r = client.post("/api/discover", json={"hypothesis": "Does X increase Y binding?",
+                                               "auto_pick": True, "progress_id": pid})
+        assert r.status_code == 200
+        msgs = [s["msg"] for s in client.get(f"/api/progress/{pid}").json()["steps"]]
+        assert any("candidate assays" in m for m in msgs)  # discovery phase (direct pre-note)
+        assert any("Drafting" in m for m in msgs)          # build phase (mirrored from store.note)
+    finally:
+        srv._agent = None
+        srv._PRE.pop(pid, None)
 
 
 def test_discover_autopick_runs_full_flow():

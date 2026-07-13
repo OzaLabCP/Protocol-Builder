@@ -49,10 +49,12 @@ class OpenRouterClient:
         tool_choice: Optional[Any] = None,
         model: Optional[str] = None,
         effort: Optional[str] = None,
+        max_tokens: Optional[int] = None,
     ) -> dict:
         """Call /chat/completions and return the parsed JSON dict (OpenAI shape). `effort`
         overrides the reasoning.effort for this call (None -> the heavy-phase default);
-        pass "" to omit reasoning entirely for a call."""
+        pass "" to omit reasoning entirely for a call. `max_tokens` overrides the output
+        ceiling for this call (None -> config.MAX_TOKENS)."""
         if not self.api_key:
             raise LLMError(
                 "OPENROUTER_API_KEY is not set. Get a key at openrouter.ai and export it."
@@ -62,8 +64,9 @@ class OpenRouterClient:
             payload["tools"] = tools
         if tool_choice is not None:
             payload["tool_choice"] = tool_choice
-        if config.MAX_TOKENS:
-            payload["max_tokens"] = config.MAX_TOKENS
+        mt = max_tokens if max_tokens is not None else config.MAX_TOKENS
+        if mt:
+            payload["max_tokens"] = mt
         eff = effort if effort is not None else config.REASONING_EFFORT
         if config.SEND_REASONING and eff:
             # OpenRouter's reasoning.effort — honored by reasoning-capable models there.

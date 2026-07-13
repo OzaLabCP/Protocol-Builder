@@ -35,7 +35,7 @@
   button:disabled { opacity: .5; cursor: default; }
   .muted { color: var(--muted); font-size: 13px; }
   .small { font-size: 12px; margin: 8px 0 0; }
-  .hidden { display: none; }
+  .hidden { display: none !important; }  /* utility: must beat later display-setting rules (e.g. .busy) */
   .or { text-align: center; color: var(--muted); font-size: 12px; margin: 12px 0; letter-spacing: .1em; }
   .filebtn { display: inline-flex; align-items: center; gap: 10px; border: 1px dashed var(--line);
     border-radius: 8px; padding: 12px 14px; cursor: pointer; background: var(--panel2); width: 100%; }
@@ -133,6 +133,35 @@
   .diff ins { color: var(--stated); text-decoration: none; background: rgba(74,192,122,.12); }
   .diff del { color: var(--danger); background: rgba(239,106,106,.12); }
   .hint { color: var(--muted); font-size: 12.5px; margin: 6px 0 0; }
+  @keyframes gf-spin { to { transform: rotate(360deg); } }
+  .busy {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 12px; z-index: 1000;
+    background: var(--panel2); border: 1px solid var(--accent); border-radius: 999px;
+    padding: 12px 20px; box-shadow: 0 8px 28px rgba(0,0,0,.5); max-width: min(92vw, 640px);
+    pointer-events: none;  /* a status pill must never eat clicks on the page beneath it */
+  }
+  .busy .busy-x { pointer-events: auto; }  /* except its own dismiss button */
+  .busy .spin {
+    flex: 0 0 auto; width: 18px; height: 18px; border-radius: 50%;
+    border: 2.5px solid var(--line); border-top-color: var(--accent);
+    animation: gf-spin .8s linear infinite;
+  }
+  .busy .busy-msg { color: var(--text); font-size: 13.5px; }
+  .busy.as-error { border-color: var(--danger); }
+  .busy.as-error .busy-msg { color: var(--danger); }
+  .busy .busy-x { background: transparent; border: 0; color: var(--muted); font-size: 14px;
+    line-height: 1; padding: 0 2px; margin-left: 2px; cursor: pointer; font-weight: 700; }
+  .btn:disabled, button:disabled { cursor: default; }
+  #activity-panel { border-color: var(--accent); }
+  #activity-panel h2 { margin: 0; font-size: 15px; }
+  ul.activity { list-style: none; margin: 10px 0 0; padding: 0; max-height: 240px; overflow-y: auto;
+    font: 12.5px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  ul.activity li { color: var(--muted); padding: 3px 0 3px 20px; position: relative; }
+  ul.activity li::before { content: "▸"; position: absolute; left: 4px; color: var(--accent); }
+  ul.activity li:last-child { color: var(--text); }
+  ul.activity li:last-child::before { content: "▸"; animation: gf-pulse 1s ease-in-out infinite; }
+  @keyframes gf-pulse { 50% { opacity: .35; } }
   @media print {
     body { background: #fff; color: #000; }
     header, #input-panel, #questions-panel, #discovery-panel, #assays-panel, .modebar, .noprint, .toolbar, .refine { display: none !important; }
@@ -228,8 +257,18 @@
     </div>
   </section>
 
+  <section class="panel hidden noprint" id="activity-panel">
+    <h2>Working… <span class="muted small" style="font-weight:400">live activity — what the model is doing</span></h2>
+    <ul id="activity" class="activity"></ul>
+  </section>
+
   <section class="panel hidden" id="result-panel"></section>
 </main>
+
+<div id="busy" class="busy hidden noprint" role="status" aria-live="polite">
+  <span class="spin"></span><span class="busy-msg"></span>
+  <button type="button" class="busy-x hidden" aria-label="Dismiss">✕</button>
+</div>
 
 <script>
 const $ = (s) => document.querySelector(s);
@@ -337,37 +376,47 @@ function discoverBody(autoPick) {
     },
   };
 }
+function newPid() {
+  try { return crypto.randomUUID(); } catch (e) { return "p" + Date.now() + Math.floor(Math.random() * 1e6); }
+}
 async function runDiscover(autoPick) {
   const body = discoverBody(autoPick);
   if (body.hypothesis.length < 12) { discStatus("State a hypothesis or goal (a sentence).", true); return; }
+  const pid = newPid(); body.progress_id = pid;
   discLock(true, autoPick ? "Finding and picking the best assay…" : "Searching the literature for the best assays to test this… (this can take a minute)");
+  startProgress(pid);
   try {
     const r = await postJSON("/api/discover", body);
     handlePhase(r);
   } catch (e) { discStatus(e.message, true); }
   discLock(false);
+  stopProgress();
 }
 $("#discover").onclick = () => runDiscover(false);
 $("#autopick").onclick = () => runDiscover(true);
-function discStatus(msg, isErr) { const s = $("#disc-status"); s.textContent = msg || ""; s.className = isErr ? "err" : "muted"; }
+function discStatus(msg, isErr) { const s = $("#disc-status"); s.textContent = msg || ""; s.className = isErr ? "err" : "muted"; setToast(msg, isErr); }
 function discLock(on, msg) { $("#discover").disabled = on; $("#autopick").disabled = on; discStatus(on ? (msg || "Working…") : ""); }
 
 $("#analyze").onclick = async () => {
   const file = $("#pdf").files[0];
   const text = $("#methods").value.trim();
   if (!file && text.length < 40) { setStatus("Paste a Methods section or choose a PDF.", true); return; }
+  const pid = newPid();
   lock(true, file ? "Reading the PDF and scoping gaps… (this can take a minute or two)"
                   : "Reading the methods and scoping gaps… (this can take a minute)");
+  startProgress(pid);
   try {
     const fd = new FormData();
     if (file) fd.append("file", file); else fd.append("methods_text", text);
     const hyp = $("#hypothesis").value.trim();
     if (hyp) fd.append("hypothesis", hyp);
+    fd.append("progress_id", pid);
     HYP = hyp;
     const r = await postForm("/api/analyze", fd);
     handlePhase(r);
   } catch (e) { setStatus(e.message, true); }
   lock(false);
+  stopProgress();
 };
 
 function handlePhase(r) {
@@ -421,12 +470,17 @@ function renderAssays(opts) {
 async function chooseAssay(assayId, btn) {
   const buttons = document.querySelectorAll("#assays button");
   buttons.forEach((b) => (b.disabled = true));
-  setStatus("Drafting a protocol for this assay… (this can take a minute)");
+  const orig = btn ? btn.textContent : "";
+  if (btn) btn.textContent = "⏳ Drafting protocol…";
+  setStatus("Drafting a protocol for this assay — this runs the emit, then an automatic correctness + practicality audit and fixes, so it can take a minute or two.");
+  startProgress(SESSION);
   try {
     const r = await postJSON("/api/choose_assay", { session_id: SESSION, assay_id: assayId });
     hide("#assays-panel");
     handlePhase(r);
-  } catch (e) { setStatus(e.message, true); buttons.forEach((b) => (b.disabled = false)); }
+    setStatus("");
+  } catch (e) { setStatus(e.message, true); buttons.forEach((b) => (b.disabled = false)); if (btn) btn.textContent = orig; }
+  stopProgress();
 }
 
 function renderResult(r) {
@@ -532,12 +586,14 @@ function optionRow(name, value, labelHtml, multi, id) {
 $("#submit-answers").onclick = async () => {
   const answers = GAPS.map(collectAnswer);
   lock(true, "Grounding values in the literature and verifying citations… (this can take a minute or two)");
+  startProgress(SESSION);
   try {
     const r = await postJSON("/api/resolve", { session_id: SESSION, answers });
     renderResult(r);
     hide("#questions-panel");
   } catch (e) { setStatus(e.message, true); }
   lock(false);
+  stopProgress();
 };
 
 function collectAnswer(g) {
@@ -712,7 +768,7 @@ function toolbar() {
   bar.appendChild(pr);
   wrap.appendChild(bar);
   wrap.appendChild(el("p", "hint noprint",
-    "A correctness &amp; practicality audit already ran automatically and any fixes were applied (shown above). Use <b>Design review</b> to reason about the experiment, <b>Re-review &amp; fix</b> to re-audit after edits, and <b>Test a hypothesis</b> to confirm it's directly tested."));
+    "A correctness &amp; practicality audit runs automatically (results above; if any fix couldn't be auto-applied you'll see a button to apply it). Use <b>Design review</b> to reason about the experiment, <b>Re-review &amp; fix</b> to re-audit after edits, and <b>Test a hypothesis</b> to confirm it's directly tested."));
   return wrap;
 }
 
@@ -726,9 +782,23 @@ async function requestDesign(btn) {
   btn.disabled = false;
 }
 
+// Apply the fixes the audit already proposed (no re-audit) — used when auto-apply didn't run.
+async function applyAuditFixes(btn) {
+  btn.disabled = true;
+  setStatus("Applying the audit's fixes and rebuilding the protocol… (this can take a minute)");
+  startProgress(SESSION);
+  try {
+    const r = await postJSON("/api/apply_fixes", { session_id: SESSION });
+    renderResult(r);
+    setStatus("");
+  } catch (e) { setStatus(e.message, true); btn.disabled = false; }
+  stopProgress();
+}
+
 async function requestCritique(btn) {
   btn.disabled = true;
   setStatus("Re-auditing correctness & practicality, then applying any fixes… (this can take a couple of minutes)");
+  startProgress(SESSION);
   try {
     const r = await postJSON("/api/critique", { session_id: SESSION, apply: true });
     if (r.applied && r.protocol) renderResult(r);  // renderResult also renders the audit
@@ -736,6 +806,7 @@ async function requestCritique(btn) {
     setStatus("");
   } catch (e) { setStatus(e.message, true); }
   btn.disabled = false;
+  stopProgress();
 }
 
 const _SEV_META = {
@@ -758,11 +829,21 @@ function renderCritique(r, applied, count) {
   box.appendChild(el("p", "muted small", "A skeptical audit for logic, value, unit/scaling, ordering, and missing-control errors <b>and</b> for practicality — missing detail, unclear steps, impractical logistics. This is <b>model-generated reasoning, not a host-verified guarantee</b>; only cited evidence is checked against a database."));
   box.appendChild(el("p", null, _VERDICT_META[r.verdict] || esc(r.verdict || "")));
   if (r.summary) box.appendChild(el("p", null, esc(r.summary)));
-  if (applied && count) {
-    box.appendChild(el("p", "badge-ok", `🛠 ${count} fix${count > 1 ? "es" : ""} applied — corrected protocol below. Re-run the review to confirm they hold.`));
-  }
 
   const findings = (r.findings || []).filter((f) => f && typeof f === "object");
+  const fixable = findings.filter((f) => (f.fix || "").trim()).length;
+  if (applied && count) {
+    box.appendChild(el("p", "badge-ok", `🛠 ${count} fix${count > 1 ? "es" : ""} applied — corrected protocol below. Re-run the review to confirm they hold.`));
+  } else if (!applied && fixable) {
+    // The audit proposed concrete fixes but they weren't integrated into the protocol
+    // (auto-apply failed/was skipped, or this is a fresh manual audit). Offer one-click apply
+    // instead of implying the protocol was already corrected.
+    box.appendChild(el("p", "badge-warn",
+      `⚠ ${fixable} concrete fix${fixable > 1 ? "es are" : " is"} proposed below but <b>not yet applied</b> to the protocol above.`));
+    const applyBtn = el("button", "btn", `🛠 Apply ${fixable} fix${fixable > 1 ? "es" : ""} & rebuild the protocol`);
+    applyBtn.onclick = () => applyAuditFixes(applyBtn);
+    box.appendChild(el("div", "row", "")).appendChild(applyBtn);
+  }
   if (findings.length) {
     findings.forEach((f) => {
       const meta = _SEV_META[f.severity] || { label: esc(f.severity || ""), cls: "" };
@@ -893,6 +974,7 @@ function recRow(c) {
   const btn = el("button", "btn apply noprint", "Apply to protocol");
   btn.onclick = async () => {
     btn.disabled = true; setStatus("Applying the change and rebuilding the protocol…");
+    startProgress(SESSION);
     try {
       const r = await postJSON("/api/revise", { session_id: SESSION, instruction: c.change });
       row.classList.add("applied");
@@ -900,6 +982,7 @@ function recRow(c) {
       renderResult(r);
     } catch (e) { setStatus(e.message, true); btn.disabled = false; }
     setStatus("");
+    stopProgress();
   };
   row.appendChild(btn);
   return row;
@@ -1001,11 +1084,13 @@ function refineBox() {
     const instruction = ta.value.trim();
     if (instruction.length < 3) { setStatus("Describe the change first.", true); return; }
     btn.disabled = true; setStatus("Rebuilding with your correction…");
+    startProgress(SESSION);
     try {
       const r = await postJSON("/api/revise", { session_id: SESSION, instruction });
       renderResult(r);
     } catch (e) { setStatus(e.message, true); btn.disabled = false; }
     setStatus("");
+    stopProgress();
   };
   box.appendChild(btn);
   return box;
@@ -1136,7 +1221,61 @@ async function postForm(url, formData) {
 }
 // Target an always-visible element (#status lives inside #input-panel, which is hidden
 // in hypothesis mode — writing there would silently swallow errors).
-function setStatus(msg, isErr) { const s = $("#gstatus"); s.textContent = msg || ""; s.className = "noprint " + (isErr ? "err" : "muted"); }
+// A fixed, always-visible toast — the status text lives at the top of the page and is
+// off-screen once you've scrolled to an assay/protocol, so both long calls (looked frozen)
+// and errors (looked like nothing happened) went unseen. Working states show a spinner;
+// errors show a dismissible red message; a cleared status hides it.
+function setToast(msg, isErr) {
+  const b = $("#busy");
+  if (!b) return;
+  const show = !!msg;
+  b.classList.toggle("hidden", !show);
+  b.classList.toggle("as-error", show && !!isErr);
+  b.querySelector(".spin").classList.toggle("hidden", !show || !!isErr);
+  b.querySelector(".busy-x").classList.toggle("hidden", !show || !isErr);
+  b.querySelector(".busy-msg").textContent = msg || "";
+}
+$("#busy .busy-x").onclick = () => $("#busy").classList.add("hidden");
+function setStatus(msg, isErr) {
+  const s = $("#gstatus"); s.textContent = msg || ""; s.className = "noprint " + (isErr ? "err" : "muted");
+  setToast(msg, isErr);
+}
+
+/* ---------- live activity feed (polls /api/progress while a long op runs) ---------- */
+let POLL = null, POLL_GEN = 0;
+function startProgress(sid) {
+  stopProgress();
+  const panel = $("#activity-panel"), list = $("#activity");
+  if (!sid || !panel) return;
+  const gen = ++POLL_GEN;          // invalidates any late in-flight tick from a prior op
+  list.innerHTML = "";
+  panel.classList.remove("hidden");
+  let after = 0;
+  const tick = async () => {
+    if (gen !== POLL_GEN) return;
+    let d;
+    try {
+      const res = await fetch(`/api/progress/${encodeURIComponent(sid)}?after=${after}`, { headers: authHeaders({}) });
+      if (!res.ok) return;
+      d = await res.json();
+    } catch (e) { return; }
+    if (gen !== POLL_GEN) return;   // op finished while this poll was in flight
+    (d.steps || []).forEach((s) => {
+      after = Math.max(after, s.seq);
+      list.appendChild(el("li", null, esc(s.msg)));
+      setToast(s.msg, false);       // mirror the latest line into the fixed spinner pill
+    });
+    if ((d.steps || []).length) list.scrollTop = list.scrollHeight;
+  };
+  POLL = setInterval(tick, 700);
+  tick();                           // poll immediately, don't wait 700ms for the first line
+}
+function stopProgress() {
+  POLL_GEN++;                       // any pending tick becomes a no-op
+  if (POLL) { clearInterval(POLL); POLL = null; }
+  const panel = $("#activity-panel");
+  if (panel) panel.classList.add("hidden");
+}
 function lock(on, msg) { $("#analyze").disabled = on; $("#submit-answers").disabled = on; setStatus(on ? (msg || "Working…") : ""); }
 function show(sel) { $(sel).classList.remove("hidden"); }
 function hide(sel) { $(sel).classList.add("hidden"); }

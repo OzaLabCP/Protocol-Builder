@@ -123,21 +123,31 @@ def test_provider_config_resolution_and_aliases():
 
     import app.config as cfg
     orig_env = dict(os.environ)
-    keys = ("LLM_PROVIDER", "LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL",
-            "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "OPENROUTER_MODEL",
+    keys = ("LLM_PROVIDER", "LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL", "LLM_MODEL_FAST",
+            "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "OPENROUTER_MODEL", "OPENROUTER_MODEL_FAST",
             "GAPFILLER_SEND_REASONING")
     try:
         for k in keys:
             os.environ.pop(k, None)
-        # anthropic-direct: base_url + model default to Anthropic; reasoning gated off.
+        # anthropic-direct: base_url + model default to Anthropic; reasoning gated off; the
+        # built-in tier split gives the light phases the fast (Sonnet) default.
         os.environ["LLM_PROVIDER"] = "anthropic"
         os.environ["LLM_API_KEY"] = "sk-ant-xyz"
         importlib.reload(cfg)
         assert cfg.LLM_PROVIDER == "anthropic"
         assert cfg.OPENROUTER_BASE_URL == "https://api.anthropic.com/v1"
         assert cfg.MODEL == "claude-opus-4-8"
+        assert cfg.MODEL_FAST == "claude-sonnet-5"  # built-in split on the default model
         assert cfg.OPENROUTER_API_KEY == "sk-ant-xyz"  # LLM_API_KEY resolves the canonical attr
         assert cfg.SEND_REASONING is False
+        # a custom LLM_MODEL disables the auto-split (one model everywhere) unless FAST is set.
+        os.environ["LLM_MODEL"] = "claude-haiku-4-5-20251001"
+        importlib.reload(cfg)
+        assert cfg.MODEL == "claude-haiku-4-5-20251001"
+        assert cfg.MODEL_FAST == ""  # no guessing a "fast" model against a user-chosen one
+        os.environ["LLM_MODEL_FAST"] = "explicit-fast"
+        importlib.reload(cfg)
+        assert cfg.MODEL_FAST == "explicit-fast"  # explicit override always wins
         # openrouter: defaults restore, OPENROUTER_* alias still resolves, reasoning on.
         for k in keys:
             os.environ.pop(k, None)
@@ -146,6 +156,7 @@ def test_provider_config_resolution_and_aliases():
         importlib.reload(cfg)
         assert cfg.OPENROUTER_BASE_URL == "https://openrouter.ai/api/v1"
         assert cfg.MODEL == "anthropic/claude-opus-4-8"
+        assert cfg.MODEL_FAST == "anthropic/claude-sonnet-5"  # built-in split, openrouter slug
         assert cfg.OPENROUTER_API_KEY == "sk-or-abc"
         assert cfg.SEND_REASONING is True
     finally:

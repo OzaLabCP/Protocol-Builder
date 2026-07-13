@@ -98,16 +98,17 @@ liveness, the model, and which grounding sources are enabled. Sessions expire af
 | `LLM_PROVIDER` | `openrouter` | `openrouter` (any model, one key) or `anthropic` (Claude API direct, `sk-ant-…`). Sets the base URL + provider-specific params. |
 | `LLM_API_KEY` | — | Required. Your key for the chosen provider. (Alias: `OPENROUTER_API_KEY`.) |
 | `LLM_MODEL` | provider default | Model id/slug — must support tool calling. Defaults: `anthropic/claude-opus-4-8` (openrouter) · `claude-opus-4-8` (anthropic). (Alias: `OPENROUTER_MODEL`.) |
-| `LLM_MODEL_FAST` | = `LLM_MODEL` | Cheaper/faster model for the light phases (clarifications, assay discovery); the heavy emit stays on `LLM_MODEL`. Spend the top tier only where it earns it. |
+| `LLM_MODEL_FAST` | provider fast default | Cheaper/faster model for the light phases (clarifications, assay discovery); the heavy emit + reviews + fixes stay on `LLM_MODEL`. **Built-in split:** on the default `LLM_MODEL`, the light phases run on the provider's fast model (`…/claude-sonnet-5`) and the heavy work on the strong one (Opus). Picking a custom `LLM_MODEL` turns the split off (one model everywhere) unless you also set this. |
 | `LLM_BASE_URL` | provider default | Override the endpoint (e.g. a self-hosted compatible gateway). (Alias: `OPENROUTER_BASE_URL`.) |
 | `GAPFILLER_REASONING_EFFORT` | `high` | `reasoning.effort` for the **heavy** phases (emit, reviews, fixes) on models that support it; `""` to omit. |
 | `GAPFILLER_REASONING_EFFORT_FAST` | `low` | `reasoning.effort` for the **light** phases (clarifications, assay discovery) — spend thinking tokens only where they add value; `""` to omit reasoning there. |
 | `GAPFILLER_SEND_REASONING` | on for `openrouter` | Whether to send the OpenRouter-only `reasoning` field; auto-off for other providers. Set `1`/`0` to force. |
 | `GAPFILLER_AUTO_REVIEW` | `1` (on) | Run the adversarial correctness + practicality audit and auto-apply its fixes as part of every generation, so the user receives an already-corrected protocol. Adds ~2 model calls per run; set `0` to make it the manual "Re-review & fix" button instead. |
 | `GAPFILLER_PROMPT_CACHE` | on for `openrouter` | Cache the stable prefix (system prompt + source text) so multi-phase runs re-read it instead of re-billing it. Big input saving, identical output. Off by default for non-OpenRouter providers whose compat endpoint may not honor `cache_control`. |
-| `GAPFILLER_MAX_TOKENS` | `16000` | Output ceiling. Keep it generous — too low truncates the (large) protocol emit and forces a wasteful re-run. You only pay for tokens actually generated. |
+| `GAPFILLER_MAX_TOKENS` | `16000` | Base output ceiling. You only pay for tokens actually generated. |
+| `GAPFILLER_MAX_TOKENS_CAP` | `32000` | A truncated emit auto-retries at 2× the budget, up to this cap — so a large protocol completes instead of erroring, while normal ones stay cheap. Set `== GAPFILLER_MAX_TOKENS` to disable escalation. |
 | `GAPFILLER_REQUEST_TIMEOUT` | `600` | Per-request HTTP timeout (seconds). |
-| `GAPFILLER_PUBMED_BUDGET` | `12` | Max literature searches per phase. |
+| `GAPFILLER_PUBMED_BUDGET` | `6` | Max literature searches per phase. Kept modest so each phase stays fast (PubMed is rate-limited) and the emit/audit/fix phases converge within their tool-round budget instead of spending it all on searches. Raise for deeper grounding. |
 | `GAPFILLER_ENABLE_PUBMED` | `1` | Set `0` to disable the PubMed grounding tool. |
 | `GAPFILLER_ENABLE_PREPRINTS` | `1` | Set `0` to disable bioRxiv/medRxiv (Europe PMC) search. |
 | `NCBI_API_KEY` | — | Optional; raises the E-utilities rate limit (3→10 req/s). |
@@ -185,9 +186,14 @@ Dockerfile        # single-worker container; /healthz healthcheck
   section**; bulky grounding results are **compacted out of the transcript** for follow-ups;
   multiple grounding searches in one turn run **concurrently**; when no grounding tool applies
   the terminal is **forced on the first call** (no wasted auto→text→nudge round-trip); and the
-  HTTP client uses **HTTP/2 + a keep-alive pool**. Set `LLM_MODEL_FAST` to run the light phases
-  on a cheaper tier while the emit keeps `LLM_MODEL`; Sonnet is plenty for most protocols, Opus
-  only when the reasoning earns it.
+  HTTP client uses **HTTP/2 + a keep-alive pool**. The **model tier split is built in**: the
+  light phases (clarifications, assay discovery) run on the provider's fast model (Sonnet) while
+  the heavy emit + reviews + fixes keep the strong one (Opus) — spending the top tier only where
+  the reasoning earns it. Override either side with `LLM_MODEL` / `LLM_MODEL_FAST`.
 - **Sessions** are in-memory (single process) — fine for a demo, swap for a store to scale.
-- **Latency:** Phase 2 can run for a minute or two while it searches; the UI shows a
-  working state. Streaming the emit call is a reasonable enhancement.
+- **Latency:** Phase 2 can run for a minute or two while it searches, drafts, audits and
+  fixes. The UI shows a **live activity feed** — the server records each stage (searching a
+  source, drafting, auditing, applying N fixes) to a per-session buffer that the browser
+  polls at `GET /api/progress/{session_id}` alongside the in-flight request (sync endpoints
+  run in Starlette's threadpool, so the poll isn't blocked by the build). Token-level
+  streaming of the emit is a further enhancement.

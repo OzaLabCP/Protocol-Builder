@@ -33,8 +33,12 @@ def _first(*vals: str, default: str = "") -> str:
 LLM_PROVIDER = (os.environ.get("LLM_PROVIDER", "openrouter").strip().lower() or "openrouter")
 
 _PROVIDER_DEFAULTS = {
-    "openrouter": {"base_url": "https://openrouter.ai/api/v1", "model": "anthropic/claude-opus-4-8"},
-    "anthropic": {"base_url": "https://api.anthropic.com/v1", "model": "claude-opus-4-8"},
+    "openrouter": {"base_url": "https://openrouter.ai/api/v1",
+                   "model": "anthropic/claude-opus-4-8",
+                   "model_fast": "anthropic/claude-sonnet-5"},
+    "anthropic": {"base_url": "https://api.anthropic.com/v1",
+                  "model": "claude-opus-4-8",
+                  "model_fast": "claude-sonnet-5"},
 }
 _defaults = _PROVIDER_DEFAULTS.get(LLM_PROVIDER, _PROVIDER_DEFAULTS["openrouter"])
 
@@ -46,14 +50,19 @@ OPENROUTER_BASE_URL = _first(
     os.environ.get("LLM_BASE_URL", ""), os.environ.get("OPENROUTER_BASE_URL", ""),
     default=_defaults["base_url"],
 )
-MODEL = _first(
-    os.environ.get("LLM_MODEL", ""), os.environ.get("OPENROUTER_MODEL", ""),
-    default=_defaults["model"],
+_model_env = _first(os.environ.get("LLM_MODEL", ""), os.environ.get("OPENROUTER_MODEL", ""))
+MODEL = _model_env or _defaults["model"]
+# Cheaper/faster model for the light phases (analyze/clarifications, assay discovery) — the
+# heavy emit + reviews + fixes stay on LLM_MODEL. This tier split is built in: on the default
+# models, the light phases run on the provider's fast model (e.g. Sonnet) while the heavy work
+# stays on the strong one (e.g. Opus), so you spend the top tier only where it earns its keep.
+# The built-in fast default is applied ONLY when LLM_MODEL is left at its default — if you pick
+# a custom LLM_MODEL we can't assume our fast model is cheaper than yours, so it's one model
+# everywhere unless you set LLM_MODEL_FAST explicitly. Empty -> use LLM_MODEL everywhere.
+MODEL_FAST = _first(
+    os.environ.get("LLM_MODEL_FAST", ""), os.environ.get("OPENROUTER_MODEL_FAST", ""),
+    default=(_defaults.get("model_fast", "") if not _model_env else ""),
 )
-# Optional cheaper/faster model for the light phases (analyze/clarifications, assay
-# discovery) — the heavy emit stays on LLM_MODEL. Empty -> use LLM_MODEL everywhere.
-# Lets you spend the top tier only where the reasoning earns it.
-MODEL_FAST = os.environ.get("LLM_MODEL_FAST", os.environ.get("OPENROUTER_MODEL_FAST", ""))
 
 # Optional attribution headers OpenRouter surfaces on your dashboard (OpenRouter only).
 OPENROUTER_REFERER = os.environ.get("OPENROUTER_REFERER", "")
@@ -61,6 +70,11 @@ OPENROUTER_TITLE = os.environ.get("OPENROUTER_TITLE", "Methods Gap-Filler")
 
 # Output token ceiling per response.
 MAX_TOKENS = int(os.environ.get("GAPFILLER_MAX_TOKENS", "16000"))
+# A large protocol emit can exceed MAX_TOKENS and truncate. Rather than hard-failing,
+# the agent retries the same call with a doubled budget up to this cap (so normal emits
+# stay cheap and only oversized ones escalate). Set to MAX_TOKENS to disable escalation.
+MAX_TOKENS_CAP = max(
+    MAX_TOKENS, int(os.environ.get("GAPFILLER_MAX_TOKENS_CAP", "32000")))
 # Per-request HTTP timeout (seconds). Reasoning models can take a while.
 REQUEST_TIMEOUT = float(os.environ.get("GAPFILLER_REQUEST_TIMEOUT", "600"))
 # Reasoning effort for the heavy phases (protocol emit, reviews, fixes), passed as
@@ -110,9 +124,18 @@ ENABLE_PROTOCOLS_IO = (
     os.environ.get("GAPFILLER_ENABLE_PROTOCOLS_IO", "1") != "0"
 ) and bool(PROTOCOLS_IO_TOKEN)
 
-# Max literature searches the agent may run per phase, and max hits per search.
-PUBMED_BUDGET = int(os.environ.get("GAPFILLER_PUBMED_BUDGET", "12"))
+# Max literature searches the agent may run per phase, and max hits per search. Kept modest:
+# a fat budget makes each phase slow (rate-limited PubMed) AND risks the emit/audit/fix phase
+# spending its whole tool-round allowance on searches before it converges to the emit. Raise
+# GAPFILLER_PUBMED_BUDGET for deeper grounding at the cost of speed.
+PUBMED_BUDGET = int(os.environ.get("GAPFILLER_PUBMED_BUDGET", "6"))
 PUBMED_RETMAX_CAP = int(os.environ.get("GAPFILLER_PUBMED_RETMAX", "8"))
+# The model is prompted to batch its searches into one turn; they run concurrently. Cap the
+# concurrency to what NCBI's rate limit tolerates (~3 req/s without an API key, ~10 with one)
+# so a batch doesn't burst into 429s that silently drop grounding. Override with
+# GAPFILLER_SEARCH_CONCURRENCY.
+SEARCH_CONCURRENCY = int(os.environ.get("GAPFILLER_SEARCH_CONCURRENCY", "0")) or (
+    6 if NCBI_API_KEY else 3)
 
 # --- Access control (all OFF by default so local dev is unaffected) ---------
 # When set, the /api/* endpoints require this token (Authorization: Bearer,

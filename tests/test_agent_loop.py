@@ -12,7 +12,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import literature  # noqa: E402
+from app import config, literature  # noqa: E402
 from app.agent import AgentError, GapFillerAgent, RunState, Session  # noqa: E402
 from app.prompts import DISCOVERY_SYSTEM_PROMPT, SYSTEM_ASK, SYSTEM_PROMPT  # noqa: E402
 
@@ -24,9 +24,10 @@ class FakeLLM:
         self.queue = list(queue)
         self.calls = []
 
-    def chat(self, messages, tools=None, tool_choice=None, model=None, effort=None):
+    def chat(self, messages, tools=None, tool_choice=None, model=None, effort=None, max_tokens=None):
         self.calls.append({"messages": messages, "tools": tools,
-                           "tool_choice": tool_choice, "model": model, "effort": effort})
+                           "tool_choice": tool_choice, "model": model, "effort": effort,
+                           "max_tokens": max_tokens})
         return self.queue.pop(0)
 
 
@@ -326,15 +327,75 @@ def test_full_paper_trimmed_to_methods_section():
     assert "Introduction" not in session.source_text
 
 
-def test_truncation_raises_actionable_error():
-    trunc = {"choices": [{"finish_reason": "length",
-                          "message": {"role": "assistant", "content": "half a proto"}}]}
-    agent = make_agent([trunc])
+def _trunc():
+    return {"choices": [{"finish_reason": "length",
+                         "message": {"role": "assistant", "content": "half a proto"}}]}
+
+
+def test_truncation_escalates_budget_then_succeeds():
+    # A first truncation shouldn't hard-fail: retry the same call with a doubled budget.
+    queue = [_trunc(), tool_msg(("request_clarifications", {"usable": True, "gaps": []}, "c1"))]
+    agent = make_agent(queue)
+    session = agent.analyze("A methods section describing a reaction incubated at 30 C for 4 h.")
+    assert (session.phase1 or {}).get("usable") is True          # completed after the retry
+    assert agent.client.calls[0]["max_tokens"] == config.MAX_TOKENS      # first try: base budget
+    assert agent.client.calls[1]["max_tokens"] == config.MAX_TOKENS_CAP  # retry: doubled (to cap)
+
+
+def test_truncation_raises_actionable_error_at_cap():
+    # If it still truncates at the cap, fail loud with an actionable message.
+    agent = make_agent([_trunc(), _trunc()])
     try:
         agent.analyze("A methods section describing a reaction incubated at 30 C for 4 h.")
-        assert False, "expected AgentError on truncation"
+        assert False, "expected AgentError when truncation persists to the cap"
     except AgentError as e:
         assert "MAX_TOKENS" in str(e)
+
+
+def test_followup_restores_session_on_failure():
+    # A follow-up that fails mid-run must leave the session re-appliable: the acked emit id
+    # is re-armed and the appended ack+instruction are dropped, so a retry (Apply fixes,
+    # Re-review, Revise) still works instead of dying with "Nothing to build on yet".
+    session = Session(
+        messages=[
+            {"role": "user", "content": "seed"},
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "e0", "type": "function", "function": {"name": "emit_protocol", "arguments": "{}"}}]},
+        ],
+        pending_tool_use_id="e0",
+    )
+    before_len = len(session.messages)
+    agent = make_agent([text_msg("I won't call the tool")])  # no tool call -> _run None -> AgentError
+    try:
+        agent.revise(session, "use 150 uL wells")
+        assert False, "expected AgentError"
+    except AgentError:
+        pass
+    assert session.pending_tool_use_id == "e0"       # emit re-armed
+    assert len(session.messages) == before_len       # appended ack + instruction dropped
+    # ...and a subsequent apply now works on the restored session (proves it wasn't bricked)
+    agent2 = make_agent([tool_msg(("emit_protocol", dict(PROTO, title="Fixed"), "e1"))])
+    out = agent2.revise(session, "use 150 uL wells")
+    assert out["title"] == "Fixed"
+
+
+def test_continue_with_answers_restores_on_failure():
+    # If the emit fails (even after the forced nudge), the session must stay retryable:
+    # the pending clarification is re-armed and the appended answer/nudge are dropped.
+    session = Session(messages=[{"role": "user", "content": "seed"}], request_tool_use_id="c1")
+    before_len = len(session.messages)
+    agent = make_agent([text_msg("no tool"), text_msg("still no tool")])  # emit + nudge both fail
+    try:
+        agent.continue_with_answers(session, answers=[])
+        assert False, "expected AgentError"
+    except AgentError:
+        pass
+    assert session.request_tool_use_id == "c1"     # pending clarification re-armed
+    assert len(session.messages) == before_len     # appended answer + nudge dropped
+    # a retry now succeeds on the restored session
+    agent2 = make_agent([tool_msg(("emit_protocol", PROTO, "e1"))])
+    out = agent2.continue_with_answers(session, answers=[])
+    assert out["title"] == "P"
 
 
 def test_grounding_results_compacted_on_followup():

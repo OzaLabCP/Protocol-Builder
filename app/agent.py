@@ -91,6 +91,7 @@ class RunState:
     session: Session
     searches_left: int
     lock: Any = field(default_factory=threading.Lock)  # guards budget/log under parallel dispatch
+    progress: Any = None  # optional Callable[[str], None] for a live activity feed
 
 
 @dataclass
@@ -272,6 +273,9 @@ class GapFillerAgent:
             state.searches_left -= 1
             query = str(tool_input.get("query", "")).strip()
             state.session.grounding_log.append(f"{name}: {query}")
+        if state.progress and query:  # live feed: surface the literature search underway
+            src = name.replace("search_", "").replace("_", " ")
+            state.progress(f"Searching {src} for “{query}”…")
         search_fn, formatter = enabled[name]
         try:
             results = search_fn(query, tool_input.get("retmax", 5))
@@ -303,33 +307,46 @@ class GapFillerAgent:
         )
         sys_msg = {"role": "system", "content": system or self.system_prompt}
 
+        budget = config.MAX_TOKENS or 0  # escalates on truncation; growth persists across rounds
         for _round in range(config.MAX_TOOL_ROUNDS):
-            resp = self.client.chat(
-                messages=[sys_msg] + messages,
-                tools=openai_tools,
-                tool_choice=tool_choice,
-                model=model or self.model,
-                effort=effort,
-            )
-            try:
-                choice = resp["choices"][0]
-                finish = choice.get("finish_reason")
-                msg = choice["message"]
-                if not isinstance(msg, dict):
-                    raise TypeError("message is not an object")
-                raw_calls = msg.get("tool_calls")
-                if raw_calls is not None and not isinstance(raw_calls, list):
-                    raise TypeError("tool_calls is not a list")
-            except (KeyError, IndexError, TypeError) as exc:
-                raise AgentError(f"Malformed provider response: {exc}")
-
-            # A truncated response means an incomplete tool call (broken JSON) — fail loud
-            # with an actionable message instead of an opaque "never called the terminal".
-            if finish == "length":
-                raise AgentError(
-                    "The model hit the max_tokens output limit before finishing its "
-                    "response. Raise GAPFILLER_MAX_TOKENS — protocol emits are large."
+            # A truncated response is an incomplete (broken-JSON) tool call. Rather than
+            # hard-failing — a 502 telling the user to raise an env var they can't reach
+            # mid-run — retry the SAME call with a doubled output budget up to MAX_TOKENS_CAP.
+            # Normal emits fit the base budget and never escalate; only oversized protocols do.
+            while True:
+                resp = self.client.chat(
+                    messages=[sys_msg] + messages,
+                    tools=openai_tools,
+                    tool_choice=tool_choice,
+                    model=model or self.model,
+                    effort=effort,
+                    max_tokens=budget or None,
                 )
+                try:
+                    choice = resp["choices"][0]
+                    finish = choice.get("finish_reason")
+                    msg = choice["message"]
+                    if not isinstance(msg, dict):
+                        raise TypeError("message is not an object")
+                    raw_calls = msg.get("tool_calls")
+                    if raw_calls is not None and not isinstance(raw_calls, list):
+                        raise TypeError("tool_calls is not a list")
+                except (KeyError, IndexError, TypeError) as exc:
+                    raise AgentError(f"Malformed provider response: {exc}")
+
+                if finish == "length" and budget and budget < config.MAX_TOKENS_CAP:
+                    budget = min(budget * 2, config.MAX_TOKENS_CAP)
+                    state.session.grounding_log.append(
+                        f"output truncated — retrying with max_tokens={budget}")
+                    continue
+                if finish == "length":
+                    # Even at the cap the response didn't fit — fail loud and actionable.
+                    raise AgentError(
+                        "The model hit the max_tokens output limit before finishing, even at "
+                        f"the maximum budget ({config.MAX_TOKENS_CAP}). The protocol may be "
+                        "unusually large; narrow the request or raise GAPFILLER_MAX_TOKENS_CAP."
+                    )
+                break
 
             tool_calls = _normalize_tool_calls(raw_calls)
             content = _coerce_content(msg.get("content"))
@@ -366,7 +383,8 @@ class GapFillerAgent:
                 return tc["id"], name, content
 
             if len(pending) > 1:
-                with ThreadPoolExecutor(max_workers=min(len(pending), 6)) as ex:
+                workers = min(len(pending), max(1, config.SEARCH_CONCURRENCY))
+                with ThreadPoolExecutor(max_workers=workers) as ex:
                     answered = list(ex.map(_answer, pending))
             else:
                 answered = [_answer(tc) for tc in pending]
@@ -390,6 +408,7 @@ class GapFillerAgent:
         methods_text: Optional[str] = None,
         hypothesis: Optional[str] = None,
         is_full_paper: bool = False,
+        progress: Optional[Any] = None,
     ) -> Session:
         """Reconstruct a protocol from a Methods section (pasted) or the full text of a
         paper (extracted from a PDF host-side — `is_full_paper=True`, in which case the
@@ -408,7 +427,7 @@ class GapFillerAgent:
         effective_text = extracted_methods or text
         session.source_text = effective_text  # verify quotes against exactly what the model read
         session.source_exact = not is_full_paper  # PDF-derived text is lossy vs the paper
-        state = RunState(session=session, searches_left=config.PUBMED_BUDGET)
+        state = RunState(session=session, searches_left=config.PUBMED_BUDGET, progress=progress)
 
         hyp_preamble = (
             f"The student's hypothesis (what they want to test) is:\n{session.hypothesis}\n\n"
@@ -453,13 +472,14 @@ class GapFillerAgent:
         return session
 
     # -- Phase 0 (hypothesis-first): discover candidate assays -------------------
-    def discover(self, hypothesis: str, constraints: Optional[dict] = None) -> Session:
+    def discover(self, hypothesis: str, constraints: Optional[dict] = None,
+                 progress: Optional[Any] = None) -> Session:
         """Hypothesis-first entry: recommend literature-grounded candidate assays.
         Runs under the discovery prompt so the paper-first Methods-section input guard
         cannot misfire. Parks the emitted call so choose_assay can ack it via _followup."""
         session = Session(source_kind="hypothesis")
         session.hypothesis = (hypothesis or "").strip() or None
-        state = RunState(session=session, searches_left=config.PUBMED_BUDGET)
+        state = RunState(session=session, searches_left=config.PUBMED_BUDGET, progress=progress)
 
         parts = [
             "A student wants to test a hypothesis but has no protocol and does not know "
@@ -485,7 +505,8 @@ class GapFillerAgent:
         session.pending_tool_use_id = block.id  # parked for _followup
         return session
 
-    def choose_assay(self, session: Session, assay_id: str) -> dict:
+    def choose_assay(self, session: Session, assay_id: str,
+                     progress: Optional[Any] = None) -> dict:
         """The student picked an assay: ack the parked emit_assay_options and drive the
         UNTOUCHED request_clarifications phase, leaving the session byte-identical to
         what analyze() produces so the rest of the pipeline is reused."""
@@ -503,49 +524,58 @@ class GapFillerAgent:
         phase1 = self._followup(session, brief, "request_clarifications",
                                 REQUEST_CLARIFICATIONS_TOOL,
                                 system=self.system_ask, model=self.model_fast,
-                                effort=self.effort_fast)
+                                effort=self.effort_fast, progress=progress)
         session.request_tool_use_id = session.pending_tool_use_id
         session.pending_tool_use_id = None
         session.phase1 = phase1
         return phase1
 
     # -- Phase 2 + 3 ------------------------------------------------------------
-    def continue_with_answers(self, session: Session, answers: list) -> dict:
+    def continue_with_answers(self, session: Session, answers: list,
+                              progress: Optional[Any] = None) -> dict:
         if session.request_tool_use_id is None:
             raise AgentError("Session has no pending clarification to answer.")
-        state = RunState(session=session, searches_left=config.PUBMED_BUDGET)
+        state = RunState(session=session, searches_left=config.PUBMED_BUDGET, progress=progress)
 
+        # Transactional (mirrors _followup): if the emit fails, restore the pending
+        # clarification and drop the appended answer so retrying "Build protocol" works
+        # instead of dying with "Session has no pending clarification to answer".
+        saved_request = session.request_tool_use_id
+        saved_len = len(session.messages)
         # Answer the request_clarifications call with the user's answers.
         session.messages.append(
             {"role": "tool", "tool_call_id": session.request_tool_use_id,
              "content": json.dumps({"answers": answers})}
         )
         session.request_tool_use_id = None  # prevent a second answer submission
-
-        tools = _grounding_tools() + [EMIT_PROTOCOL_TOOL]
-        block = self._run(session.messages, tools, "emit_protocol", state,
-                          system=self.system_emit, model=self.model, effort=self.effort)
-        if block is not None:
-            session.pending_tool_use_id = block.id
-            return dict(block.input)
-
-        # Model stopped with text — nudge once, forcing emit_protocol (no search tools).
-        session.messages.append(
-            {"role": "user", "content": "Your research is complete. Call emit_protocol now "
-             "with the finalized, provenance-tagged protocol."}
-        )
-        block = self._run(session.messages, [EMIT_PROTOCOL_TOOL], "emit_protocol", state,
-                          system=self.system_emit, force_terminal=True, model=self.model,
-                          effort=self.effort)
-        if block is None:
-            raise AgentError("Phase 3 ended without calling emit_protocol.")
+        try:
+            tools = _grounding_tools() + [EMIT_PROTOCOL_TOOL]
+            block = self._run(session.messages, tools, "emit_protocol", state,
+                              system=self.system_emit, model=self.model, effort=self.effort)
+            if block is None:
+                # Model stopped with text — nudge once, forcing emit_protocol (no search tools).
+                session.messages.append(
+                    {"role": "user", "content": "Your research is complete. Call emit_protocol "
+                     "now with the finalized, provenance-tagged protocol."}
+                )
+                block = self._run(session.messages, [EMIT_PROTOCOL_TOOL], "emit_protocol", state,
+                                  system=self.system_emit, force_terminal=True, model=self.model,
+                                  effort=self.effort)
+                if block is None:
+                    raise AgentError("Phase 3 ended without calling emit_protocol.")
+        except Exception:
+            del session.messages[saved_len:]
+            session.request_tool_use_id = saved_request
+            session.pending_tool_use_id = None
+            raise
         session.pending_tool_use_id = block.id
         return dict(block.input)
 
     # -- Continue after an emit (ack the pending tool call) ---------------------
     def _followup(self, session: Session, instruction: str, terminal: str, tool: dict,
                   compact: bool = False, system: Optional[str] = None,
-                  model: Optional[str] = None, effort: Optional[str] = None) -> dict:
+                  model: Optional[str] = None, effort: Optional[str] = None,
+                  progress: Optional[Any] = None) -> dict:
         """Ack the last emit (answer its dangling tool call), append an instruction, and
         run to a new terminal tool. Shared by revise/design_review/design_alignment and
         choose_assay — answering whatever call is pending lets these interleave freely.
@@ -555,21 +585,32 @@ class GapFillerAgent:
             raise AgentError("Nothing to build on yet — emit a protocol first.")
         if compact:
             _compact_grounding(session)
-        state = RunState(session=session, searches_left=config.PUBMED_BUDGET)
+        # Transactional: a follow-up that fails mid-run (tool-round ceiling, a transient
+        # provider error) must leave the session exactly as it found it. Otherwise the acked
+        # emit id is gone and the appended instruction dangles, bricking EVERY later follow-up
+        # (retry, re-review, revise) with "Nothing to build on yet". Snapshot, restore on error.
+        saved_pending = session.pending_tool_use_id
+        saved_len = len(session.messages)
+        state = RunState(session=session, searches_left=config.PUBMED_BUDGET, progress=progress)
         session.messages.append(
             {"role": "tool", "tool_call_id": session.pending_tool_use_id, "content": "Received."}
         )
         session.messages.append({"role": "user", "content": instruction})
         session.pending_tool_use_id = None
-        block = self._run(session.messages, _grounding_tools() + [tool], terminal, state,
-                          system=system, model=model, effort=effort)
-        if block is None:
-            raise AgentError(f"Model ended without calling {terminal}.")
+        try:
+            block = self._run(session.messages, _grounding_tools() + [tool], terminal, state,
+                              system=system, model=model, effort=effort)
+            if block is None:
+                raise AgentError(f"Model ended without calling {terminal}.")
+        except Exception:
+            del session.messages[saved_len:]           # drop the ack + instruction we appended
+            session.pending_tool_use_id = saved_pending  # re-arm the emit so a retry works
+            raise
         session.pending_tool_use_id = block.id
         return dict(block.input)
 
     # -- Revise (edit-and-regenerate) -------------------------------------------
-    def revise(self, session: Session, instruction: str) -> dict:
+    def revise(self, session: Session, instruction: str, progress: Optional[Any] = None) -> dict:
         """Feed a correction and re-emit, keeping all prior context and grounding."""
         return self._followup(
             session,
@@ -582,6 +623,7 @@ class GapFillerAgent:
             system=self.system_emit,
             model=self.model,
             effort=self.effort,
+            progress=progress,
         )
 
     # -- Design review (teach the experiment around the protocol) ---------------
@@ -608,14 +650,15 @@ class GapFillerAgent:
                                EMIT_DESIGN_ALIGNMENT_TOOL, compact=True)
 
     # -- Adversarial correctness review (attack the emitted protocol) -----------
-    def correctness_review(self, session: Session) -> dict:
+    def correctness_review(self, session: Session, progress: Optional[Any] = None) -> dict:
         """Skeptical, independent audit of the emitted protocol for logic/value/ordering/
         control errors. Model-generated reasoning (not a host guarantee); its citations are
         host-verified. Runs on the main model — this is reasoning-heavy."""
         return self._followup(session, CORRECTNESS_REVIEW_INSTRUCTION, "emit_correctness_review",
-                              EMIT_CORRECTNESS_REVIEW_TOOL, compact=True)
+                              EMIT_CORRECTNESS_REVIEW_TOOL, compact=True, progress=progress)
 
-    def apply_correctness_fixes(self, session: Session, findings: list) -> dict:
+    def apply_correctness_fixes(self, session: Session, findings: list,
+                                progress: Optional[Any] = None) -> dict:
         """Close the loop: feed the correctness review's fixes back in and re-emit a
         CORRECTED protocol. Keeps everything already right, preserves provenance, grounds
         any newly filled values. Returns the new protocol (host-validated by the caller)."""
@@ -642,4 +685,4 @@ class GapFillerAgent:
         )
         return self._followup(session, instruction, "emit_protocol", EMIT_PROTOCOL_TOOL,
                               compact=True, system=self.system_emit, model=self.model,
-                              effort=self.effort)
+                              effort=self.effort, progress=progress)
