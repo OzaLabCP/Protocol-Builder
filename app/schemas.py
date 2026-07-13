@@ -39,6 +39,26 @@ _ASSUMPTION_PROVENANCE_ENUM = {
     "enum": [t for t in PROVENANCE_TIERS if t != "stated"],
 }
 
+# Shared evidence shape. OPTIONAL and nullable: attach only when a retrieved
+# source contains text relevant to THIS value.
+EVIDENCE_SCHEMA = {
+    "type": ["object", "null"],
+    "additionalProperties": False,
+    "properties": {
+        "excerpt": {"type": "string"},                     # verbatim, copied from a retrieved source; may be ""
+        "section": {"type": ["string", "null"]},           # e.g. "Abstract", "Methods", "Description"; null if unknown
+        "evidence_type": {"type": "string", "enum": ["abstract", "full_text", "protocol", "metadata_only"]},
+        "source_type": {"type": "string", "enum": ["peer_reviewed", "preprint", "protocol", "other"]},
+    },
+    "required": ["excerpt", "evidence_type", "source_type"],
+    "description": (
+        "OPTIONAL. Present (non-null) only when a retrieved source contains text "
+        "relevant to THIS value. Copy the excerpt VERBATIM from a search result; "
+        "never paraphrase or invent. Use evidence_type='metadata_only' with excerpt='' "
+        "when the source exposed only bibliographic metadata (no abstract/description)."
+    ),
+}
+
 # The one canonical citation shape. Nullable: present (non-null) only when a
 # value is literature-grounded (or user-selected from a literature option).
 CITATION_SCHEMA = {
@@ -53,13 +73,17 @@ CITATION_SCHEMA = {
             "description": "A DOI (starts with '10.') or a PubMed ID (digits only).",
         },
         "url": {"type": ["string", "null"]},
+        "evidence": EVIDENCE_SCHEMA,
     },
     "required": ["title", "authors", "year", "identifier"],
     "description": (
         "Required (non-null) when provenance is literature_grounded; may also be "
         "present on a value the user picked from a literature-derived option "
         "(then provenance is literature_grounded and selected_by_user is true); "
-        "null otherwise. The host resolves this identifier after emit."
+        "null otherwise. The host resolves this identifier after emit. "
+        "When you filled this value from a source whose abstract/description you "
+        "retrieved, attach that text as `evidence`; a citation with no relevant "
+        "`evidence` is a resolvable reference, not proof the source supports the value."
     ),
 }
 

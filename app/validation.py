@@ -70,20 +70,49 @@ def _num_str(v) -> str:
         return str(v)
 
 
-def _quote_supports(entry: dict, quote: str) -> bool:
-    """A verified quote must actually CONTAIN the value it anchors — the quote merely
-    occurring in the source is not enough (a real but unrelated sentence would otherwise
-    launder a wrong number into a 'source-anchored' badge). Entries with no scalar value
-    to check (prose steps/substeps) pass this gate on quote presence alone."""
-    nq = _normalize_source(quote)
+def _value_tokens_present(entry: dict, text: str) -> bool:
+    """True iff every scalar value token on the entry (its `value`/`amount`) occurs as a
+    whole token in the already-normalized `text`. Entries with no scalar value pass
+    vacuously. Shared by `_quote_supports` (source quote) and `_evidence_relevant`
+    (retrieved excerpt)."""
     for key in ("value", "amount"):
         v = entry.get(key)
         if v in (None, ""):
             continue
         token = _normalize_source(_num_str(v))
-        if token and not re.search(r"(?<!\w)" + re.escape(token) + r"(?!\w)", nq):
+        if token and not re.search(r"(?<!\w)" + re.escape(token) + r"(?!\w)", text):
             return False
     return True
+
+
+def _quote_supports(entry: dict, quote: str) -> bool:
+    """A verified quote must actually CONTAIN the value it anchors — the quote merely
+    occurring in the source is not enough (a real but unrelated sentence would otherwise
+    launder a wrong number into a 'source-anchored' badge). Entries with no scalar value
+    to check (prose steps/substeps) pass this gate on quote presence alone."""
+    return _value_tokens_present(entry, _normalize_source(quote))
+
+
+def _evidence_relevant(entry: dict, evidence) -> bool:
+    """True iff the model-attached `evidence` excerpt actually addresses THIS value —
+    the gate that separates a resolvable-but-unrelated citation (metadata_matched) from
+    genuine excerpt support (claim_support_status == "supported"). Metadata-only evidence
+    can never support a claim; a scalar value's number must appear in the excerpt; a prose
+    value needs one of its significant name words to appear."""
+    if not isinstance(evidence, dict):
+        return False
+    if evidence.get("evidence_type") == "metadata_only":
+        return False
+    excerpt = _normalize_source(evidence.get("excerpt") or "")
+    if len(excerpt) < 8:
+        return False
+    if any(entry.get(k) not in (None, "") for k in ("value", "amount")):
+        return _value_tokens_present(entry, excerpt)
+    name = entry.get("name") or entry.get("parameter") or ""
+    sig = [w for w in _WORD_RE.findall(name.lower()) if len(w) >= 4]
+    if not sig:
+        return True
+    return any(w in excerpt for w in sig)
 
 
 def _iter_citation_entries(protocol: dict) -> Iterator[tuple[dict, str]]:
@@ -131,7 +160,11 @@ def _iter_all_provenance_entries(protocol: dict) -> Iterator[tuple[dict, str]]:
 def _downgrade(entry: dict, note: str) -> None:
     entry["provenance"] = "default_verify"
     entry["citation"] = None
-    entry["citation_verified"] = False
+    # `citation_verified` is a DERIVED back-compat alias meaning "the cited identifier
+    # resolved to the cited work". It is NOT a claim of semantic support — that is
+    # `claim_support_status`. A downgraded entry has metadata_matched False (except the
+    # mismatch case where the citation is nulled), so the alias renders no misleading badge.
+    entry["citation_verified"] = bool(entry.get("identifier_verified") and entry.get("metadata_matched"))
     entry["quote_verified"] = False  # a downgraded value is not source-anchored
     if "verify" in entry or "basis" in entry:  # assumptions_log shape
         entry["verify"] = True
@@ -196,6 +229,7 @@ def validate_and_finalize(
         "malformed_dropped": 0,
         "quotes": {"verified": [], "downgraded": [], "unverified": [], "source_checked": False},
         "consistency": {"inline_missing_from_log": [], "log_missing_from_inline": []},
+        "support": {"supported": [], "evidence_unavailable": [], "mismatch": []},
     }
     open_questions = list(protocol.get("open_questions") or [])
 
@@ -215,7 +249,9 @@ def validate_and_finalize(
     # (Item schemas are open, dict(block.input) is used verbatim, and the badge is the
     # tool's whole trust signal, so a forged quote_verified must not survive.)
     for entry, _loc in _iter_all_provenance_entries(protocol):
-        entry.pop("quote_verified", None)
+        for k in ("quote_verified", "identifier_verified", "metadata_matched",
+                  "claim_support_status", "citation_verified"):
+            entry.pop(k, None)
 
     if not allow_stated:
         for entry, location in _iter_all_provenance_entries(protocol):
@@ -272,6 +308,15 @@ def validate_and_finalize(
         prov = entry.get("provenance")
         citation = entry.get("citation")
         selected = bool(entry.get("selected_by_user"))
+
+        # Host-owned attestations, initialized before branching so every entry carries a
+        # defined value. `identifier_verified` = the DOI/PMID resolved; `metadata_matched`
+        # = the resolved title/year align; `claim_support_status` (unchecked | mismatch |
+        # evidence_unavailable | supported) = whether a retrieved excerpt actually supports
+        # THIS value. A resolvable identifier with matching metadata is NOT support.
+        entry["identifier_verified"] = False
+        entry["metadata_matched"] = False
+        entry["claim_support_status"] = "unchecked"
 
         # --- Invariant: literature_grounded MUST carry a citation. ---
         if prov == "literature_grounded" and not citation:
@@ -340,7 +385,14 @@ def validate_and_finalize(
             if title_mismatch:
                 bits.append(f"title overlap {overlap:.0%} with source '{resolved.title}'")
             reason = "citation metadata mismatch (" + "; ".join(bits) + ")"
+            # The identifier resolved to a real record, but to a clearly different work.
+            entry["identifier_verified"] = True
+            entry["metadata_matched"] = False
             _downgrade(entry, reason + "; downgraded to default_verify.")
+            # Set AFTER the downgrade so the "resolves to a different work" diagnostic
+            # survives even though provenance is now default_verify and citation is nulled.
+            entry["claim_support_status"] = "mismatch"
+            report["support"]["mismatch"].append(location)
             report["downgraded"].append(
                 {"location": location, "identifier": identifier, "reason": reason}
             )
@@ -350,9 +402,22 @@ def validate_and_finalize(
             )
             continue
 
-        # Verified.
+        # Verified: identifier resolved AND metadata matches. This earns the
+        # `literature_grounded` tier and the derived `citation_verified` alias, but NOT
+        # `supported` unless an attached excerpt actually addresses the value.
+        entry["identifier_verified"] = True
+        entry["metadata_matched"] = True
         entry["citation_verified"] = True
         entry["citation"]["url"] = entry["citation"].get("url") or _canonical_url(resolved)
+        ev = (entry.get("citation") or {}).get("evidence")
+        if _evidence_relevant(entry, ev):
+            entry["claim_support_status"] = "supported"
+            report["support"]["supported"].append(location)
+        else:
+            # Identifier + metadata are genuinely verified; the value simply carries no
+            # excerpt-support badge. It STAYS literature_grounded.
+            entry["claim_support_status"] = "evidence_unavailable"
+            report["support"]["evidence_unavailable"].append(location)
         report["verified"].append(
             {
                 "location": location,

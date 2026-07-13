@@ -167,7 +167,8 @@ Use the search tools to ground each assay in a real, RETRIEVED source, and tag i
 citation and downgrades any that does not resolve). If a search is empty or the budget
 is spent, name the assay from well-established practice and tag it "best_practice" with
 a null citation. NEVER invent a citation you did not retrieve — an unresolvable citation
-is worse than an honest best_practice.
+is worse than an honest best_practice. Attach the retrieved excerpt as evidence; a
+resolvable DOI alone is not support.
 
 SEARCH IN PARALLEL: issue the searches you need as multiple search calls in a SINGLE turn
 rather than one per turn — they run concurrently, so batching is far faster. Only run a
@@ -232,7 +233,17 @@ value in the final protocol carries one of five provenance tags:
                          PMID identifier). The host will independently resolve that
                          identifier before the protocol ships; a citation that does
                          not resolve will be downgraded, so only cite sources you
-                         actually retrieved.
+                         actually retrieved. A resolvable identifier is NOT sufficient
+                         on its own. Tag a value `literature_grounded` ONLY when the
+                         source you RETRIEVED contains text relevant to THAT specific
+                         value (its number, ratio, or named choice). When the search
+                         result gave you an abstract/description, copy the relevant
+                         snippet into the citation's `evidence.excerpt` (verbatim,
+                         ≤600 chars) and set `evidence.evidence_type`/`source_type`.
+                         If the search exposed only metadata, set
+                         `evidence.evidence_type='metadata_only'` with an empty excerpt
+                         and expect the host to mark the claim `evidence_unavailable`,
+                         not supported.
 - "best_practice"      — not in the source; filled from a widely-accepted standard
                          for this method that you did not tie to a single citation.
                          Name the standard or convention as the basis.
@@ -346,7 +357,12 @@ will fill. Prioritize outcome-critical parameters and anything where a wrong val
 would ruin the experiment; do not burn searches on trivia, and stay within the search
 budget (the tool caps your uses). For each value you ground this way, capture a real
 citation (title, authors, year, and a DOI or PMID identifier) and tag it
-"literature_grounded".
+"literature_grounded". Grounding a value means the retrieved source actually addresses
+it, not merely that the paper exists. For every value you tag `literature_grounded`,
+attach `evidence` copied from the search result that supports THAT value; if you cannot
+point to such text, drop to `best_practice` or `default_verify`. The host will resolve
+the identifier, confirm the metadata, AND check that the attached excerpt contains the
+value — an excerpt that does not mention it yields `evidence_unavailable`.
 
 SEARCH IN PARALLEL, NOT ONE AT A TIME. Plan the handful of searches you need up front
 and issue them as MULTIPLE search calls in a SINGLE turn — they run concurrently, so a
@@ -392,7 +408,8 @@ where applicable — this is the reproducibility payoff and must be exhaustive.
 The assumptions_log is a PROJECTION of the inline provenance, not a second opinion.
 Every non-stated value you put inline (in materials, steps, or critical_parameters)
 must appear in the assumptions_log with the SAME value, the SAME provenance tier, and
-the SAME citation. List anything still unresolved under open_questions.
+the SAME citation. Carry the same `evidence` on the log entry's citation as on its
+inline value. List anything still unresolved under open_questions.
 
 Write instructions in the imperative, at the level of detail a competent researcher
 new to this exact protocol could follow. Never merge two provenance types into one
