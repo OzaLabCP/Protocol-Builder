@@ -383,6 +383,10 @@ suggested_default the user can accept by skipping; that fallback becomes a
 "default_verify" value. Keep the scoping search disciplined: only for ambiguous gaps
 with a plausibly discrete literature menu, never for user-dependent bins.
 
+Per-gap answer modes (answered/default/unresolved) are host-provided and override your
+own inference; an "unresolved" gap must NEVER be silently defaulted — emit it as a
+"default_verify" value carrying an explicit open_question asking the user to supply it.
+
 Reason about parameter cascades: choices like reaction volume propagate into every
 downstream reagent amount, so surface them early. When the user picks an option that
 carried a citation, that citation travels with the value as literature_grounded +

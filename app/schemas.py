@@ -607,6 +607,13 @@ REQUEST_CLARIFICATIONS_TOOL = {
                             "description": "Fallback value if the user skips; becomes "
                             "a default_verify entry.",
                         },
+                        "outcome_critical": {
+                            "type": ["boolean", "null"],
+                            "description": "Optional model signal: true when this parameter drives a "
+                            "readout, dosed quantity, or control (a wrong/absent value changes the "
+                            "result). The host also computes this conservatively; the host OR-combines "
+                            "both. Omit/null if unsure.",
+                        },
                     },
                     "required": [
                         "id",

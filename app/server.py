@@ -14,6 +14,7 @@ Sessions are held in memory (run one worker) and expire after SESSION_TTL.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -33,7 +34,16 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import config
-from .agent import AgentError, GapFillerAgent, Session, _pdf_text
+from .agent import (
+    IMAGE_ONLY_MIN_CHARS,
+    AgentError,
+    GapFillerAgent,
+    Session,
+    _ocr_available,
+    _ocr_pdf,
+    _pdf_extract,
+    _pdf_text,
+)
 from .checks import assign_stable_ids, ensure_ids
 from .projects import (
     WORKFLOWS,
@@ -153,6 +163,10 @@ class Store:
     session: Session
     created: float
     protocol: Optional[dict] = None
+    # Pre-op snapshot of the last-valid protocol, taken before a mutating model op runs.
+    # Powers lock-restore (_enforce_locks) and the /restore revert path. Never exposed to
+    # the model. None until the first mutating op on this session.
+    op_base: Optional[dict] = None
     design_review: Optional[dict] = None
     design_alignment: Optional[dict] = None
     correctness_review: Optional[dict] = None
@@ -293,7 +307,8 @@ def _get(session_id: str) -> Store:
 class Answer(BaseModel):
     id: str
     value: Any = None
-    skipped: bool = False
+    skipped: bool = False              # retained, no longer authoritative
+    mode: Optional[str] = None         # "answered" | "default" | "unresolved" | None(legacy)
 
 
 class ResolveRequest(BaseModel):
@@ -306,17 +321,20 @@ class ReviseRequest(BaseModel):
     session_id: str
     instruction: str
     idempotency_key: Optional[str] = None
+    locked_ids: list[str] = []          # stable ids whose value fields must survive the revision
 
 
 class DesignRequest(BaseModel):
     session_id: str
     idempotency_key: Optional[str] = None
+    locked_ids: list[str] = []          # honored by /api/apply_fixes
 
 
 class CritiqueRequest(BaseModel):
     session_id: str
     apply: bool = False  # True: audit, then auto-apply the fixes and return the rebuilt protocol
     idempotency_key: Optional[str] = None
+    locked_ids: list[str] = []          # honored on the apply=True path
 
 
 class AlignRequest(BaseModel):
@@ -344,6 +362,11 @@ class EditPatchRequest(BaseModel):
     field: str
     value: Any = None
     unit: Optional[str] = None
+
+
+class RestoreRequest(BaseModel):
+    session_id: str
+    target_ids: list[str] = []
 
 
 @app.get("/")
@@ -385,11 +408,12 @@ def analyze(
     hypothesis: str = Form(default=""),
     progress_id: str = Form(default=""),
     project_id: str = Form(default=""),
+    is_full_paper: bool = Form(default=False),   # NEW: reviewed-PDF text arriving via methods_text
+    pdf_filename: str = Form(default=""),        # NEW: carries the source name into seed_inputs
     file: Optional[UploadFile] = File(default=None),
 ) -> dict:
     _prune()
     agent = get_agent()
-    is_full_paper = False
     text: str
 
     if file is not None and file.filename:
@@ -444,7 +468,10 @@ def analyze(
             "pdf_text": text if is_full_paper else "",
             "pdf_present": is_full_paper,
             "hypothesis": hyp or "",
-            "pdf_filename": (file.filename if (file is not None and is_full_paper) else None),
+            "pdf_filename": (
+                file.filename if (file is not None and is_full_paper)
+                else ((pdf_filename or "").strip() or None if is_full_paper else None)
+            ),
         },
     )
     phase1 = session.phase1 or {}
@@ -464,6 +491,43 @@ def analyze(
         return _resolve(session_id, [])
     return {"session_id": session_id, "phase": "questions", "phase1": phase1,
             "review_status": "skipped"}
+
+
+@app.post("/api/extract_pdf", dependencies=_MUTATING)
+def extract_pdf(file: UploadFile = File(...)) -> dict:
+    """Host-side PDF text extraction preview. Does NOT drive the model — no session, no
+    model call, no ProjectStore write. _MUTATING because it buffers ≤25 MB and runs a
+    CPU-bound pypdf parse, so it wants the same auth + rate-limit envelope as /api/analyze."""
+    # Reuse the exact /api/analyze upload guards.
+    if file.size is not None and file.size > MAX_PDF_BYTES:
+        raise HTTPException(400, "PDF is too large (max ~25 MB). Paste the Methods section instead.")
+    pdf_bytes = file.file.read(MAX_PDF_BYTES + 1)  # capped read
+    if len(pdf_bytes) > MAX_PDF_BYTES:
+        raise HTTPException(400, "PDF is too large (max ~25 MB). Paste the Methods section instead.")
+    if not pdf_bytes.startswith(b"%PDF"):
+        raise HTTPException(400, "That file doesn't look like a PDF.")
+
+    extracted, pages = _pdf_extract(pdf_bytes)
+    is_image_only = (extracted is None) or (len(extracted.strip()) < IMAGE_ONLY_MIN_CHARS)
+    if is_image_only and _ocr_available():
+        try:
+            extracted = _ocr_pdf(pdf_bytes)
+            is_image_only = len(extracted.strip()) < IMAGE_ONLY_MIN_CHARS
+        except NotImplementedError:
+            pass
+    full = extracted or ""
+    included = full[:MAX_TEXT_CHARS]
+    return {
+        "methods_text": included,
+        "pages": pages,
+        "chars_total": len(full),
+        "chars_included": len(included),
+        "truncated": len(full) > MAX_TEXT_CHARS,
+        "max_chars": MAX_TEXT_CHARS,
+        "is_image_only": bool(is_image_only),
+        "ocr_available": _ocr_available(),
+        "filename": file.filename,
+    }
 
 
 @app.post("/api/resolve", dependencies=_MUTATING)
@@ -502,6 +566,7 @@ def revise(req: ReviseRequest) -> dict:
         if ik and (hit := store.idem_get(ik)) is not None:
             return hit
         store.start_progress()
+        store.op_base = copy.deepcopy(store.protocol)  # last-valid snapshot for lock-restore/revert
         store.note("Applying your correction and rebuilding the protocol…")
         agent = get_agent()
         try:
@@ -512,8 +577,12 @@ def revise(req: ReviseRequest) -> dict:
         except Exception as exc:  # noqa: BLE001
             _mark_failed(store.project_id)
             raise HTTPException(500, _explain(exc))
+        # Restore any locked value the model changed (may raise 409 on disappearance). On
+        # 409 we return without _finish, so store.protocol (last valid) stays untouched.
+        restored = _enforce_locks(store.op_base, protocol, req.locked_ids)
         store.note("Done.")
-        result = _finish(req.session_id, store, protocol, source_op="revise")
+        result = _finish(req.session_id, store, protocol, source_op="revise",
+                         restored_locked_ids=restored)
         if ik:
             store.idem_put(ik, result)
         return result
@@ -574,6 +643,7 @@ def critique(req: CritiqueRequest) -> dict:
 
         # One-step mode: audit AND apply, returning the findings + the corrected protocol.
         if req.apply and fixable:
+            store.op_base = copy.deepcopy(store.protocol)  # snapshot for lock-restore/revert
             store.note(f"Applying {len(fixable)} fix(es) and rebuilding…")
             try:
                 protocol = agent.apply_correctness_fixes(store.session, findings, progress=store.note)
@@ -581,12 +651,14 @@ def critique(req: CritiqueRequest) -> dict:
                 raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
             except Exception as exc:  # noqa: BLE001
                 raise HTTPException(500, _explain(exc))
+            restored = _enforce_locks(store.op_base, protocol, req.locked_ids)  # may raise 409
             # Independent, fresh-context re-review of the corrected protocol against the
             # ORIGINAL findings. Computed BEFORE _finish so the review gate feeds the
             # persisted ProtocolVersion.result and the project's validation_summary.
             fixv = _verify_fixes(store, findings)
             result = _finish(req.session_id, store, protocol,
-                             source_op="critique_apply", fix_verification=fixv)
+                             source_op="critique_apply", fix_verification=fixv,
+                             restored_locked_ids=restored)
             store.correctness_review = None  # stale as an actionable to-apply list
             store.fix_verification = fixv    # retain the verification outcome
             # result already carries fix_verification + review_status via _finish.
@@ -619,6 +691,7 @@ def apply_fixes(req: DesignRequest) -> dict:
         if ik and (hit := store.idem_get(ik)) is not None:
             return hit
         store.start_progress()
+        store.op_base = copy.deepcopy(store.protocol)  # snapshot for lock-restore/revert
         store.note("Applying the review's fixes and rebuilding…")
         agent = get_agent()
         try:
@@ -627,11 +700,13 @@ def apply_fixes(req: DesignRequest) -> dict:
             raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(500, _explain(exc))
+        restored = _enforce_locks(store.op_base, protocol, req.locked_ids)  # may raise 409
         # Independent re-review of the corrected protocol against the ORIGINAL findings,
         # computed BEFORE _finish so the review gate feeds the persisted version/summary.
         fixv = _verify_fixes(store, findings)
         result = _finish(req.session_id, store, protocol,
-                         source_op="apply_fixes", fix_verification=fixv)
+                         source_op="apply_fixes", fix_verification=fixv,
+                         restored_locked_ids=restored)
         store.correctness_review = None  # stale as an actionable to-apply list
         store.fix_verification = fixv    # retain the verification outcome
         if ik:
@@ -804,9 +879,36 @@ def download_materials_csv(session_id: str) -> PlainTextResponse:
     )
 
 
+_ANSWER_MODES = {"answered", "default", "unresolved"}
+
+
+def _normalize_answer(a: dict) -> dict:
+    """Single source of truth for per-gap answer semantics. An empty field is NEVER a
+    default — it becomes 'unresolved'. Legacy skip/value shapes map deterministically."""
+    mode = a.get("mode")
+    val = a.get("value")
+    empty = val is None or (isinstance(val, str) and not val.strip()) \
+        or (isinstance(val, list) and len(val) == 0)
+    if mode not in _ANSWER_MODES:
+        if a.get("skipped") and not empty:
+            mode = "answered"
+        elif a.get("skipped"):
+            mode = "unresolved"
+        elif empty:
+            mode = "unresolved"
+        else:
+            mode = "answered"
+    if mode == "answered" and empty:
+        mode = "unresolved"
+    return {"id": a["id"], "value": val, "mode": mode, "skipped": mode != "answered"}
+
+
 def _resolve(session_id: str, answers: list) -> dict:
     store = _get(session_id)
     agent = get_agent()
+    # Normalize each answer once, here, so /api/resolve and the internal _resolve(sid, [])
+    # caller share identical semantics. Empty list stays empty (no-gap fast path intact).
+    answers = [_normalize_answer(a) for a in answers]
     with store.lock:  # serialize against any concurrent op on this session
         store.note("Drafting the protocol from your answers…")
         try:
@@ -964,6 +1066,7 @@ def _finish(
     fix_verification: dict | None = None,
     review_attempted: bool = True,
     audit_status: str | None = None,
+    restored_locked_ids: list | None = None,
 ) -> dict:
     report = validate_and_finalize(
         protocol,
@@ -996,6 +1099,9 @@ def _finish(
     if fix_verification is not None:
         # Epic-3 additive object: host-owned, retained verbatim (3-value status vocab intact).
         r["fix_verification"] = fix_verification
+    if restored_locked_ids:
+        # Additive: ids whose locked value fields the host restored after the model changed them.
+        r["restored_locked_ids"] = list(restored_locked_ids)
     if store.project_id:
         # Server-authoritative persistence: one _finish == one ProtocolVersion. Best-effort —
         # a store failure never breaks protocol delivery (the response is still returned).
@@ -1055,6 +1161,47 @@ def _find_entity_by_id(protocol: dict, target_id: str):
     return None, None
 
 
+_LOCK_FIELDS = ("value", "unit", "amount", "concentration",
+                "provenance", "provenance_note",
+                "citation", "citation_verified", "quote_verified", "source_quote")
+
+
+def _enforce_locks(base: dict, new: dict, locked_ids: list) -> list:
+    """Restore each locked entity's value fields from ``base`` into ``new``, matched by
+    stable id (fallback positional _id via _find_entity_by_id). Returns the ids the host
+    actually restored (a tracked field differed). Policy: RESTORE on value change, ABORT
+    (409) on disappearance — a locked id present in base but absent from new means the
+    revision removed/renamed it (identity is implicitly locked) and cannot be preserved."""
+    restored: list[str] = []
+    if not locked_ids or base is None or new is None:
+        return restored
+    # Ensure both sides carry stable ids so a lock matches by identity. Idempotent +
+    # preserving; base already has them from its own _finish, new is freshly emitted.
+    ensure_ids(base)
+    assign_stable_ids(base)
+    ensure_ids(new)
+    assign_stable_ids(new)
+    for lid in locked_ids:
+        base_ent, _ = _find_entity_by_id(base, lid)
+        if base_ent is None:
+            continue  # unknown lock (never existed in the pre-op protocol) — forward-compatible
+        new_ent, _ = _find_entity_by_id(new, lid)
+        if new_ent is None:
+            raise HTTPException(
+                409,
+                f"A locked value ('{lid}') was removed by the revision and cannot be "
+                "preserved. Unlock it or narrow your request.")
+        changed = False
+        for f in _LOCK_FIELDS:
+            if f in base_ent:
+                if new_ent.get(f) != base_ent[f]:
+                    changed = True
+                new_ent[f] = copy.deepcopy(base_ent[f])
+        if changed:
+            restored.append(lid)
+    return restored
+
+
 @app.post("/api/protocol/{session_id}/edit", dependencies=_MUTATING)
 def edit_value(session_id: str, req: EditPatchRequest) -> dict:
     store = _get(session_id)  # 404 unknown/expired session
@@ -1090,6 +1237,36 @@ def edit_value(session_id: str, req: EditPatchRequest) -> dict:
         entity["needs_user_input"] = False
         entity.pop("evidence", None)
         return _finish(session_id, store, store.protocol, source_op="edit")
+
+
+@app.post("/api/protocol/{session_id}/restore", dependencies=_MUTATING)
+def restore_values(session_id: str, req: RestoreRequest) -> dict:
+    """Host-only, NO model call. Copy each target id's value fields from the pre-op
+    snapshot (op_base) back into the current protocol, matched by stable id. Restores the
+    exact prior host-validated values with provenance intact (unlike /edit, which flips
+    provenance to user_input). Deterministic + idempotent — the 'Revert unrelated' action."""
+    store = _get(session_id)  # 404 unknown/expired session
+    if store.protocol is None:
+        raise HTTPException(409, "Generate a protocol first, then restore a value.")
+    if store.op_base is None:
+        raise HTTPException(409, "Nothing to restore — no prior revision on this session.")
+    with store.lock:
+        base = store.op_base
+        ensure_ids(base)
+        assign_stable_ids(base)
+        ensure_ids(store.protocol)
+        assign_stable_ids(store.protocol)
+        for tid in req.target_ids:
+            base_ent, _ = _find_entity_by_id(base, tid)
+            curr_ent, _ = _find_entity_by_id(store.protocol, tid)
+            if base_ent is None and curr_ent is None:
+                raise HTTPException(404, f"Unknown value id for this protocol: {tid!r}.")
+            if base_ent is None or curr_ent is None:
+                continue  # resolvable on one side only — nothing to copy across
+            for f in _LOCK_FIELDS:
+                if f in base_ent:
+                    curr_ent[f] = copy.deepcopy(base_ent[f])
+        return _finish(session_id, store, store.protocol, source_op="restore")
 
 
 def _slug(title: str) -> str:

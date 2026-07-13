@@ -127,6 +127,64 @@ def _pdf_text(pdf: bytes) -> Optional[str]:
         return None
 
 
+IMAGE_ONLY_MIN_CHARS = 16
+
+
+def _pdf_extract(pdf: bytes) -> "tuple[Optional[str], int]":
+    """Host-side (NO model). Returns (text_or_None, page_count). text is None when the
+    PDF has no readable text layer OR the extractor is unavailable/unparseable. Single parse."""
+    try:
+        import io
+
+        import pypdf
+
+        reader = pypdf.PdfReader(io.BytesIO(pdf))
+        pages = len(reader.pages)
+        text = "\n".join((p.extract_text() or "") for p in reader.pages)
+        return (text if text.strip() else None), pages
+    except Exception:  # noqa: BLE001
+        return None, 0
+
+
+def _ocr_available() -> bool:
+    """True once an OCR backend is wired into _ocr_pdf. Seam only."""
+    return False
+
+
+def _ocr_pdf(pdf: bytes) -> str:
+    """OCR integration SEAM — NOT implemented (no OCR dep bundled). Frozen signature
+    (bytes -> str). Callers must catch NotImplementedError and fall back to paste."""
+    raise NotImplementedError(
+        "OCR is not available in this build. This PDF has no selectable text "
+        "(it looks scanned or image-only). Paste the Methods section as text instead.")
+
+
+_CRITICAL_KEYWORDS = frozenset({
+    "concentration", "dose", "dosage", "volume", "temperature", "time", "duration",
+    "ph", "molarity", "ratio", "cycles", "dilution", "incubat", "antibiotic",
+    "selection", "readout", "control", "seeding", "density", "moi", "voltage",
+    "flow rate", "gradient", "wavelength", "exposure", "od600", "confluence",
+})
+
+
+def _is_outcome_critical(gap: dict) -> bool:
+    if gap.get("outcome_critical") is True:
+        return True
+    cls = gap.get("classification")
+    if cls == "deferred":
+        return False
+    if cls == "user_dependent":
+        return True
+    text = " ".join(str(gap.get(k, "")) for k in
+                    ("parameter", "why_it_matters", "question")).lower()
+    if any(kw in text for kw in _CRITICAL_KEYWORDS):
+        return True
+    if gap.get("answer_type") == "number" and (
+            gap.get("plausible_min") is not None or gap.get("plausible_max") is not None):
+        return True
+    return False
+
+
 def _enabled_client_tools() -> dict:
     """{name: (search_fn, formatter)} for every grounding tool switched on.
     Resolves fns from the literature module at call time (monkeypatch-friendly)."""
@@ -579,6 +637,8 @@ class GapFillerAgent:
             raise AgentError("Phase 1 ended without calling request_clarifications.")
         session.request_tool_use_id = block.id
         session.phase1 = dict(block.input)
+        for _g in (session.phase1.get("gaps") or []):
+            _g["outcome_critical"] = _is_outcome_critical(_g)
         return session
 
     # -- Phase 0 (hypothesis-first): discover candidate assays -------------------
@@ -639,6 +699,8 @@ class GapFillerAgent:
         session.request_tool_use_id = session.pending_tool_use_id
         session.pending_tool_use_id = None
         session.phase1 = phase1
+        for _g in (session.phase1.get("gaps") or []):
+            _g["outcome_critical"] = _is_outcome_critical(_g)
         return phase1
 
     # -- Phase 2 + 3 ------------------------------------------------------------
@@ -698,7 +760,7 @@ class GapFillerAgent:
         # no questions, decisions stays empty rather than raising.
         questions = (session.phase1 or {}).get("questions") or []
         if questions:
-            session.decisions = [{"question": q, "answer": a}
+            session.decisions = [{"question": q, "answer": a.get("value"), "mode": a.get("mode")}
                                  for q, a in zip(questions, answers)]
         # Answer the request_clarifications call with the user's answers.
         session.messages.append(
@@ -706,6 +768,22 @@ class GapFillerAgent:
              "content": json.dumps({"answers": answers})}
         )
         session.request_tool_use_id = None  # prevent a second answer submission
+        # Host directive: honor the explicit per-gap modes exactly (empty is NEVER a default).
+        # Guard: no answers -> no directive (preserves the no-gap fast path).
+        if answers:
+            lines = []
+            for a in answers:
+                if a.get("mode") == "default":
+                    lines.append(f"- {a['id']}: USE its suggested_default; tag provenance "
+                                 f"'default_verify' and add an open_question noting it was accepted unverified.")
+                elif a.get("mode") == "unresolved":
+                    lines.append(f"- {a['id']}: LEAVE UNRESOLVED — do not fabricate a value; emit "
+                                 f"it as default_verify with an explicit open_question asking the user to supply it.")
+                else:
+                    lines.append(f"- {a['id']}: use the provided value.")
+            directive = ("The user made an explicit choice per gap. Honor these modes exactly "
+                         "(an empty field is NOT a default):\n" + "\n".join(lines))
+            session.messages.append({"role": "user", "content": directive})
         try:
             tools = _grounding_tools() + [EMIT_PROTOCOL_TOOL]
             block = self._run(session.messages, tools, "emit_protocol", state,
