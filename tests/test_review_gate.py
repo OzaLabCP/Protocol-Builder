@@ -281,6 +281,69 @@ def test_build_review_status_is_pure_and_idempotent():
 
 
 # ---------------------------------------------------------------------------
+# `unconfirmed`: the genuine "cannot determine" outcome — never counts as fixed
+# ---------------------------------------------------------------------------
+
+def test_unconfirmed_blocks_verified_clean():
+    """A critical finding the reviewer cannot confirm as fixed is `unconfirmed`, which is
+    OUTSIDE the {confirmed_fixed, not_applicable} clean set — so it forces issues_remain
+    and blocks. It is never silently promoted to fixed just because a re-emit completed."""
+    prior = [_finding(sev="critical", loc="steps[0]", prob="dilution maybe wrong")]
+    assign_finding_keys(prior)
+    verify = {"checks": [_check(prior[0]["_key"], "unconfirmed", "cannot tell from the artifact")]}
+    fv = build_review_status(prior, verify, checked=True)
+    assert fv["findings"][0]["outcome"] == "unconfirmed"
+    assert fv["status"] == "issues_remain"
+    assert fv["unresolved_count"] == 1
+    assert fv["unresolved_blocking"] is True
+    assert fv["counts"]["confirmed_fixed"] == 0     # NOT counted as fixed
+
+
+def test_unconfirmed_skeptic_rank_beats_confirmed_fixed_on_dup():
+    """Most-skeptical-wins on a duplicated key: confirmed_fixed + unconfirmed folds to
+    unconfirmed (the reviewer's uncertain read is not overridden by its optimistic one)."""
+    prior = [_finding(sev="major", loc="steps[0]", prob="a defect")]
+    assign_finding_keys(prior)
+    verify = {"checks": [_check(prior[0]["_key"], "confirmed_fixed", "looks fixed"),
+                         _check(prior[0]["_key"], "unconfirmed", "actually can't tell")]}
+    fv = build_review_status(prior, verify, checked=True)
+    assert fv["findings"][0]["outcome"] == "unconfirmed"
+    assert fv["counts"]["unconfirmed"] == 1 and fv["counts"]["confirmed_fixed"] == 0
+    assert fv["status"] == "issues_remain"
+
+
+def test_unconfirmed_minor_surfaces_but_does_not_block():
+    prior = [_finding(sev="minor", cat="logic", loc="steps[0]", prob="tiny nit")]
+    assign_finding_keys(prior)
+    verify = {"checks": [_check(prior[0]["_key"], "unconfirmed")]}
+    fv = build_review_status(prior, verify, checked=True)
+    assert fv["status"] == "issues_remain"           # surfaced as unresolved
+    assert fv["unresolved_count"] == 1
+    assert fv["unresolved_blocking"] is False         # minor-only never blocks
+
+
+def test_still_present_fix_is_never_marked_fixed():
+    """Requirement (2): a proposed fix that remains present is `still_present`, never
+    confirmed_fixed — the gate does not clear it."""
+    prior = [_finding(sev="critical", loc="steps[0]", prob="buffer omitted", fix="add buffer")]
+    assign_finding_keys(prior)
+    verify = {"checks": [_check(prior[0]["_key"], "still_present", "buffer still missing")]}
+    fv = build_review_status(prior, verify, checked=True)
+    assert fv["findings"][0]["outcome"] == "still_present"
+    assert fv["counts"]["confirmed_fixed"] == 0
+    assert fv["status"] == "issues_remain" and fv["unresolved_blocking"] is True
+
+
+def test_unconfirmed_does_not_disturb_existing_omission_fill():
+    """Regression guard: an omitted key still defaults to still_present (not unconfirmed)."""
+    prior = [_finding(sev="critical", loc="steps[0]", prob="missing control")]
+    assign_finding_keys(prior)
+    fv = build_review_status(prior, {"checks": []}, checked=True)
+    assert fv["findings"][0]["outcome"] == "still_present"
+    assert fv["counts"]["unconfirmed"] == 0
+
+
+# ---------------------------------------------------------------------------
 # (2),(3),(4),(5),(6) end-to-end through the apply endpoints
 # ---------------------------------------------------------------------------
 

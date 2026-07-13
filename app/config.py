@@ -75,7 +75,9 @@ REVIEW_MODEL = _first(os.environ.get("GAPFILLER_REVIEW_MODEL", ""), default=MODE
 # When true, a review that cannot run BLOCKS delivery (HTTP 424) instead of degrading to
 # review_status="unavailable". Default false so local dev and the best-effort pipeline are
 # unchanged. Repo truthiness idiom (default "0" -> False).
-REVIEW_REQUIRED = os.environ.get("GAPFILLER_REVIEW_REQUIRED", "0") != "0"
+# Unlike the older `!= "0"` flags, an explicitly-empty value is treated as unset (off): this
+# gate can BLOCK delivery, so an accidentally-empty env var must not silently force it on.
+REVIEW_REQUIRED = os.environ.get("GAPFILLER_REVIEW_REQUIRED", "0").strip() not in ("", "0")
 
 # Optional attribution headers OpenRouter surfaces on your dashboard (OpenRouter only).
 OPENROUTER_REFERER = os.environ.get("OPENROUTER_REFERER", "")
