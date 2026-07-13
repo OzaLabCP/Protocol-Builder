@@ -279,6 +279,39 @@ def test_finish_keeps_stated_on_paper_session():
         srv._SESSIONS.pop(sid, None); srv._agent = None
 
 
+def test_revise_without_protocol_is_409():
+    sid = "norevise"
+    srv._SESSIONS[sid] = srv.Store(session=Session(messages=[]), created=_time.time())
+    try:
+        r = client.post("/api/revise", json={"session_id": sid, "instruction": "use 150 uL wells"})
+        assert r.status_code == 409  # clean client-state error, not a 502 blaming the model
+    finally:
+        srv._SESSIONS.pop(sid, None)
+
+
+def test_resolve_after_build_is_409_not_502():
+    sid = "built"
+    st = srv.Store(session=Session(messages=[], request_tool_use_id=None), created=_time.time())
+    st.protocol = {"title": "P"}
+    srv._SESSIONS[sid] = st
+    try:
+        r = client.post("/api/resolve", json={"session_id": sid, "answers": []})
+        assert r.status_code == 409  # double-clicked build -> "already built", not a model 502
+    finally:
+        srv._SESSIONS.pop(sid, None)
+
+
+def test_get_refreshes_session_ttl_on_access():
+    sid = "ttl"
+    old = _time.time() - 1000
+    srv._SESSIONS[sid] = srv.Store(session=Session(), created=old)
+    try:
+        srv._get(sid)
+        assert srv._SESSIONS[sid].created > old  # TTL measured from last access, not creation
+    finally:
+        srv._SESSIONS.pop(sid, None)
+
+
 def test_progress_feed_accumulates_and_filters():
     proto = {"title": "P", "summary": "s", "estimated_duration": "1 h",
              "materials": [], "steps": [], "assumptions_log": []}

@@ -340,11 +340,11 @@ class GapFillerAgent:
                         f"output truncated — retrying with max_tokens={budget}")
                     continue
                 if finish == "length":
-                    # Even at the cap the response didn't fit — fail loud and actionable.
+                    # Even at the cap the response didn't fit — fail with a user-actionable
+                    # message (no server-tuning internals leaked to the client).
                     raise AgentError(
-                        "The model hit the max_tokens output limit before finishing, even at "
-                        f"the maximum budget ({config.MAX_TOKENS_CAP}). The protocol may be "
-                        "unusually large; narrow the request or raise GAPFILLER_MAX_TOKENS_CAP."
+                        "The protocol was too large to finish generating. Try a narrower "
+                        "scope — fewer conditions or a simpler assay — and rebuild."
                     )
                 break
 
@@ -627,13 +627,14 @@ class GapFillerAgent:
         )
 
     # -- Design review (teach the experiment around the protocol) ---------------
-    def design_review(self, session: Session) -> dict:
+    def design_review(self, session: Session, progress: Optional[Any] = None) -> dict:
         """Produce an experiment-design review of the emitted protocol."""
         return self._followup(session, DESIGN_REVIEW_INSTRUCTION, "emit_design_review",
-                               EMIT_DESIGN_REVIEW_TOOL, compact=True)
+                               EMIT_DESIGN_REVIEW_TOOL, compact=True, progress=progress)
 
     # -- Design alignment (does it directly test the hypothesis?) ---------------
-    def design_alignment(self, session: Session, hypothesis: Optional[str] = None) -> dict:
+    def design_alignment(self, session: Session, hypothesis: Optional[str] = None,
+                         progress: Optional[Any] = None) -> dict:
         """Assess whether the protocol directly tests the hypothesis and recommend
         concrete protocol changes. A hypothesis passed here overrides/sets the one
         captured at analyze time."""
@@ -647,7 +648,7 @@ class GapFillerAgent:
                 + instruction
             )
         return self._followup(session, instruction, "emit_design_alignment",
-                               EMIT_DESIGN_ALIGNMENT_TOOL, compact=True)
+                               EMIT_DESIGN_ALIGNMENT_TOOL, compact=True, progress=progress)
 
     # -- Adversarial correctness review (attack the emitted protocol) -----------
     def correctness_review(self, session: Session, progress: Optional[Any] = None) -> dict:

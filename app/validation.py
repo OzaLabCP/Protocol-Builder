@@ -87,14 +87,23 @@ def _quote_supports(entry: dict, quote: str) -> bool:
 
 
 def _iter_citation_entries(protocol: dict) -> Iterator[tuple[dict, str]]:
-    """Yield (entry, human-readable location) for every value that carries a
-    provenance tier and may carry a citation."""
+    """Yield (entry, human-readable location) for every provenance-bearing value the
+    citation invariants apply to. Steps/substeps/titration have no citation field in the
+    schema, so including them here is what enforces the invariant that a step tagged
+    'literature_grounded' with no citation gets downgraded (otherwise an unverifiable
+    grounding badge would ship on a step, unchecked)."""
     for i, mat in enumerate(protocol.get("materials") or []):
         yield mat, f"materials[{i}] '{mat.get('name', '?')}'"
     for step in protocol.get("steps") or []:
         snum = step.get("number", "?")
+        yield step, f"step {snum} '{step.get('title', '?')}'"
         for j, cp in enumerate(step.get("critical_parameters") or []):
             yield cp, f"step {snum} critical_parameters[{j}] '{cp.get('name', '?')}'"
+        for k, ss in enumerate(step.get("substeps") or []):
+            yield ss, f"step {snum} substeps[{k}] '{ss.get('number', '?')}'"
+    ts = protocol.get("titration_series")
+    if isinstance(ts, dict):
+        yield ts, "titration_series"
     for k, a in enumerate(protocol.get("assumptions_log") or []):
         yield a, f"assumptions_log[{k}] '{a.get('parameter', '?')}'"
 

@@ -266,7 +266,7 @@ EMIT_DESIGN_REVIEW_TOOL = {
                         "provenance": _DESIGN_PROVENANCE,
                         "citation": CITATION_SCHEMA,
                     },
-                    "required": ["name", "type", "rules_out"],
+                    "required": ["name", "type", "rules_out", "provenance"],
                 },
             },
             "readout": {
@@ -327,7 +327,8 @@ EMIT_DESIGN_REVIEW_TOOL = {
             },
         },
         "required": ["question", "hypothesis", "variables", "controls", "readout",
-                     "replication", "expected_results", "interpretation_limits"],
+                     "replication", "expected_results", "interpretation_limits",
+                     "failure_modes", "design_gaps"],
     },
 }
 
@@ -446,8 +447,12 @@ SEARCH_PROTOCOLS_TOOL = {
     "description": (
         "Search published protocols.io protocols — step-by-step methods with their "
         "own DOIs. Best for grounding a METHOD or step (not just a numeric value): if "
-        "a returned protocol matches this technique, cite its DOI for the relevant "
-        "step as literature_grounded. Returns title, authors, year, DOI, and URL."
+        "a returned protocol matches this technique, record the grounding on a value that "
+        "has a citation slot — a critical_parameter of the relevant step, or an "
+        "assumptions_log entry — tagged literature_grounded with the DOI, and tag the step "
+        "itself best_practice. (Steps/substeps have no citation field, so a "
+        "literature_grounded tag there cannot be verified and will be downgraded.) "
+        "Returns title, authors, year, DOI, and URL."
     ),
     "input_schema": {
         "type": "object",

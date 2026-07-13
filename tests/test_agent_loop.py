@@ -349,7 +349,7 @@ def test_truncation_raises_actionable_error_at_cap():
         agent.analyze("A methods section describing a reaction incubated at 30 C for 4 h.")
         assert False, "expected AgentError when truncation persists to the cap"
     except AgentError as e:
-        assert "MAX_TOKENS" in str(e)
+        assert "too large" in str(e).lower()  # user-actionable, no env-var leak
 
 
 def test_followup_restores_session_on_failure():
