@@ -887,12 +887,25 @@ def _validation_summary_from_report(report: dict) -> ValidationSummary:
     unverified = len(quotes.get("unverified") or [])
     support = report.get("support") or {}
     mismatch = len(support.get("mismatch") or [])
-    warning_count = downgraded + stated + mismatch + unverified
+
+    gate = report.get("quality_gate") or {}
+    gate_counts = gate.get("counts") or {}
+    error_count = int(gate_counts.get("errors", 0))
+    gate_warnings = int(gate_counts.get("warnings", 0))
+
+    warning_count = downgraded + stated + mismatch + unverified + gate_warnings
     unverified_citation_count = downgraded + unverified
-    status = "clean" if warning_count == 0 else "warnings"
+
+    if error_count > 0 or gate.get("status") == "blocked":
+        status = "blocked"
+    elif warning_count > 0:
+        status = "warnings"
+    else:
+        status = "clean"
+
     return ValidationSummary(
         status=status,
-        error_count=0,
+        error_count=error_count,
         warning_count=warning_count,
         unverified_citation_count=unverified_citation_count,
         report=report,

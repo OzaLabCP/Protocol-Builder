@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 from typing import Callable, Iterator, Optional
 
+from .checks import ensure_ids, run_checks
 from .resolvers import ResolvedCitation, resolve_citation
 
 Resolver = Callable[[str], Optional[ResolvedCitation]]
@@ -435,6 +436,18 @@ def validate_and_finalize(
         )
 
     _consistency_check(protocol, report, open_questions)
+
+    # --- QUALITY GATE (Epic 2): runs LAST, on the fully finalized protocol. ---
+    # ensure_ids is idempotent (positional overwrite), so calling it here freezes
+    # structural anchors on the converged protocol before run_checks reads them.
+    # Every key below is ADDITIVE; no pre-existing report key is touched.
+    ensure_ids(protocol)
+    report["id_scheme"] = "structural-path-v1"
+    report["assumptions"] = []
+    findings = run_checks(protocol)              # pure, deterministic
+    _apply_quality_gate(report, open_questions, findings)
+    report.pop("_assumption_keys", None)         # scratch dedup state never ships
+
     protocol["open_questions"] = open_questions
     protocol["validation_report"] = report
     return report
@@ -472,16 +485,86 @@ def _consistency_check(protocol: dict, report: dict, open_questions: list) -> No
     report["consistency"]["inline_missing_from_log"] = inline_missing
     report["consistency"]["log_missing_from_inline"] = log_missing
 
+    # Idempotency: open_questions is seeded from the protocol's prior value, so strip
+    # any consistency lines a previous validate_and_finalize left behind before
+    # re-appending — otherwise repeated runs stack duplicates (mirrors the gate pass).
+    open_questions[:] = [q for q in open_questions
+                         if not (isinstance(q, str) and q.startswith(_CONSISTENCY_MARK))]
+
     for name in inline_missing:
         open_questions.append(
-            f"Consistency: '{name}' is filled inline but missing from the "
+            f"{_CONSISTENCY_MARK}'{name}' is filled inline but missing from the "
             f"assumptions_log (the log must be exhaustive)."
         )
     # log-only entries are allowed (step-level assumptions) but still worth noting
     for name in log_missing:
         open_questions.append(
-            f"Consistency: assumptions_log lists '{name}' with no matching inline "
+            f"{_CONSISTENCY_MARK}assumptions_log lists '{name}' with no matching inline "
             f"material or critical parameter — confirm it is applied somewhere."
+        )
+
+
+_GATE_MARK = "[QUALITY GATE] "
+_CONSISTENCY_MARK = "Consistency: "
+
+
+def _add_assumption(report, location, assumption, why, _id=None):
+    """Project one assumption finding into the human-facing report['assumptions']
+    log, deduped by (anchor, normalized-text). Sole writer of that key."""
+    key = (_id or location or "", _norm_param(assumption))
+    seen = report.setdefault("_assumption_keys", set())
+    if key in seen:
+        return
+    seen.add(key)
+    report["assumptions"].append(
+        {"location": location, "id": _id, "assumption": assumption, "why": why}
+    )
+
+
+def _apply_quality_gate(report, open_questions, findings):
+    """Fold the pure run_checks output into ADDITIVE report keys and surface ONLY
+    blocking (error) findings into open_questions. Idempotent: report is rebuilt
+    fresh each call and prior gate lines are stripped before re-appending, so a
+    second validate_and_finalize on the same protocol yields identical output."""
+    errors      = [f for f in findings if f.get("severity") == "error"]
+    warnings    = [f for f in findings if f.get("severity") == "warning"]
+    assumptions = [f for f in findings if f.get("severity") == "assumption"]
+    info        = [f for f in findings if f.get("severity") == "info"]
+
+    status = "blocked" if errors else ("warnings" if warnings else "ok")
+
+    report["quality_gate"] = {
+        "version": 1,
+        "status": status,
+        "errors": errors,
+        "warnings": warnings,
+        "assumptions": assumptions,
+        "info": info,
+        "counts": {
+            "errors": len(errors), "warnings": len(warnings),
+            "assumptions": len(assumptions), "info": len(info),
+        },
+    }
+
+    # Project assumption findings into the human-facing log (deduped), in the
+    # already-sorted run_checks order.
+    for f in assumptions:
+        _add_assumption(
+            report,
+            location=f.get("location"),
+            assumption=f.get("message", ""),
+            why=(f.get("detail") or {}).get("why", ""),
+            _id=f.get("id"),
+        )
+
+    # Surface ONLY blocking errors into open_questions. Strip prior gate lines first
+    # so repeated validate_and_finalize calls never stack or drift. Warnings,
+    # assumptions, and info stay in-report only.
+    open_questions[:] = [q for q in open_questions
+                         if not (isinstance(q, str) and q.startswith(_GATE_MARK))]
+    for f in errors:
+        open_questions.append(
+            f"{_GATE_MARK}{f.get('location', '?')}: {f.get('message', 'blocking issue')}"
         )
 
 

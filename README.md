@@ -47,6 +47,45 @@ model runs each phase under `tool_choice: "auto"` and the structured tool call i
 terminal signal. (See the spec's Architecture note for why forcing + searching in one
 call is impossible.)
 
+### Deterministic checks & quality gate
+
+Alongside the model-run audit, the host runs a **pure, deterministic quality gate**
+(`app/checks.py`) over the finalized protocol — no model, no network, no randomness, so
+equal input always yields byte-identical output. It re-derives the arithmetic the protocol
+asserts and flags what is provably wrong:
+
+- **Dilutions** — `C1·V1 = C2·V2` and dilution-factor math (a stated transfer volume that
+  disagrees with `C2·V2 / C1`, or a "final" concentration above the stock).
+- **Mass ↔ molarity** — `mass = C·V·MW` (or `V·density`) when a molecular weight or density
+  is present.
+- **Mixtures** — component volumes vs a stated total; percent/ratio groups that sum past 100%.
+- **Plate layout** — `conditions × replicates (+ controls)` against a declared 96-/384-well
+  capacity.
+- **Physical sanity** — negative volumes/masses/concentrations, pH outside 0–14, percentages
+  over 100%, temperatures below absolute zero, and numeric values that carry no unit.
+
+Findings carry one of four severities, and **ambiguity always resolves downward**
+(`info/pass › assumption › warning › error`) so a correct protocol is never driven to
+`blocked`:
+
+- **error** — provably wrong given complete, unit-compatible, in-tolerance data. **Any error
+  sets the gate `status` to `blocked`** and surfaces that line into `open_questions`.
+- **warning** — off or unverifiable because a premise is missing or ambiguous (e.g. a value
+  with no unit, incompatible units). In-report only.
+- **assumption** — the check supplied an unstated premise instead of computing (e.g. a
+  mass/molarity cross-check with **no molecular weight** stated) and recorded *why*. Neutral:
+  it never affects status or counts.
+- **info** — the check ran and passed.
+
+The bucketed result lands on `report["quality_gate"]` (`status`, per-severity lists, and
+`counts`); `status` is `blocked` if any error, else `warnings` if any warning, else `ok`.
+Every assumption is also projected into a human-facing **assumptions log**
+(`report["assumptions"]`), each entry naming the premise the check supplied and the reason it
+did so — kept disjoint from `open_questions`, which carries only blocking errors. Structural
+anchors (`structural-path-v1` ids) and the whole gate are recomputed from scratch on every
+validation, so re-running it is idempotent — identical `quality_gate`, identical ids, and no
+accumulation in `open_questions`.
+
 ## Run it
 
 Requires Python 3.10+ and an API key for one provider.

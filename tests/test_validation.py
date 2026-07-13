@@ -3,6 +3,7 @@ injected)."""
 
 from __future__ import annotations
 
+import copy
 import os
 import sys
 
@@ -187,6 +188,19 @@ def test_consistency_flags_inline_value_missing_from_log():
     report = validate_and_finalize(p, fake_resolver({}))
     assert "magnesium glutamate" in report["consistency"]["inline_missing_from_log"]
     assert any("missing from the assumptions_log" in q for q in p["open_questions"])
+
+
+def test_consistency_lines_do_not_accumulate_across_runs():
+    # Re-validating the same protocol must not stack duplicate consistency lines in
+    # open_questions (regression: they were appended unconditionally, unlike gate lines).
+    mat = {"name": "Magnesium glutamate", "provenance": "best_practice", "citation": None}
+    p = base_protocol(materials=[mat], assumptions_log=[])
+    validate_and_finalize(p, fake_resolver({}))
+    oq1 = list(p["open_questions"])
+    validate_and_finalize(p, fake_resolver({}))
+    assert p["open_questions"] == oq1  # no accumulation on the second run
+    n = sum(1 for q in p["open_questions"] if "missing from the assumptions_log" in q)
+    assert n == 1
 
 
 def test_validate_and_finalize_no_stated_downgrades():
@@ -577,6 +591,112 @@ def test_backcompat_old_json_no_evidence():
     assert mat["claim_support_status"] == "evidence_unavailable"
     assert mat["claim_support_status"] != "supported"
     assert report["support"]["supported"] == []
+
+
+# --- Epic 2: deterministic quality gate (integrated path) ------------------
+
+def _qg_cp(name, value, unit=None):
+    return {"name": name, "value": value, "unit": unit, "provenance": "stated"}
+
+
+def _dilution_step(v1_value):
+    """A C1V1=C2V2 dilution step. Correct transfer volume is 10 uL
+    (C1=100 mM, C2=10 mM, V2=100 uL -> V1 = C2*V2/C1 = 10 uL)."""
+    return {"number": 1, "title": "Dilute", "instruction": "dilute",
+            "provenance": "stated", "critical_parameters": [
+                _qg_cp("stock concentration", "100", "mM"),
+                _qg_cp("final concentration", "10", "mM"),
+                _qg_cp("final volume", "100", "uL"),
+                _qg_cp("transfer volume", v1_value, "uL"),
+            ]}
+
+
+def test_gate_correct_protocol_is_ok():
+    p = base_protocol(steps=[_dilution_step("10")],  # correct dilution
+                      conditions=4, replicates=3, plate="96-well")  # 12 <= 96
+    report = validate_and_finalize(p, fake_resolver({}))
+    gate = report["quality_gate"]
+    assert gate["status"] == "ok"
+    assert gate["counts"]["errors"] == 0
+    assert gate["errors"] == []
+    assert not any(q.startswith("[QUALITY GATE] ") for q in p["open_questions"])
+    assert report["id_scheme"] == "structural-path-v1"
+
+
+def test_gate_wrong_dilution_is_blocked():
+    p = base_protocol(steps=[_dilution_step("50")])  # 50 uL, should be 10 uL
+    report = validate_and_finalize(p, fake_resolver({}))
+    gate = report["quality_gate"]
+    assert gate["status"] == "blocked"
+    assert gate["counts"]["errors"] >= 1
+    assert any(f["code"] == "DIL_MISMATCH" for f in gate["errors"])
+    assert any(q.startswith("[QUALITY GATE] ") for q in p["open_questions"])
+
+
+def test_gate_plate_over_capacity_is_blocked():
+    p = base_protocol(conditions=20, replicates=30, plate="384-well")  # 600 > 384
+    report = validate_and_finalize(p, fake_resolver({}))
+    gate = report["quality_gate"]
+    assert gate["status"] == "blocked"
+    over = [f for f in gate["errors"] if f["code"] == "PLATE_OVER_CAPACITY"]
+    assert len(over) == 1
+    assert over[0]["actual"] == 600 and over[0]["expected"] == 384
+
+
+def test_gate_missing_unit_is_warning_not_error():
+    mat = {"name": "salt", "amount": 5, "unit": None, "provenance": "stated"}
+    p = base_protocol(materials=[mat])
+    report = validate_and_finalize(p, fake_resolver({}))
+    gate = report["quality_gate"]
+    assert gate["counts"]["errors"] == 0
+    assert gate["counts"]["warnings"] >= 1
+    assert gate["status"] == "warnings"
+    assert any(f["code"] == "UNIT_MISSING" for f in gate["warnings"])
+    assert not any(q.startswith("[QUALITY GATE] ") for q in p["open_questions"])
+
+
+def test_gate_missing_mw_is_assumption_not_error():
+    step = {"number": 1, "title": "Weigh", "instruction": "weigh",
+            "provenance": "stated", "critical_parameters": [
+                _qg_cp("concentration", "10", "mM"),
+                _qg_cp("volume", "100", "uL"),
+                _qg_cp("mass", "5", "mg")]}  # mass, but no molecular weight
+    p = base_protocol(steps=[step])
+    report = validate_and_finalize(p, fake_resolver({}))
+    gate = report["quality_gate"]
+    assert gate["counts"]["errors"] == 0
+    assert gate["status"] in ("ok", "warnings")  # never blocked
+    mw = [f for f in gate["assumptions"] if f["code"] == "MOLAR_NO_MW"]
+    assert len(mw) == 1 and mw[0]["severity"] == "assumption"
+    # projected into the human-facing log with a non-empty rationale and matching id
+    projected = [a for a in report["assumptions"] if a["id"] == mw[0]["id"]]
+    assert projected and projected[0]["why"]
+
+
+def test_gate_is_idempotent():
+    p = base_protocol(steps=[_dilution_step("50")])  # a blocking protocol
+    validate_and_finalize(p, fake_resolver({}))
+    gate1 = copy.deepcopy(p["validation_report"]["quality_gate"])
+    ids1 = [s["_id"] for s in p["steps"]] + \
+           [cp["_id"] for cp in p["steps"][0]["critical_parameters"]]
+    oq1 = list(p["open_questions"])
+    validate_and_finalize(p, fake_resolver({}))
+    gate2 = p["validation_report"]["quality_gate"]
+    ids2 = [s["_id"] for s in p["steps"]] + \
+           [cp["_id"] for cp in p["steps"][0]["critical_parameters"]]
+    assert gate1 == gate2                                   # identical gate
+    assert ids1 == ids2                                     # identical structural ids
+    assert oq1 == p["open_questions"]                       # no accumulation / drift
+    assert "_assumption_keys" not in p["validation_report"]  # scratch state never ships
+
+
+def test_gate_blocked_report_yields_blocked_summary():
+    from app.server import _validation_summary_from_report
+    p = base_protocol(steps=[_dilution_step("50")])  # blocking dilution
+    report = validate_and_finalize(p, fake_resolver({}))
+    summary = _validation_summary_from_report(report)
+    assert summary.status == "blocked"
+    assert summary.error_count >= 1
 
 
 if __name__ == "__main__":
