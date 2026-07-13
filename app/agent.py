@@ -86,6 +86,7 @@ class Session:
     protocol: Optional[dict] = None  # last emitted/corrected protocol (post-apply, ensure_ids'd)
     grounding_log: list = field(default_factory=list)  # queries the app ran
     grounding_call_ids: list = field(default_factory=list)  # tool_call_ids of grounding results (for compaction)
+    decisions: list = field(default_factory=list)  # host-captured user intent (clarification Q&A + chosen assay)
 
 
 @dataclass
@@ -277,14 +278,83 @@ def _render_verification_input(corrected: dict, prior_findings: list) -> str:
     return "\n".join(parts)
 
 
+_SOURCE_CAP = 12000  # chars; longer source is head+tail summarized so the reviewer isn't flooded
+
+
+def _render_review_input(protocol: dict, *, source_text=None, source_exact=True,
+                         decisions=None, grounding_log=None, quality_gate=None) -> str:
+    """Build the ONE user message for a FRESH-context adversarial correctness review.
+
+    Assembles EXACTLY five whitelisted blocks and, BY CONSTRUCTION, includes nothing from
+    ``session.messages`` — no authoring assistant turns, no chain-of-thought, no prior
+    self-justification, no SYSTEM_EMIT reasoning. The reviewer sees only the artifact and
+    the host-owned ground truth, so it audits independently rather than re-reading (and
+    trusting) the reasoning that produced the protocol.
+
+    Blocks, in order: SOURCE (methods), PROTOCOL (JSON), USER DECISIONS, RETRIEVED EVIDENCE
+    (searches run), DETERMINISTIC VALIDATION FINDINGS (quality_gate). Trailing:
+    CORRECTNESS_REVIEW_INSTRUCTION."""
+    parts: list = []
+
+    # 1. SOURCE (methods) — full when short; head+tail summary when oversized; a marker
+    #    when absent (hypothesis-first). Always declare source_exact so lossy PDF text is
+    #    not over-trusted.
+    if source_text:
+        parts.append("=== SOURCE (methods) ===")
+        parts.append(f"source_exact: {'true' if source_exact else 'false'}")
+        text = str(source_text)
+        if len(text) > _SOURCE_CAP:
+            head = text[: _SOURCE_CAP // 2]
+            tail = text[-(_SOURCE_CAP // 2):]
+            parts.append("source_summary (summarized): head+tail of an oversized source")
+            parts.append(head)
+            parts.append("… [middle omitted] …")
+            parts.append(tail)
+        else:
+            parts.append(text)
+    else:
+        parts.append("=== SOURCE === (none — hypothesis-first draft)")
+    parts.append("")
+
+    # 2. PROTOCOL (JSON) — the artifact under audit (already ensure_ids'd / validated).
+    parts.append("=== PROTOCOL (JSON) ===")
+    parts.append(json.dumps(protocol, indent=2, default=str))
+    parts.append("")
+
+    # 3. USER DECISIONS — host-captured intent (clarification Q&A + chosen assay). Never
+    #    the transcript.
+    parts.append("=== USER DECISIONS ===")
+    parts.append(json.dumps(decisions or [], indent=2, default=str))
+    parts.append("")
+
+    # 4. RETRIEVED EVIDENCE (searches run) — the grounding log; cited excerpts already live
+    #    inline in the protocol's citation.evidence.
+    parts.append("=== RETRIEVED EVIDENCE (searches run) ===")
+    parts.append("\n".join(str(q) for q in (grounding_log or [])) or "(no searches run)")
+    parts.append("")
+
+    # 5. DETERMINISTIC VALIDATION FINDINGS (quality_gate) — the host's deterministic verdict
+    #    handed to the reviewer as ground truth.
+    parts.append("=== DETERMINISTIC VALIDATION FINDINGS (quality_gate) ===")
+    parts.append(json.dumps(quality_gate or {}, indent=2, default=str))
+    parts.append("")
+
+    parts.append(CORRECTNESS_REVIEW_INSTRUCTION)
+    return "\n".join(parts)
+
+
 class GapFillerAgent:
     def __init__(self, client: Optional[OpenRouterClient] = None, model: Optional[str] = None,
-                 model_fast: Optional[str] = None):
+                 model_fast: Optional[str] = None, review_model: Optional[str] = None):
         self.client = client or OpenRouterClient()
         self.model = model or config.MODEL
         # Fast tier for the light phases (analyze/clarifications, discovery); falls back
         # to the main model when unset. The heavy emit always uses the main model.
         self.model_fast = model_fast or config.MODEL_FAST or self.model
+        # Reviewer tier for the adversarial correctness review + post-fix verify. Defaults
+        # to REVIEW_MODEL (== MODEL unless GAPFILLER_REVIEW_MODEL is set), so a byte-identical
+        # run by default and an independent second-opinion model when configured.
+        self.review_model = review_model or config.REVIEW_MODEL or self.model
         # Reasoning effort: full on the heavy phases, lower on the light ones — spend
         # expensive thinking tokens only where they add value.
         self.effort = config.REASONING_EFFORT          # heavy phases (None -> this default)
@@ -555,6 +625,7 @@ class GapFillerAgent:
         if chosen is None:
             raise AgentError(f"Unknown assay id: {assay_id}")
         session.chosen_assay = chosen
+        session.decisions.append({"decision": "chose_assay", "assay": chosen.get("name")})
         brief = CHOOSE_ASSAY_INSTRUCTION.format(
             hypothesis=session.hypothesis or "(not explicitly stated)",
             assay_name=chosen.get("name", assay_id),
@@ -622,6 +693,13 @@ class GapFillerAgent:
         # instead of dying with "Session has no pending clarification to answer".
         saved_request = session.request_tool_use_id
         saved_len = len(session.messages)
+        # Capture user intent host-side (never scraped from the transcript) so the fresh
+        # correctness review can be shown the clarification Q&A. Guarded: if phase1 carries
+        # no questions, decisions stays empty rather than raising.
+        questions = (session.phase1 or {}).get("questions") or []
+        if questions:
+            session.decisions = [{"question": q, "answer": a}
+                                 for q, a in zip(questions, answers)]
         # Answer the request_clarifications call with the user's answers.
         session.messages.append(
             {"role": "tool", "tool_call_id": session.request_tool_use_id,
@@ -743,12 +821,38 @@ class GapFillerAgent:
                                EMIT_DESIGN_ALIGNMENT_TOOL, compact=True, progress=progress)
 
     # -- Adversarial correctness review (attack the emitted protocol) -----------
-    def correctness_review(self, session: Session, progress: Optional[Any] = None) -> dict:
+    def correctness_review(self, session: Session, quality_gate: dict = None,
+                           progress: Optional[Any] = None) -> dict:
         """Skeptical, independent audit of the emitted protocol for logic/value/ordering/
-        control errors. Model-generated reasoning (not a host guarantee); its citations are
-        host-verified. Runs on the main model — this is reasoning-heavy."""
-        return self._followup(session, CORRECTNESS_REVIEW_INSTRUCTION, "emit_correctness_review",
-                              EMIT_CORRECTNESS_REVIEW_TOOL, compact=True, progress=progress)
+        control errors. Runs in a FRESH, ephemeral reviewer context: the live session's
+        authoring transcript (its reasoning, self-justification, SYSTEM_EMIT turns) is NEVER
+        shown to the reviewer and is NOT mutated. The reviewer sees only the whitelisted
+        blocks assembled by ``_render_review_input`` (source/summary, normalized protocol,
+        user decisions, retrieved evidence, deterministic findings). Model-generated
+        reasoning (not a host guarantee); its citations are host-verified. Runs on the
+        review model — reasoning-heavy, with grounding bounded by PUBMED_BUDGET so an
+        implausible_value / unit_or_scaling claim can be re-derived."""
+        protocol = session.protocol
+        if protocol is None:
+            raise AgentError("Nothing to review yet — emit a protocol first.")
+        if quality_gate is None:
+            quality_gate = ((protocol.get("validation_report") or {}).get("quality_gate"))
+        payload = _render_review_input(
+            protocol,
+            source_text=session.source_text, source_exact=session.source_exact,
+            decisions=session.decisions, grounding_log=session.grounding_log,
+            quality_gate=quality_gate,
+        )
+        messages = [{"role": "user", "content": payload}]  # throwaway transcript
+        state = RunState(session=session, searches_left=config.PUBMED_BUDGET, progress=progress)
+        block = self._run(
+            messages, _grounding_tools() + [EMIT_CORRECTNESS_REVIEW_TOOL],
+            "emit_correctness_review", state,
+            system=self.system_prompt, model=self.review_model, effort=self.effort,
+        )
+        if block is None:
+            raise AgentError("Reviewer ended without calling emit_correctness_review.")
+        return dict(block.input)
 
     def apply_correctness_fixes(self, session: Session, findings: list,
                                 progress: Optional[Any] = None) -> dict:
@@ -801,7 +905,7 @@ class GapFillerAgent:
             "emit_fix_verification",
             state,
             system=self.system_prompt,
-            model=self.model,
+            model=self.review_model,
             effort=self.effort,
         )
         if block is None:

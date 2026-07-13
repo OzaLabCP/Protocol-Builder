@@ -21,6 +21,7 @@ import secrets
 import threading
 import time
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -144,6 +145,9 @@ _MUTATING = [Depends(require_auth), Depends(rate_limit)]  # POSTs that drive the
 _READONLY = [Depends(require_auth)]  # GET downloads (auth header only; cheap, not rate-limited)
 
 
+IDEM_CAP = 16  # max cached idempotent results retained per session (bounded LRU)
+
+
 @dataclass
 class Store:
     session: Session
@@ -153,6 +157,11 @@ class Store:
     design_alignment: Optional[dict] = None
     correctness_review: Optional[dict] = None
     fix_verification: Optional[dict] = None  # last independent fix-verification outcome
+    # Per-session bounded LRU of idempotent results, keyed by "<op>:<idempotency_key>".
+    # Value is the exact result dict returned on the first success of that op+key. Every
+    # access happens inside `with self.lock`, so no separate lock is needed; the cache is
+    # inherently per-session and is reclaimed with the Store by _prune()/TTL eviction.
+    idem: "OrderedDict[str, dict]" = field(default_factory=OrderedDict)
     assay_options: Optional[dict] = None
     chosen_assay: Optional[dict] = None
     # Live activity feed for the current long op: [{seq, msg}], polled by the client.
@@ -170,6 +179,20 @@ class Store:
     # None for sessions that never went through the projects bridge; when set, _finish
     # persists a ProtocolVersion and advances the project's lifecycle.
     project_id: Optional[str] = None
+
+    # Idempotency cache helpers. Both assume the caller already holds self.lock (they never
+    # take it), so check -> model work -> record stays atomic under one continuous hold.
+    def idem_get(self, key):
+        if key in self.idem:
+            self.idem.move_to_end(key)  # mark most-recently-used
+            return self.idem[key]
+        return None
+
+    def idem_put(self, key, result):
+        self.idem[key] = result
+        self.idem.move_to_end(key)
+        while len(self.idem) > IDEM_CAP:
+            self.idem.popitem(last=False)  # evict least-recently-used
 
     def start_progress(self) -> None:
         """Clear the feed at the start of a new long op so the client (polling from 0)
@@ -276,25 +299,30 @@ class Answer(BaseModel):
 class ResolveRequest(BaseModel):
     session_id: str
     answers: list[Answer] = []
+    idempotency_key: Optional[str] = None
 
 
 class ReviseRequest(BaseModel):
     session_id: str
     instruction: str
+    idempotency_key: Optional[str] = None
 
 
 class DesignRequest(BaseModel):
     session_id: str
+    idempotency_key: Optional[str] = None
 
 
 class CritiqueRequest(BaseModel):
     session_id: str
     apply: bool = False  # True: audit, then auto-apply the fixes and return the rebuilt protocol
+    idempotency_key: Optional[str] = None
 
 
 class AlignRequest(BaseModel):
     session_id: str
     hypothesis: Optional[str] = None
+    idempotency_key: Optional[str] = None
 
 
 class DiscoverRequest(BaseModel):
@@ -308,6 +336,7 @@ class DiscoverRequest(BaseModel):
 class ChooseAssayRequest(BaseModel):
     session_id: str
     assay_id: str
+    idempotency_key: Optional[str] = None
 
 
 class EditPatchRequest(BaseModel):
@@ -424,7 +453,8 @@ def analyze(
         # Rejected: neutralize the pending clarification so a stray /api/resolve can't try
         # to build a protocol from a non-usable session.
         session.request_tool_use_id = None
-        return {"session_id": session_id, "phase": "rejected", "phase1": phase1}
+        return {"session_id": session_id, "phase": "rejected", "phase1": phase1,
+                "review_status": "skipped"}
     if not (phase1.get("gaps") or []):
         # No clarifications -> build straight away in this same request. Mirror the build's
         # session-keyed notes into the pre-session feed the client is polling (like auto_pick),
@@ -432,21 +462,31 @@ def analyze(
         if note:
             store.mirror = note
         return _resolve(session_id, [])
-    return {"session_id": session_id, "phase": "questions", "phase1": phase1}
+    return {"session_id": session_id, "phase": "questions", "phase1": phase1,
+            "review_status": "skipped"}
 
 
 @app.post("/api/resolve", dependencies=_MUTATING)
 def resolve(req: ResolveRequest) -> dict:
     store = _get(req.session_id)
-    # Client-state guard (e.g. a double-clicked "Build protocol"): the clarification was
-    # already consumed. Return a clean 409 instead of a 502 that blames the model.
-    if store.session.request_tool_use_id is None:
-        if store.protocol is not None:
-            raise HTTPException(409, "This protocol is already built — use Refine to change "
-                                     "it, or start over for a new one.")
-        raise HTTPException(409, "No pending questions to answer for this session. Start over.")
-    store.start_progress()  # fresh activity feed for this build
-    return _resolve(req.session_id, [a.model_dump() for a in req.answers])
+    with store.lock:  # serialize against any concurrent op on this session
+        # Idempotent replay must short-circuit BEFORE the state guard: the first resolve
+        # consumes request_tool_use_id, so a naive retry would 409 before reaching the cache.
+        ik = f"resolve:{req.idempotency_key}" if req.idempotency_key else None
+        if ik and (hit := store.idem_get(ik)) is not None:
+            return hit
+        # Client-state guard (e.g. a double-clicked "Build protocol"): the clarification was
+        # already consumed. Return a clean 409 instead of a 502 that blames the model.
+        if store.session.request_tool_use_id is None:
+            if store.protocol is not None:
+                raise HTTPException(409, "This protocol is already built — use Refine to change "
+                                         "it, or start over for a new one.")
+            raise HTTPException(409, "No pending questions to answer for this session. Start over.")
+        store.start_progress()  # fresh activity feed for this build
+        result = _resolve(req.session_id, [a.model_dump() for a in req.answers])
+        if ik:
+            store.idem_put(ik, result)
+        return result
 
 
 @app.post("/api/revise", dependencies=_MUTATING)
@@ -458,6 +498,9 @@ def revise(req: ReviseRequest) -> dict:
     if store.protocol is None:  # parity with design/critique/align/apply_fixes
         raise HTTPException(409, "Generate a protocol first, then request a revision.")
     with store.lock:  # serialize against any concurrent op on this session
+        ik = f"revise:{req.idempotency_key}" if req.idempotency_key else None
+        if ik and (hit := store.idem_get(ik)) is not None:
+            return hit
         store.start_progress()
         store.note("Applying your correction and rebuilding the protocol…")
         agent = get_agent()
@@ -470,7 +513,10 @@ def revise(req: ReviseRequest) -> dict:
             _mark_failed(store.project_id)
             raise HTTPException(500, _explain(exc))
         store.note("Done.")
-        return _finish(req.session_id, store, protocol, source_op="revise")
+        result = _finish(req.session_id, store, protocol, source_op="revise")
+        if ik:
+            store.idem_put(ik, result)
+        return result
 
 
 @app.post("/api/design", dependencies=_MUTATING)
@@ -479,6 +525,9 @@ def design(req: DesignRequest) -> dict:
     if store.protocol is None:
         raise HTTPException(409, "Generate a protocol first, then request a design review.")
     with store.lock:  # serialize against any concurrent op on this session
+        ik = f"design:{req.idempotency_key}" if req.idempotency_key else None
+        if ik and (hit := store.idem_get(ik)) is not None:
+            return hit
         store.start_progress()
         store.note("Reasoning about the experiment design…")
         agent = get_agent()
@@ -490,7 +539,11 @@ def design(req: DesignRequest) -> dict:
             raise HTTPException(500, _explain(exc))
         report = validate_design_review(review)
         store.design_review = review
-        return {"session_id": req.session_id, "design_review": review, "validation_report": report}
+        result = {"session_id": req.session_id, "design_review": review,
+                  "validation_report": report, "review_status": "skipped"}
+        if ik:
+            store.idem_put(ik, result)
+        return result
 
 
 @app.post("/api/critique", dependencies=_MUTATING)
@@ -499,11 +552,18 @@ def critique(req: CritiqueRequest) -> dict:
     if store.protocol is None:
         raise HTTPException(409, "Generate a protocol first, then run a correctness review.")
     with store.lock:  # serialize against any concurrent op on this session
+        ik = f"critique:{req.idempotency_key}" if req.idempotency_key else None
+        if ik and (hit := store.idem_get(ik)) is not None:
+            return hit
         store.start_progress()
         store.note("Auditing the protocol for correctness & practicality…")
         agent = get_agent()
+        store.session.protocol = store.protocol  # fresh review audits the current protocol
         try:
-            review = agent.correctness_review(store.session, progress=store.note)
+            review = agent.correctness_review(
+                store.session,
+                quality_gate=(store.protocol.get("validation_report") or {}).get("quality_gate"),
+                progress=store.note)
         except AgentError as exc:
             raise HTTPException(502, f"Model did not follow the tool contract: {exc}")
         except Exception as exc:  # noqa: BLE001
@@ -530,13 +590,19 @@ def critique(req: CritiqueRequest) -> dict:
             store.correctness_review = None  # stale as an actionable to-apply list
             store.fix_verification = fixv    # retain the verification outcome
             # result already carries fix_verification + review_status via _finish.
-            return {**result,
-                    "correctness_review": review, "review_validation_report": report,
-                    "applied": True, "fixes_applied": len(fixable)}
+            applied_result = {**result,
+                              "correctness_review": review, "review_validation_report": report,
+                              "applied": True, "fixes_applied": len(fixable)}
+            if ik:
+                store.idem_put(ik, applied_result)
+            return applied_result
 
         store.correctness_review = review
-        return {"session_id": req.session_id, "correctness_review": review,
-                "validation_report": report, "applied": False}
+        review_result = {"session_id": req.session_id, "correctness_review": review,
+                         "validation_report": report, "applied": False, "review_status": "skipped"}
+        if ik:
+            store.idem_put(ik, review_result)
+        return review_result
 
 
 @app.post("/api/apply_fixes", dependencies=_MUTATING)
@@ -549,6 +615,9 @@ def apply_fixes(req: DesignRequest) -> dict:
     if not any(isinstance(f, dict) and f.get("fix") for f in findings):
         raise HTTPException(409, "Run a correctness review that finds fixable issues first.")
     with store.lock:  # serialize against any concurrent op on this session
+        ik = f"apply_fixes:{req.idempotency_key}" if req.idempotency_key else None
+        if ik and (hit := store.idem_get(ik)) is not None:
+            return hit
         store.start_progress()
         store.note("Applying the review's fixes and rebuilding…")
         agent = get_agent()
@@ -565,6 +634,8 @@ def apply_fixes(req: DesignRequest) -> dict:
                          source_op="apply_fixes", fix_verification=fixv)
         store.correctness_review = None  # stale as an actionable to-apply list
         store.fix_verification = fixv    # retain the verification outcome
+        if ik:
+            store.idem_put(ik, result)
         return result  # already carries fix_verification + review_status
 
 
@@ -574,6 +645,9 @@ def align(req: AlignRequest) -> dict:
     if store.protocol is None:
         raise HTTPException(409, "Generate a protocol first, then test it against your hypothesis.")
     with store.lock:  # serialize against any concurrent op on this session
+        ik = f"align:{req.idempotency_key}" if req.idempotency_key else None
+        if ik and (hit := store.idem_get(ik)) is not None:
+            return hit
         store.start_progress()
         store.note("Checking whether the protocol directly tests the hypothesis…")
         agent = get_agent()
@@ -588,8 +662,11 @@ def align(req: AlignRequest) -> dict:
         report = validate_design_alignment(
             alignment, hypothesis_supplied=bool(store.session.hypothesis))
         store.design_alignment = alignment
-        return {"session_id": req.session_id, "design_alignment": alignment,
-                "validation_report": report}
+        result = {"session_id": req.session_id, "design_alignment": alignment,
+                  "validation_report": report, "review_status": "skipped"}
+        if ik:
+            store.idem_put(ik, result)
+        return result
 
 
 @app.post("/api/discover", dependencies=_MUTATING)
@@ -622,7 +699,8 @@ def discover(req: DiscoverRequest) -> dict:
     opts = session.assay_options or {}
 
     if not opts.get("usable", True) or not (opts.get("assays") or []):
-        return {"session_id": session_id, "phase": "rejected", "assay_options": opts}
+        return {"session_id": session_id, "phase": "rejected", "assay_options": opts,
+                "review_status": "skipped"}
 
     report = validate_assay_options(opts)
     store.assay_options = opts
@@ -632,20 +710,28 @@ def discover(req: DiscoverRequest) -> dict:
         store.mirror = note
         return _choose(session_id, opts.get("recommended_assay_id"))
     return {"session_id": session_id, "phase": "assays",
-            "assay_options": opts, "validation_report": report}
+            "assay_options": opts, "validation_report": report,
+            "review_status": "skipped"}
 
 
 @app.post("/api/choose_assay", dependencies=_MUTATING)
 def choose_assay(req: ChooseAssayRequest) -> dict:
     store = _get(req.session_id)
-    opts = store.session.assay_options
-    if not opts or opts.get("usable") is False or not (opts.get("assays") or []):
-        raise HTTPException(409, "Start from a usable hypothesis first, then choose an assay.")
-    ids = [a.get("id") for a in opts.get("assays", [])]
-    if req.assay_id not in ids:
-        raise HTTPException(400, "Unknown assay for this session.")  # before any model call
-    store.start_progress()  # fresh activity feed for the build this kicks off
-    return _choose(req.session_id, req.assay_id)
+    with store.lock:  # serialize against any concurrent op on this session
+        ik = f"choose_assay:{req.idempotency_key}" if req.idempotency_key else None
+        if ik and (hit := store.idem_get(ik)) is not None:
+            return hit
+        opts = store.session.assay_options
+        if not opts or opts.get("usable") is False or not (opts.get("assays") or []):
+            raise HTTPException(409, "Start from a usable hypothesis first, then choose an assay.")
+        ids = [a.get("id") for a in opts.get("assays", [])]
+        if req.assay_id not in ids:
+            raise HTTPException(400, "Unknown assay for this session.")  # before any model call
+        store.start_progress()  # fresh activity feed for the build this kicks off
+        result = _choose(req.session_id, req.assay_id)
+        if ik:
+            store.idem_put(ik, result)
+        return result
 
 
 @app.get("/api/progress/{session_id}", dependencies=_READONLY)
@@ -674,7 +760,8 @@ def _choose(session_id: str, assay_id: str) -> dict:
         store.chosen_assay = store.session.chosen_assay
         if not (phase1.get("gaps") or []):
             return _resolve(session_id, [])  # no gaps -> straight to emit (reentrant lock)
-        return {"session_id": session_id, "phase": "questions", "phase1": phase1}
+        return {"session_id": session_id, "phase": "questions", "phase1": phase1,
+                "review_status": "skipped"}
 
 
 @app.get("/api/protocol/{session_id}.md", dependencies=_READONLY)
@@ -738,21 +825,81 @@ def _resolve(session_id: str, answers: list) -> dict:
         return result
 
 
+REVIEW_STATUS = {"passed", "passed_with_findings_fixed", "failed", "unavailable", "skipped"}
+
+
+def compute_review_status(report, fix_verification, *, review_attempted, audit_status=None):
+    """Pure, host-owned projection of the deterministic quality gate (L1) + the fresh
+    fix-verification outcome (L2) into the single response-level ``review_status`` label
+    (L3, 5-value). Never decided by a model. First matching rule wins (spec §4.2):
+
+      1. not attempted                    -> skipped
+      2. audit/verifier raised            -> unavailable
+      3. deterministic gate blocked       -> failed
+      4. unresolved (blocking or remain)  -> failed
+      5. verified_clean + findings existed-> passed_with_findings_fixed
+      6. otherwise                        -> passed
+    """
+    fv = fix_verification or {}
+    gate = (report or {}).get("quality_gate") or {}
+    errored = (audit_status == "unavailable") or (fv.get("reason") == "verifier_error")
+
+    if not review_attempted:
+        return "skipped"
+    if errored:
+        return "unavailable"
+    if gate.get("status") == "blocked":
+        return "failed"
+    if fv.get("unresolved_blocking") or fv.get("status") == "issues_remain":
+        return "failed"
+    if fv.get("status") == "verified_clean" and int(fv.get("reviewed_count", 0) or 0) > 0:
+        return "passed_with_findings_fixed"
+    return "passed"
+
+
+def on_review_failure(exc, *, result, protocol, stage):
+    """Host failure policy for a review that could not run. REVIEW_REQUIRED true blocks
+    delivery with an actionable HTTP 424 (Failed Dependency — distinct from the reserved
+    409 state-conflict). REVIEW_REQUIRED false degrades: stamp review_status=unavailable +
+    a human review_warning on the result, and append a deduped ``[REVIEW UNAVAILABLE]``
+    line to the protocol's open_questions — the protocol is still returned."""
+    reason = f"{stage} could not run ({type(exc).__name__})"
+    if config.REVIEW_REQUIRED:
+        raise HTTPException(
+            status_code=424,
+            detail=(f"Correctness review is REQUIRED (GAPFILLER_REVIEW_REQUIRED=1) but "
+                    f"{reason}. The protocol was NOT delivered. Retry; or unset "
+                    f"GAPFILLER_REVIEW_REQUIRED to receive it with review_status=unavailable."),
+        )
+    msg = (f"[REVIEW UNAVAILABLE] {reason}; the protocol is returned UNREVIEWED. "
+           f"Treat correctness as unverified and re-run the review.")
+    if protocol is not None:
+        oq = list(protocol.get("open_questions") or [])
+        if not any(isinstance(q, str) and q.startswith("[REVIEW UNAVAILABLE]") for q in oq):
+            oq.append(msg)
+        protocol["open_questions"] = oq
+    if result is not None:
+        result["review_status"] = "unavailable"
+        result["review_warning"] = msg
+
+
 def _auto_review(session_id: str, store: Store, result: dict) -> dict:
     """Pipeline stage: adversarially audit the just-emitted protocol for correctness AND
     practicality and apply the fixes automatically, so the user receives an already-corrected
-    protocol with the findings attached (transparency). Never lets the audit break delivery —
-    any failure falls back to the un-audited-but-valid protocol."""
+    protocol with the findings attached (transparency). A raise degrades to review_status=
+    unavailable (REVIEW_REQUIRED false) or blocks delivery with a 424 (REVIEW_REQUIRED true)."""
     agent = get_agent()
     store.note("Auditing the protocol for correctness & practicality…")
     try:
         review = agent.correctness_review(store.session, progress=store.note)
         validate_correctness_review(review)
-    except Exception as exc:  # noqa: BLE001 — audit is best-effort; never block the protocol
+    except Exception as exc:  # noqa: BLE001 — audit is best-effort under the default policy
         _log.warning("auto-review skipped: %s", exc)  # log the message, not just the type
         store.note("Audit couldn't run — deliver the protocol as drafted; use Re-review & fix.")
-        # Tell the client the audit was attempted-and-failed, so the UI can say so instead of
-        # implying an audit ran and found nothing.
+        # REVIEW_REQUIRED true -> raises HTTP 424 (blocks delivery). REVIEW_REQUIRED false ->
+        # stamp review_status=unavailable + review_warning + a deduped open_questions line.
+        on_review_failure(exc, result=result, protocol=store.protocol,
+                          stage="correctness review")
         return {**result, "auto_review": True, "audit_status": "unavailable"}
     findings = review.get("findings") or []
     fixable = [f for f in findings if isinstance(f, dict) and f.get("fix")]
@@ -761,12 +908,21 @@ def _auto_review(session_id: str, store: Store, result: dict) -> dict:
         store.note(f"Audit found {len(fixable)} issue(s) — applying fixes…")
         try:
             fixed = agent.apply_correctness_fixes(store.session, findings, progress=store.note)
-            result = _finish(session_id, store, fixed, source_op="auto_review")  # re-validate + replace
-            applied = len(fixable)
-            store.correctness_review = None  # applied — stale against the corrected protocol
         except Exception as exc:  # noqa: BLE001
             _log.warning("auto-fix skipped: %s", type(exc).__name__)
             store.correctness_review = review  # keep for a manual apply
+            return {**result, "correctness_review": review,
+                    "auto_review": True, "fixes_applied": 0}
+        # Independent, fresh-context re-verify of the corrected protocol against the ORIGINAL
+        # findings, so the re-stamp yields passed_with_findings_fixed / failed. Point the
+        # store at the corrected protocol so the verifier audits what we ship.
+        store.protocol = fixed
+        fixv = _verify_fixes(store, findings)
+        result = _finish(session_id, store, fixed, source_op="auto_review",
+                         fix_verification=fixv)  # re-validate + replace + re-stamp
+        store.fix_verification = fixv
+        applied = len(fixable)
+        store.correctness_review = None  # applied — stale against the corrected protocol
     else:
         store.note("Audit found no fixable issues — the draft holds.")
         store.correctness_review = review
@@ -788,9 +944,13 @@ def _verify_fixes(store: Store, original_findings: list) -> dict:
         store.note("Independently re-checking that each fix actually landed…")
         verification = get_agent().verify_fixes(store.session, fixable, progress=store.note)
         return build_review_status(fixable, verification, checked=True)
-    except Exception as exc:  # noqa: BLE001 — best-effort, never block delivery
+    except Exception as exc:  # noqa: BLE001 — under the default policy, never block delivery
         _log.warning("fix-verification skipped: %s", type(exc).__name__)
         store.note("Independent re-check couldn't run — protocol delivered as corrected.")
+        # REVIEW_REQUIRED true -> raises HTTP 424 (blocks delivery); false -> annotate the
+        # protocol's open_questions and fall through to the verifier_error fix_verification
+        # (compute_review_status maps reason==verifier_error -> "unavailable").
+        on_review_failure(exc, result=None, protocol=store.protocol, stage="fix verification")
         fv = build_review_status(fixable, {}, checked=False)
         fv["reason"] = "verifier_error"
         return fv
@@ -802,6 +962,8 @@ def _finish(
     protocol: dict,
     source_op: str = "resolve",
     fix_verification: dict | None = None,
+    review_attempted: bool = True,
+    audit_status: str | None = None,
 ) -> dict:
     report = validate_and_finalize(
         protocol,
@@ -810,6 +972,7 @@ def _finish(
         source_exact=store.session.source_exact,
     )
     store.protocol = protocol
+    store.session.protocol = protocol  # feed the fresh-context correctness review its input
     # The complete, opaque payload. Persisted verbatim as ProtocolVersion.result so a
     # restore rehydrates renderResult unchanged. The two projects-layer keys are always
     # present (null when this session isn't linked to a durable project).
@@ -825,10 +988,14 @@ def _finish(
         "project_id": store.project_id,
         "protocol_version_id": None,
     }
+    # L3 response label — host-owned, deterministic projection of the L1 gate + the L2
+    # fix-verification outcome. Rides on EVERY protocol-terminal response (additive).
+    r["review_status"] = compute_review_status(
+        report, fix_verification,
+        review_attempted=review_attempted, audit_status=audit_status)
     if fix_verification is not None:
-        # Epic-3 additive keys: host-owned object + compact string mirror.
+        # Epic-3 additive object: host-owned, retained verbatim (3-value status vocab intact).
         r["fix_verification"] = fix_verification
-        r["review_status"] = fix_verification.get("status")
     if store.project_id:
         # Server-authoritative persistence: one _finish == one ProtocolVersion. Best-effort —
         # a store failure never breaks protocol delivery (the response is still returned).

@@ -64,6 +64,19 @@ MODEL_FAST = _first(
     default=(_defaults.get("model_fast", "") if not _model_env else ""),
 )
 
+# --- Reviewer model & failure policy (Epic-3) ------------------------------
+# The adversarial correctness_review AND post-fix verify_fixes run on this tier.
+# Defaults to MODEL (already provider-resolved above), so it behaves byte-identically
+# on openrouter and anthropic-direct with no extra config. Set GAPFILLER_REVIEW_MODEL
+# to a provider-appropriate slug for an independent second-opinion model. Resolved via
+# the same _first(..., default=MODEL) path as MODEL/MODEL_FAST — never a hard-coded slug.
+REVIEW_MODEL = _first(os.environ.get("GAPFILLER_REVIEW_MODEL", ""), default=MODEL)
+
+# When true, a review that cannot run BLOCKS delivery (HTTP 424) instead of degrading to
+# review_status="unavailable". Default false so local dev and the best-effort pipeline are
+# unchanged. Repo truthiness idiom (default "0" -> False).
+REVIEW_REQUIRED = os.environ.get("GAPFILLER_REVIEW_REQUIRED", "0") != "0"
+
 # Optional attribution headers OpenRouter surfaces on your dashboard (OpenRouter only).
 OPENROUTER_REFERER = os.environ.get("OPENROUTER_REFERER", "")
 OPENROUTER_TITLE = os.environ.get("OPENROUTER_TITLE", "Methods Gap-Filler")

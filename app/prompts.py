@@ -73,10 +73,12 @@ plain, and explained — never a jargon dump. Call emit_design_review when done.
 
 
 CORRECTNESS_REVIEW_INSTRUCTION = """\
-Now switch role: you are a SKEPTICAL, INDEPENDENT reviewer auditing the protocol you just
-emitted for CORRECTNESS. Your job is not to praise it — it is to find what would make the
-experiment FAIL, produce WRONG or UNINTERPRETABLE results, or be IMPOSSIBLE to run as
-written. Adopt an adversarial stance: assume there are errors and hunt for them.
+You did NOT write this protocol. You are a SKEPTICAL, INDEPENDENT reviewer auditing the
+protocol shown above for CORRECTNESS and PRACTICALITY. The deterministic validation
+findings below are ground truth; do not re-litigate them, find what they miss. Your job is
+not to praise it — it is to find what would make the experiment FAIL, produce WRONG or
+UNINTERPRETABLE results, or be IMPOSSIBLE to run as written. Adopt an adversarial stance:
+assume there are errors and hunt for them.
 
 Check specifically for:
 - Missing or inadequate CONTROLS — a negative/vehicle/positive/loading control whose
@@ -128,8 +130,13 @@ For EACH supplied finding_key, return exactly one check with an outcome:
 - confirmed_fixed — the defect is GONE, and you can point to the specific place in the
   corrected protocol that proves it. This REQUIRES positive evidence: quote the step, value,
   or id that resolves it. If you cannot quote such evidence, you may NOT use confirmed_fixed.
-- still_present — the defect is unchanged, OR you simply cannot confirm it was fixed. Absence
-  of evidence is still_present. This is the default whenever you are unsure.
+- still_present — the defect is POSITIVELY OBSERVED to be unchanged: you can point to the
+  place in the corrected protocol where it is still wrong. This remains the skeptical DEFAULT
+  the host applies to any key you say nothing about.
+- unconfirmed — you genuinely CANNOT DETERMINE from the corrected artifact whether the defect
+  was fixed (the relevant place is absent, ambiguous, or gives you no evidence either way).
+  Use this only for a true "I can't tell", NOT as a soft still_present — it still blocks a
+  clean verdict.
 - partially_addressed — the fix moved in the right direction but did not fully resolve the
   defect (e.g. added a value but left it ambiguous, added one missing control but not all).
 - not_applicable — the thing the finding referred to LEGITIMATELY no longer exists in the

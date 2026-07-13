@@ -310,7 +310,8 @@ def test_critique_apply_confirmed_fixed_does_not_gate():
         assert fv["status"] == "verified_clean"
         assert fv["counts"]["confirmed_fixed"] == 1
         assert fv["unresolved_count"] == 0 and fv["unresolved_blocking"] is False
-        assert body["review_status"] == "verified_clean"
+        # L3 response label (5-value): findings existed and were verified resolved.
+        assert body["review_status"] == "passed_with_findings_fixed"
         assert body["applied"] is True and body["fixes_applied"] == 1
         assert body["protocol"]["title"] == "Fixed"
         # (6) additive: pre-existing critique/apply keys all still present
@@ -340,7 +341,8 @@ def test_critique_apply_unfixed_critical_still_present_gates():
         fv = body["fix_verification"]
         assert fv["status"] == "issues_remain"
         assert fv["unresolved_blocking"] is True
-        assert body["review_status"] == "issues_remain"
+        # L3 label: an unresolved blocking finding -> failed.
+        assert body["review_status"] == "failed"
         assert body["applied"] is True
         assert body["protocol"]["title"] == "Fixed"
     finally:
@@ -369,7 +371,8 @@ def test_critique_apply_regression_introduces_new_critical_gates():
         assert fv["status"] == "issues_remain"
         assert fv["counts"]["new"] == 1
         assert fv["unresolved_blocking"] is True
-        assert body["review_status"] == "issues_remain"
+        # L3 label: a new blocking defect -> failed.
+        assert body["review_status"] == "failed"
     finally:
         srv._SESSIONS.pop(sid, None); srv._agent = None
 
@@ -391,7 +394,8 @@ def test_critique_apply_verifier_failure_is_not_reviewed_and_still_returns():
         assert fv["status"] == "not_reviewed"
         assert fv["reason"] == "verifier_error"
         assert fv["checked"] is False
-        assert body["review_status"] == "not_reviewed"
+        # L3 label: the verifier raised -> unavailable (protocol still delivered).
+        assert body["review_status"] == "unavailable"
         assert body["applied"] is True
         assert body["protocol"]["title"] == "Fixed"
     finally:
@@ -416,7 +420,8 @@ def test_apply_fixes_two_step_verifies_and_retains_outcome():
         assert r.status_code == 200
         body = r.json()
         assert body["fix_verification"]["status"] == "verified_clean"
-        assert "review_status" in body and body["review_status"] == "verified_clean"
+        # L3 label (5-value): findings existed and were verified resolved.
+        assert "review_status" in body and body["review_status"] == "passed_with_findings_fixed"
         assert body["protocol"]["title"] == "Fixed"     # protocol still delivered
         assert srv._SESSIONS[sid].correctness_review is None      # stale review cleared
         assert srv._SESSIONS[sid].fix_verification is not None    # outcome retained

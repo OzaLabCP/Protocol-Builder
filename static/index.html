@@ -183,6 +183,7 @@
   .busy .busy-x { background: transparent; border: 0; color: var(--muted); font-size: 14px;
     line-height: 1; padding: 0 2px; margin-left: 2px; cursor: pointer; font-weight: 700; }
   .btn:disabled, button:disabled { cursor: default; }
+  .op-locked { pointer-events: none; }   /* neutralizes <a>/non-button controls while an op runs */
   #activity-panel { border-color: var(--accent); }
   #activity-panel h2 { margin: 0; font-size: 15px; }
   ul.activity { list-style: none; margin: 10px 0 0; padding: 0; max-height: 240px; overflow-y: auto;
@@ -338,7 +339,7 @@
     <label class="muted" for="hypothesis" style="display:block;margin-top:14px">Your hypothesis <span class="small">(optional — orients the protocol and lets you check it's directly tested)</span></label>
     <input type="text" id="hypothesis" placeholder="e.g. Adding DsbC increases the yield of correctly folded, disulfide-bonded scFv" style="margin-top:6px" />
     <div class="row">
-      <button id="analyze">Analyze</button>
+      <button id="analyze" class="op-control">Analyze</button>
       <button class="secondary" id="example">Load example (CFPS)</button>
       <button class="secondary hidden" id="clear-pdf">Clear PDF</button>
       <span class="muted" id="status"></span>
@@ -364,8 +365,8 @@
       </div>
     </div>
     <div class="row">
-      <button id="discover">Find the best assay</button>
-      <button class="secondary" id="autopick">Just pick the best &amp; start</button>
+      <button id="discover" class="op-control">Find the best assay</button>
+      <button class="secondary op-control" id="autopick">Just pick the best &amp; start</button>
       <span class="muted" id="disc-status"></span>
     </div>
   </section>
@@ -381,7 +382,7 @@
     <p class="muted" id="q-summary"></p>
     <div id="gaps"></div>
     <div class="row">
-      <button id="submit-answers">Build protocol</button>
+      <button id="submit-answers" class="op-control">Build protocol</button>
       <span class="muted">Skip a question to accept its default (flagged “verify before use”).</span>
     </div>
   </section>
@@ -634,7 +635,7 @@ function renderAssays(opts) {
     if (a.equipment_burden) box.appendChild(el("div", "kv", `<b>Equipment:</b> ${esc(a.equipment_burden)}`));
     box.appendChild(el("div", "kv", `<b>Key limitation:</b> ${esc(a.key_limitation)}`));
     const prov = el("div", "kv"); prov.innerHTML = tierPill(a.provenance) + citeInline(a) + evidenceInline(a); box.appendChild(prov);
-    const btn = el("button", "btn", a.id === rec ? "Use this assay (recommended)" : "Use this assay");
+    const btn = el("button", "btn op-control", a.id === rec ? "Use this assay (recommended)" : "Use this assay");
     btn.onclick = () => chooseAssay(a.id, btn);
     box.appendChild(el("div", "row", "")).appendChild(btn);
     wrap.appendChild(box);
@@ -1107,7 +1108,7 @@ function openInlineEdit(anchorEl, entity, kind, field) {
     form.appendChild(uLab); form.appendChild(uInp);
   }
 
-  const save = el("button","btn","Save"); save.type = "submit";
+  const save = el("button","btn op-control","Save"); save.type = "submit";
   const cancel = el("button","btn secondary","Cancel"); cancel.type = "button";
   form.appendChild(save); form.appendChild(cancel);
 
@@ -1128,6 +1129,8 @@ function openInlineEdit(anchorEl, entity, kind, field) {
 }
 
 async function submitValueEdit(entity, kind, field, newValue, newUnit, formEl) {
+  // Inline edit doesn't use the progress feed, so guard the global lock explicitly.
+  if (!beginOp()) return;                    // another op is already running — don't start a second
   if (formEl) formEl.querySelectorAll("input,button").forEach((x)=> x.disabled = true);
   setStatus("Applying your edit and re-checking…");
   try {
@@ -1140,6 +1143,8 @@ async function submitValueEdit(entity, kind, field, newValue, newUnit, formEl) {
   } catch (e) {
     if (formEl) formEl.querySelectorAll("input,button").forEach((x)=> x.disabled = false);
     setStatus(e.message, true);              // old DOM untouched; CURR_PROTOCOL never mutated locally
+  } finally {
+    endOp();                                 // release on BOTH success and failure — never stuck disabled
   }
 }
 
@@ -1287,15 +1292,15 @@ function toolbar() {
     cs.title = "The materials table as CSV, with provenance columns.";
     bar.appendChild(cs);
   }
-  const dr = el("button", "btn", "🎓 Design review");
+  const dr = el("button", "btn op-control", "🎓 Design review");
   dr.title = "Reason about the experiment around this protocol: controls, variables, readout, replication, pitfalls.";
   dr.onclick = () => requestDesign(dr);
   bar.appendChild(dr);
-  const cr = el("button", "btn", "🔍 Re-review & fix");
+  const cr = el("button", "btn op-control", "🔍 Re-review & fix");
   cr.title = "The correctness + practicality audit already ran automatically when this protocol was generated. Click to run it again (e.g. after a manual refine): it re-audits and auto-applies any new fixes. Model-generated; findings ranked by severity.";
   cr.onclick = () => requestCritique(cr);
   bar.appendChild(cr);
-  const al = el("button", "btn", HYP ? "🎯 Test my hypothesis" : "🎯 Test a hypothesis");
+  const al = el("button", "btn op-control", HYP ? "🎯 Test my hypothesis" : "🎯 Test a hypothesis");
   al.title = HYP
     ? "Does this protocol directly test your hypothesis? Get a verdict, the critical comparison, confounds, and one-click protocol fixes."
     : "Check whether this protocol directly tests a hypothesis. You didn't state one, so you can type it now (or let the tool infer it, clearly labelled).";
@@ -1380,7 +1385,7 @@ function renderCritique(r, applied, count) {
     // instead of implying the protocol was already corrected.
     box.appendChild(el("p", "badge-warn",
       `⚠ ${fixable} concrete fix${fixable > 1 ? "es are" : " is"} proposed below but <b>not yet applied</b> to the protocol above.`));
-    const applyBtn = el("button", "btn", `🛠 Apply ${fixable} fix${fixable > 1 ? "es" : ""} & rebuild the protocol`);
+    const applyBtn = el("button", "btn op-control", `🛠 Apply ${fixable} fix${fixable > 1 ? "es" : ""} & rebuild the protocol`);
     applyBtn.onclick = () => applyAuditFixes(applyBtn);
     box.appendChild(el("div", "row", "")).appendChild(applyBtn);
   }
@@ -1500,9 +1505,9 @@ function requestAlignment(btn) {
   inp.placeholder = "e.g. Adding DsbC increases the yield of correctly folded scFv";
   box.appendChild(inp);
   const row = el("div", "row");
-  const go = el("button", "btn", "Check alignment");
+  const go = el("button", "btn op-control", "Check alignment");
   go.onclick = () => { HYP = inp.value.trim(); runAlignment(HYP || null); };
-  const infer = el("button", "btn secondary", "Let the tool infer");
+  const infer = el("button", "btn secondary op-control", "Let the tool infer");
   infer.onclick = () => runAlignment(null);
   row.appendChild(go); row.appendChild(infer);
   box.appendChild(row);
@@ -1595,7 +1600,7 @@ function recRow(c) {
   const tag = c.type ? `<span class="type-tag">${esc(c.type.replace(/_/g, " "))}</span>` : "";
   row.appendChild(el("div", null, `${tag}${esc(c.change)}`));
   if (c.addresses) row.appendChild(el("div", "addresses", "Addresses: " + esc(c.addresses)));
-  const btn = el("button", "btn apply noprint", "Apply to protocol");
+  const btn = el("button", "btn apply noprint op-control", "Apply to protocol");
   btn.onclick = async () => {
     btn.disabled = true; setStatus("Applying the change and rebuilding the protocol…");
     startProgress(SESSION);
@@ -1709,7 +1714,7 @@ function refineBox() {
   box.appendChild(el("p", "muted small", "Describe a change and it rebuilds with full context — e.g. “use 150 µL wells and drop to 2 replicates”, or “switch the folding aid to DsbC”."));
   const ta = el("textarea"); ta.id = "revise-text"; ta.rows = 2; ta.placeholder = "Your correction…";
   box.appendChild(ta);
-  const btn = el("button", "btn", "Apply correction & rebuild");
+  const btn = el("button", "btn op-control", "Apply correction & rebuild");
   btn.onclick = async () => {
     const instruction = ta.value.trim();
     if (instruction.length < 3) { setStatus("Describe the change first.", true); return; }
@@ -1907,12 +1912,42 @@ function setStatus(msg, isErr) {
   setToast(msg, isErr);
 }
 
+/* ---------- global operation guard (single source of truth) ----------
+   While ANY session-mutating op is in flight, every `.op-control` is disabled so a
+   second toolbar click can't start concurrent work. Release is folded into the same
+   startProgress()/stopProgress() plumbing every long op already calls on BOTH the
+   success and failure paths, so controls can never get stuck disabled. Degrades
+   gracefully: if nothing carries the class, the querySelectorAll is a harmless no-op. */
+let operationActive = false;
+function setControlsDisabled(on) {
+  document.querySelectorAll(".op-control").forEach((elm) => {
+    const native = ("disabled" in elm);                    // <button>/<input> leave tab order natively
+    if (native) elm.disabled = on;
+    elm.setAttribute("aria-disabled", on ? "true" : "false");
+    elm.classList.toggle("op-locked", on);                 // pointer-events:none for non-button controls
+    if (on) {
+      elm.setAttribute("title", "Another operation is in progress…");
+      if (!native) { elm.setAttribute("data-op-tab", elm.getAttribute("tabindex") || ""); elm.setAttribute("tabindex", "-1"); }
+    } else {
+      elm.removeAttribute("title");
+      if (!native) { const t = elm.getAttribute("data-op-tab"); if (t) elm.setAttribute("tabindex", t); else elm.removeAttribute("tabindex"); elm.removeAttribute("data-op-tab"); }
+    }
+  });
+}
+function beginOp() {                 // returns false if an op is already running (caller should bail)
+  if (operationActive) return false;
+  operationActive = true; setControlsDisabled(true); return true;
+}
+function endOp() { operationActive = false; setControlsDisabled(false); }
+
 /* ---------- live activity feed (polls /api/progress while a long op runs) ---------- */
 let POLL = null, POLL_GEN = 0;
 function startProgress(sid) {
-  stopProgress();
+  stopProgress();                    // clears any prior poll AND releases a prior lock (endOp)
+  operationActive = true;            // engage the global operation guard...
+  setControlsDisabled(true);         // ...disabling every session-mutating control synchronously
   const panel = $("#activity-panel"), list = $("#activity");
-  if (!sid || !panel) return;
+  if (!sid || !panel) return;        // guard stays engaged; the caller's stopProgress() releases it
   const gen = ++POLL_GEN;          // invalidates any late in-flight tick from a prior op
   list.innerHTML = "";
   panel.classList.remove("hidden");
@@ -1941,6 +1976,7 @@ function stopProgress() {
   if (POLL) { clearInterval(POLL); POLL = null; }
   const panel = $("#activity-panel");
   if (panel) panel.classList.add("hidden");
+  endOp();                           // release the global operation guard (both success + failure paths)
 }
 // on=false only re-enables; it must NOT clear the status, or an error set in a catch is
 // wiped in the same tick and the user sees nothing. Callers clear the status on success.

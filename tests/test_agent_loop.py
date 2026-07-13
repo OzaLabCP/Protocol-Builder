@@ -142,12 +142,15 @@ def test_correctness_review_emits():
               "findings": [{"severity": "critical", "category": "ordering",
                             "problem": "enzyme before buffer", "fix": "add buffer first"}],
               "strengths": []}
-    session = Session(messages=[{"role": "user", "content": "seed"}], pending_tool_use_id="e1")
+    session = Session(messages=[{"role": "user", "content": "seed"}], pending_tool_use_id="e1",
+                      protocol=dict(PROTO))
     agent = make_agent([tool_msg(("emit_correctness_review", review, "cr1"))])
     out = agent.correctness_review(session)
     assert out["verdict"] == "issues_found"
     assert out["findings"][0]["category"] == "ordering"
-    assert session.pending_tool_use_id == "cr1"
+    # Fresh context leaves the protocol-emit pointer armed; the review terminal id ("cr1")
+    # lives only on the throwaway transcript, so the live session is unmutated.
+    assert session.pending_tool_use_id == "e1"
 
 
 def test_apply_correctness_fixes_reemits():

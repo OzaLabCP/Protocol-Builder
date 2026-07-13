@@ -817,12 +817,16 @@ def validate_correctness_review(review: dict, resolver: Resolver = resolve_citat
 
 # --- Independent fix-verification adjudication (Epic-3) ---------------------
 
-_VERIFY_OUTCOMES = ("confirmed_fixed", "not_applicable", "still_present",
-                    "partially_addressed", "regressed")
-# Most-skeptical-wins when two checks target one key (§7.2).
-_VERIFY_SKEPTIC_RANK = {"regressed": 4, "still_present": 3, "partially_addressed": 2,
-                        "not_applicable": 1, "confirmed_fixed": 0}
-_UNRESOLVED_OUTCOMES = frozenset({"still_present", "partially_addressed", "regressed"})
+_VERIFY_OUTCOMES = ("confirmed_fixed", "not_applicable", "unconfirmed",
+                    "still_present", "partially_addressed", "regressed")
+# Most-skeptical-wins when two checks target one key (§7.2). `unconfirmed` ("I can't tell")
+# outranks confirmed_fixed/not_applicable but loses to any positively-observed problem.
+_VERIFY_SKEPTIC_RANK = {"regressed": 5, "still_present": 4, "partially_addressed": 3,
+                        "unconfirmed": 2, "not_applicable": 1, "confirmed_fixed": 0}
+# `unconfirmed` counts as unresolved (and blocking when the finding is critical/major), so a
+# clean verdict is never granted merely because a re-emission completed.
+_UNRESOLVED_OUTCOMES = frozenset({"still_present", "partially_addressed",
+                                  "regressed", "unconfirmed"})
 _BLOCKING_SEVERITY = frozenset({"critical", "major"})
 
 
