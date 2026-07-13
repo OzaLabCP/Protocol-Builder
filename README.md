@@ -63,6 +63,19 @@ asserts and flags what is provably wrong:
   capacity.
 - **Physical sanity** — negative volumes/masses/concentrations, pH outside 0–14, percentages
   over 100%, temperatures below absolute zero, and numeric values that carry no unit.
+- **Completeness heuristics (conservative, warning-max)** — three checks that flag a likely
+  gap but **demote to no finding on any ambiguity**, so they never drive a correct protocol to
+  `blocked` and never fire on the example fixture: **`PREP_MISSING`** (a material whose name
+  denotes a prepared solution — a buffer/stock/master-mix — with no recipe, no vendor, and no
+  preparation step; demotes if any of those is present), **`READOUT_MISSING`** (a ≥2-step
+  protocol whose steps never read/measure/acquire and which has no titration series; a
+  single-step or titration protocol demotes), and **`CONTROL_MISSING`** (a *clearly
+  comparative* design — a titration series or screen/compare/dose/titrate wording — that names
+  no control/blank/reference arm anywhere; a non-comparative design is skipped).
+- **Structural completeness** — a step with no instruction, a material with no name, an
+  incomplete critical parameter, a substep with no instruction, or an unlabeled titration point
+  is a **blocking** `STRUCT_*` error (see *Structural repair* below), so a repaired-placeholder
+  protocol can never ship as if it were clean.
 
 Findings carry one of four severities, and **ambiguity always resolves downward**
 (`info/pass › assumption › warning › error`) so a correct protocol is never driven to
@@ -79,12 +92,75 @@ Findings carry one of four severities, and **ambiguity always resolves downward*
 
 The bucketed result lands on `report["quality_gate"]` (`status`, per-severity lists, and
 `counts`); `status` is `blocked` if any error, else `warnings` if any warning, else `ok`.
+Alongside `status` the gate also exposes a spec-facing **`status_label`** — a pure additive
+projection of `status`: `ok → ready`, `warnings → ready_with_warnings`, `blocked → blocked`.
+It is a projection only; `status` and `counts` are byte-identical to before, so every existing
+reader is untouched. Each finding also carries additive fields for the UI — `severity_label`
+(`error → blocker`, `warning`/`info`/`assumption → warning`/`information`), a deterministic
+per-code `suggested_fix` string, a `location_id` id anchor, and `host_verified: true` (the
+host, not the model, produced it) — while the seven original finding keys stay unchanged.
 Every assumption is also projected into a human-facing **assumptions log**
 (`report["assumptions"]`), each entry naming the premise the check supplied and the reason it
 did so — kept disjoint from `open_questions`, which carries only blocking errors. Structural
 anchors (`structural-path-v1` ids) and the whole gate are recomputed from scratch on every
 validation, so re-running it is idempotent — identical `quality_gate`, identical ids, and no
 accumulation in `open_questions`.
+
+### Structural repair, `schema_version` & the emit boundary
+
+Before the gate runs, the emitted protocol passes through a **validation/repair layer**
+(`app/models.py`, Pydantic v2). It is a *validate/repair gate only*: the emitted dict stays the
+runtime source of truth — models are `model_validate`d, never serialized back over it, so
+nothing is re-typed or reordered. The model tree is deliberately **lenient** (`extra="allow"`,
+so host attestation keys and the stable-id siblings survive; numeric fields accept
+`str | number` with no write-back) and rejects only *truly incomplete* entries. Every
+finalized protocol is stamped, **host-authoritatively**, with a string
+`schema_version = "emit_protocol/1"` (namespaced on purpose — orthogonal to the projects
+layer's integer `CURRENT_SCHEMA_VERSION`); a model-supplied value is overwritten, not trusted.
+
+- **Per-entry repair, never a silent gap.** A step with no instruction (or a material/parameter/
+  substep/titration-point with its identity field empty) is filled with a **loud frozen
+  sentinel** — e.g. `[MISSING INSTRUCTION — reconstruct or delete this step]` — and a `[BLOCKED]`
+  note is appended to `open_questions`. The gate's `STRUCT_*` check then turns that sentinel into
+  a **blocking error**, and the renderer shows a visible marker, so a repaired protocol is
+  loud, never rendered as if it were complete.
+- **Bounded emit-boundary repair.** When the model emits a *structurally unusable* payload — the
+  FATAL class: not an object, an empty/missing `title`, or a `steps` that is not a list — the
+  agent re-emits **exactly once**, quoting the error back to the model; if the re-emit is still
+  unusable it raises an actionable error that the existing transactional rollback surfaces as a
+  normal error response — **never a partial render**. (Per-entry gaps are *not* fatal: they are
+  handled deterministically by the repair-plus-`STRUCT_*` path above, so model calls stay
+  bounded.)
+
+### Revision-stable ids
+
+Every entity keeps two ids side by side: the existing **positional** `_id` (`mat:0`,
+`step:1/param:2` — moves when a list shifts) and an additive **content-derived** stable id
+(`material_id`/`step_id`/`parameter_id`/`substep_id`/`point_id`/`component_id`, e.g.
+`s_1a2b3c4d`). The stable id is a hash of the entity's **identity** (its name/label/instruction,
+*not* its mutable value), so a corrected value keeps the same id, and it survives both a fresh
+re-emit (revise/apply-fixes) and an in-place edit. Assignment is idempotent and preserving, and
+same-identity duplicates disambiguate deterministically in document order (`m_<h>`, `m_<h>_1`,
+`m_<h>_2`). `/edit` accepts **either** id for its `target_id` (positional first; the prefixes
+are disjoint, so there is no ambiguity), so a cached stable id still targets the right entity
+after the protocol has been revised out from under it.
+
+### Host-generated assumptions log
+
+The model's own `assumptions_log` is never trusted as an independent copy. On every validation
+the host derives its **own canonical log** from the inline non-stated entries
+(`report["host_assumptions_log"]`, also attached to the protocol for the renderer), then runs a
+**complete field-level comparison** against the model's log — matched by normalized parameter
+name — and records every disagreement (value, citation identifier, unit, provenance,
+`selected_by_user`, host-derived `verify`, plus missing/extra/duplicate rows) as structured data
+at `report["consistency"]["disagreements"]`. So a `10 mM` inline value against a `100 mM` log
+copy, or a provenance/citation-identifier that the log gets wrong, is caught with the inline
+entry's `_id`/`stable_id` as the anchor. Each disagreement carries its own `severity` (a value or
+citation-identifier contradiction is `error`-tier; unit/provenance/selected/verify drift is
+`warning`-tier; an empty or unparseable value demotes to `unverifiable`). In this layer the
+disagreements are reported **as data** alongside the pre-existing name-based
+`consistency` keys — which stay byte-identical — rather than being routed through the quality
+gate, so gate `status` is unchanged by them.
 
 ## Run it
 
@@ -267,14 +343,27 @@ python tests/test_validation.py            # or any tests/test_*.py
 
 Every suite runs **without the network** (resolvers/LLM clients are injected or the path
 is model-free) and against a throwaway SQLite DB, so nothing touches a real provider or
-`./projects.db`. The validation suite covers citation resolution, provenance invariants,
-and `assumptions_log` consistency; `tests/test_store.py` and
-`tests/test_projects_acceptance.py` cover the projects layer's acceptance criteria —
-**restart survival, input preservation across a workflow change, per-project isolation,
-404 on unknown ids, 409 on concurrent updates, and migration/version handling**.
-`tests/test_edit.py` covers the inline-edit endpoint: a valid edit sets `user_input`
-provenance and re-runs the gate (flipping `blocked → ok` and `ok → blocked`), the error
-paths (`404`/`409`/`422`), idempotency, and durable `ProtocolVersion` persistence with
+`./projects.db`. The validation suite covers citation resolution, provenance invariants, and
+`assumptions_log` consistency — including the **host-generated canonical log** (a `10 mM`
+inline value vs a `100 mM` log copy, and a provenance/citation-identifier mismatch, are
+detected) and **revision-stable ids** (a step keeps its `step_id` when an unrelated step is
+prepended and its positional `_id` moves). `tests/test_models.py` covers the Pydantic
+validate/repair layer: `schema_version` is stamped host-authoritatively, an empty
+instruction/name is rejected, a missing step instruction is **repaired to a loud sentinel and
+blocks the gate** (never silently rendered), and `coerce_emit_payload` flags only the FATAL
+class; `tests/test_agent_loop.py` covers the **bounded emit-boundary repair** — one re-emit on
+a FATAL payload, then an actionable failure (never a partial protocol). `tests/test_checks.py`
+covers the deterministic gate: a bad `C1V1=C2V2` and an overflowing plate are errors, the new
+prep/readout/control heuristics fire and then demote on ambiguity, and the gate exposes
+`ready`/`ready_with_warnings`/`blocked` mapped from `ok`/`warnings`/`blocked`;
+`tests/test_example_fixture.py` asserts the shipped fixture still validates clean with the new
+checks **not** false-firing. `tests/test_store.py` and `tests/test_projects_acceptance.py`
+cover the projects layer's acceptance criteria — **restart survival, input preservation across
+a workflow change, per-project isolation, 404 on unknown ids, 409 on concurrent updates, and
+migration/version handling**. `tests/test_edit.py` covers the inline-edit endpoint: a valid
+edit sets `user_input` provenance and re-runs the gate (flipping `blocked → ok` and
+`ok → blocked`), resolution **by either positional or stable id**, the error paths
+(`404`/`409`/`422`), idempotency, and durable `ProtocolVersion` persistence with
 `source_op="edit"`.
 
 ## Layout
@@ -282,17 +371,20 @@ paths (`404`/`409`/`422`), idempotency, and durable `ProtocolVersion` persistenc
 ```
 app/
   schemas.py      # the two tool input_schemas (request_clarifications, emit_protocol)
+  models.py       # versioned Pydantic model tree + schema_version + bounded structural repair
   prompts.py      # the protocol-engineer system prompt
-  agent.py        # the three-phase tool-use loop (dispatches client tools)
+  agent.py        # the three-phase tool-use loop (dispatches client tools) + emit-boundary gate
   literature.py   # PubMed / preprint / protocols.io grounding tools
   resolvers.py    # DOI/PMID resolution (Crossref -> DataCite / PubMed)
-  validation.py   # host-side citation validation + invariants + consistency
+  checks.py       # pure deterministic quality gate + stable ids + host assumptions log
+  validation.py   # host-side citation validation + invariants + consistency + gate
   render.py       # protocol -> Markdown export
   projects.py     # projects/intake domain model + deterministic workflow classifier
   store.py        # durable SQLite projects store (versions, optimistic concurrency, migrations)
   server.py       # FastAPI endpoints (analyze/resolve/revise/export + projects) + sessions
 static/index.html # paste/PDF UI, provenance render, export + refine controls
-tests/            # 161 tests across validation, grounding, agent loop, render, HTTP, projects
+tests/            # 13 script-runnable test files across validation, grounding, agent loop,
+                  # the Pydantic/repair layer, stable ids, render, HTTP, and projects
 Dockerfile        # single-worker container; /healthz healthcheck
 ```
 
