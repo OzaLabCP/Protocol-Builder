@@ -799,15 +799,11 @@ function renderResult(r) {
     showResultMessage("Couldn't display the protocol", "The protocol came back in an unexpected shape. It may still be downloadable; otherwise please rebuild.");
     return;
   }
-  // The audit runs in the pipeline; if this result carries one, show what it caught/fixed.
-  if (r.correctness_review) renderCritique(r.correctness_review, !!r.auto_review && (r.fixes_applied || 0) > 0, r.fixes_applied || 0);
-  // Honest signal when the automatic audit couldn't run (S7).
-  else if (r.audit_status === "unavailable") {
-    const host = $("#critique-anchor");
-    if (host) { host.innerHTML = ""; host.appendChild(el("p", "hint", "⚠ The automatic correctness audit couldn't run this time. Use “Re-review & fix” to run it manually.")); }
-  }
-  // Independent fix-verification block (Epic-3). Absent key (older result or verify skipped) ⇒ nothing rendered.
-  if (r.fix_verification) renderFixVerification(r.fix_verification);
+  // The correctness/practicality audit AND its fixes run on the BACKEND; we surface only the
+  // final, corrected protocol. The adversarial review detail and the fix-verification breakdown
+  // are intentionally NOT shown (they were confusing); the concise, honest verdict still appears
+  // in the readiness card below. Clear the anchors so a panel from a prior render never lingers.
+  { const c = $("#critique-anchor"); if (c) c.innerHTML = ""; const v = $("#verify-anchor"); if (v) v.innerHTML = ""; }
   // Epic-4 tail — fixed order: readiness card first, then sync view, announce, focus.
   try {                                                    // 1. readiness card as first child
     const P = $("#result-panel");
@@ -1664,9 +1660,9 @@ async function requestCritique(btn) {
   startProgress(SESSION);
   try {
     const r = await postJSON("/api/critique", { session_id: SESSION, apply: true, locked_ids: [...LOCKED] }, opSignal());
-    if (r.applied && r.protocol) renderResult(r);  // renderResult also renders the audit
-    else renderCritique(r.correctness_review, false, 0);  // sound / nothing to apply
-    setStatus("");
+    // Show only the final protocol — the adversarial review runs on the backend, no detail panel.
+    if (r.applied && r.protocol) { renderResult(r); setStatus("Re-reviewed and applied fixes."); }
+    else setStatus("No correctness issues found — your protocol is unchanged.");
   } catch (e) {
     if (isAbort(e)) { setStatus("Canceled — your last protocol is unchanged."); btn.disabled = false; stopProgress(); return; }
     if (e && e.status === 409) announceBlocker(e.message);
