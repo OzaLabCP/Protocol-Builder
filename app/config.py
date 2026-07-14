@@ -144,6 +144,10 @@ ENABLE_PROTOCOLS_IO = (
 # spending its whole tool-round allowance on searches before it converges to the emit. Raise
 # GAPFILLER_PUBMED_BUDGET for deeper grounding at the cost of speed.
 PUBMED_BUDGET = int(os.environ.get("GAPFILLER_PUBMED_BUDGET", "6"))
+# The analyze phase only SCOPES gaps (grounding happens later at emit), so it gets a small,
+# separate search budget — the full budget here let it grind for minutes on a large or
+# off-topic document (e.g. a non-Methods PDF) and blow the browser's fetch timeout.
+ANALYZE_PUBMED_BUDGET = int(os.environ.get("GAPFILLER_ANALYZE_PUBMED_BUDGET", "2"))
 PUBMED_RETMAX_CAP = int(os.environ.get("GAPFILLER_PUBMED_RETMAX", "8"))
 # The model is prompted to batch its searches into one turn; they run concurrently. Cap the
 # concurrency to what NCBI's rate limit tolerates (~3 req/s without an API key, ~10 with one)

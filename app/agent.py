@@ -477,6 +477,11 @@ class GapFillerAgent:
 
         budget = config.MAX_TOKENS or 0  # escalates on truncation; growth persists across rounds
         for _round in range(config.MAX_TOOL_ROUNDS):
+            # Heartbeat: a model round can take many seconds on a large context. Without a
+            # per-round note the live feed looks frozen for the whole call, so a slow run
+            # reads as a hang. The search dispatches add their own, more specific lines.
+            if state.progress and _round > 0:
+                state.progress(f"Working through the results… (step {_round + 1})")
             # A truncated response is an incomplete (broken-JSON) tool call. Rather than
             # hard-failing — a 502 telling the user to raise an env var they can't reach
             # mid-run — retry the SAME call with a doubled output budget up to MAX_TOKENS_CAP.
@@ -595,7 +600,9 @@ class GapFillerAgent:
         effective_text = extracted_methods or text
         session.source_text = effective_text  # verify quotes against exactly what the model read
         session.source_exact = not is_full_paper  # PDF-derived text is lossy vs the paper
-        state = RunState(session=session, searches_left=config.PUBMED_BUDGET, progress=progress)
+        # Analyze only scopes gaps — a small search budget keeps it fast and bounds the
+        # tool-round loop so a large/off-topic doc can't grind past the browser's timeout.
+        state = RunState(session=session, searches_left=config.ANALYZE_PUBMED_BUDGET, progress=progress)
 
         hyp_preamble = (
             f"The student's hypothesis (what they want to test) is:\n{session.hypothesis}\n\n"
