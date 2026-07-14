@@ -490,7 +490,16 @@ python tests/test_validation.py            # or any tests/test_*.py
 
 Every suite runs **without the network** (resolvers/LLM clients are injected or the path
 is model-free) and against a throwaway SQLite DB, so nothing touches a real provider or
-`./projects.db`. The validation suite covers citation resolution, provenance invariants, and
+`./projects.db`.
+
+`tests/test_intake_e2e.py` is a **browser** end-to-end test: it drives the real
+`static/index.html` in headless Chromium (Playwright) and asserts on the requests the
+frontend actually issues — catching UI data-flow bugs the backend/fake-LLM suites can't
+(e.g. a PDF uploaded on the landing page reaching `/api/analyze`). All `/api/*` calls are
+intercepted with canned responses, so it needs no backend, LLM, or network. It **self-skips**
+(exit 0) when Playwright or a Chromium binary is absent, so it is inert in the browserless CI
+and runs only where a browser exists. To run it locally: `pip install playwright && playwright
+install chromium`, then `python tests/test_intake_e2e.py`. The validation suite covers citation resolution, provenance invariants, and
 `assumptions_log` consistency — including the **host-generated canonical log** (a `10 mM`
 inline value vs a `100 mM` log copy, and a provenance/citation-identifier mismatch, are
 detected) and **revision-stable ids** (a step keeps its `step_id` when an unrelated step is
