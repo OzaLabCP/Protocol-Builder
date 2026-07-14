@@ -8,6 +8,12 @@ everywhere.
 
 from __future__ import annotations
 
+# Re-export the emitted-protocol schema version so callers can import it from the
+# schema module alongside EMIT_PROTOCOL_TOOL. This is the STRING, namespaced version
+# (never confuse with projects.CURRENT_SCHEMA_VERSION:int).
+from .models import PROTOCOL_SCHEMA_VERSION  # noqa: F401
+
+
 def as_openai_tool(tool: dict) -> dict:
     """Convert a `{name, description, input_schema}` tool (the source of truth used
     throughout this module) into OpenAI/OpenRouter function-calling shape. The
@@ -39,6 +45,26 @@ _ASSUMPTION_PROVENANCE_ENUM = {
     "enum": [t for t in PROVENANCE_TIERS if t != "stated"],
 }
 
+# Shared evidence shape. OPTIONAL and nullable: attach only when a retrieved
+# source contains text relevant to THIS value.
+EVIDENCE_SCHEMA = {
+    "type": ["object", "null"],
+    "additionalProperties": False,
+    "properties": {
+        "excerpt": {"type": "string"},                     # verbatim, copied from a retrieved source; may be ""
+        "section": {"type": ["string", "null"]},           # e.g. "Abstract", "Methods", "Description"; null if unknown
+        "evidence_type": {"type": "string", "enum": ["abstract", "full_text", "protocol", "metadata_only"]},
+        "source_type": {"type": "string", "enum": ["peer_reviewed", "preprint", "protocol", "other"]},
+    },
+    "required": ["excerpt", "evidence_type", "source_type"],
+    "description": (
+        "OPTIONAL. Present (non-null) only when a retrieved source contains text "
+        "relevant to THIS value. Copy the excerpt VERBATIM from a search result; "
+        "never paraphrase or invent. Use evidence_type='metadata_only' with excerpt='' "
+        "when the source exposed only bibliographic metadata (no abstract/description)."
+    ),
+}
+
 # The one canonical citation shape. Nullable: present (non-null) only when a
 # value is literature-grounded (or user-selected from a literature option).
 CITATION_SCHEMA = {
@@ -53,13 +79,17 @@ CITATION_SCHEMA = {
             "description": "A DOI (starts with '10.') or a PubMed ID (digits only).",
         },
         "url": {"type": ["string", "null"]},
+        "evidence": EVIDENCE_SCHEMA,
     },
     "required": ["title", "authors", "year", "identifier"],
     "description": (
         "Required (non-null) when provenance is literature_grounded; may also be "
         "present on a value the user picked from a literature-derived option "
         "(then provenance is literature_grounded and selected_by_user is true); "
-        "null otherwise. The host resolves this identifier after emit."
+        "null otherwise. The host resolves this identifier after emit. "
+        "When you filled this value from a source whose abstract/description you "
+        "retrieved, attach that text as `evidence`; a citation with no relevant "
+        "`evidence` is a resolvable reference, not proof the source supports the value."
     ),
 }
 
@@ -266,7 +296,7 @@ EMIT_DESIGN_REVIEW_TOOL = {
                         "provenance": _DESIGN_PROVENANCE,
                         "citation": CITATION_SCHEMA,
                     },
-                    "required": ["name", "type", "rules_out"],
+                    "required": ["name", "type", "rules_out", "provenance"],
                 },
             },
             "readout": {
@@ -327,7 +357,8 @@ EMIT_DESIGN_REVIEW_TOOL = {
             },
         },
         "required": ["question", "hypothesis", "variables", "controls", "readout",
-                     "replication", "expected_results", "interpretation_limits"],
+                     "replication", "expected_results", "interpretation_limits",
+                     "failure_modes", "design_gaps"],
     },
 }
 
@@ -446,8 +477,12 @@ SEARCH_PROTOCOLS_TOOL = {
     "description": (
         "Search published protocols.io protocols — step-by-step methods with their "
         "own DOIs. Best for grounding a METHOD or step (not just a numeric value): if "
-        "a returned protocol matches this technique, cite its DOI for the relevant "
-        "step as literature_grounded. Returns title, authors, year, DOI, and URL."
+        "a returned protocol matches this technique, record the grounding on a value that "
+        "has a citation slot — a critical_parameter of the relevant step, or an "
+        "assumptions_log entry — tagged literature_grounded with the DOI, and tag the step "
+        "itself best_practice. (Steps/substeps have no citation field, so a "
+        "literature_grounded tag there cannot be verified and will be downgraded.) "
+        "Returns title, authors, year, DOI, and URL."
     ),
     "input_schema": {
         "type": "object",
@@ -571,6 +606,13 @@ REQUEST_CLARIFICATIONS_TOOL = {
                             "type": ["string", "null"],
                             "description": "Fallback value if the user skips; becomes "
                             "a default_verify entry.",
+                        },
+                        "outcome_critical": {
+                            "type": ["boolean", "null"],
+                            "description": "Optional model signal: true when this parameter drives a "
+                            "readout, dosed quantity, or control (a wrong/absent value changes the "
+                            "result). The host also computes this conservatively; the host OR-combines "
+                            "both. Omit/null if unsure.",
                         },
                     },
                     "required": [
@@ -783,6 +825,11 @@ EMIT_PROTOCOL_TOOL = {
                 "host validation.",
                 "items": {"type": "string"},
             },
+            "schema_version": {
+                "type": "string",
+                "description": "host-managed; ignored if emitted. The host stamps the "
+                "authoritative emitted-protocol schema version during validation.",
+            },
         },
         "required": [
             "title",
@@ -852,5 +899,81 @@ EMIT_CORRECTNESS_REVIEW_TOOL = {
             },
         },
         "required": ["verdict", "summary", "findings"],
+    },
+}
+
+
+# The same 12-value category enum carried by EMIT_CORRECTNESS_REVIEW_TOOL, so a
+# fix-introduced defect can flow back into apply_correctness_fixes unchanged.
+_CORRECTNESS_CATEGORY_ENUM = [
+    "missing_control", "implausible_value", "unit_or_scaling", "ordering",
+    "logic", "internal_contradiction", "ambiguous_instruction",
+    "readout_mismatch", "safety", "missing_detail", "impractical", "other",
+]
+
+
+EMIT_FIX_VERIFICATION_TOOL = {
+    "name": "emit_fix_verification",
+    "description": (
+        "Report an INDEPENDENT, skeptical re-audit of a CORRECTED protocol. For each supplied "
+        "finding_key, judge whether that specific defect is now resolved in the corrected "
+        "protocol; also report any NEW defect the fixes introduced. Judge only the corrected "
+        "protocol shown — never trust that any fix was actually applied."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "verdict": {                          # ADVISORY only; host recomputes the gate
+                "type": "string",
+                "enum": ["sound", "issues_found", "serious_issues"],
+                "description": "Your bottom-line advisory only; the host recomputes the "
+                "gate from the per-finding outcomes and ignores this for gating.",
+            },
+            "summary": {"type": "string", "description": "One-sentence bottom line."},
+            "checks": {
+                "type": "array",
+                "description": "One entry per supplied finding_key. Echo keys verbatim; do not "
+                               "add, drop, rename, or invent keys.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "finding_key": {"type": "string"},
+                        "outcome": {
+                            "type": "string",
+                            "enum": ["confirmed_fixed", "not_applicable", "still_present",
+                                     "partially_addressed", "regressed"],
+                            "description": "confirmed_fixed ONLY with positive evidence in the "
+                                           "corrected protocol. If you cannot confirm, return "
+                                           "still_present. Absence of evidence is still_present.",
+                        },
+                        "evidence": {
+                            "type": "string",
+                            "description": "Concrete pointer INTO the corrected protocol (quote "
+                                           "the step/value/id) justifying the outcome.",
+                        },
+                    },
+                    "required": ["finding_key", "outcome", "evidence"],
+                },
+            },
+            "new_findings": {
+                "type": "array",
+                "description": "NEW defects the fixes INTRODUCED, not in the supplied set. Empty "
+                               "unless genuinely new. Most severe first.",
+                "maxItems": 5,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "severity": {"type": "string", "enum": ["critical", "major", "minor"]},
+                        "category": {"type": "string", "enum": _CORRECTNESS_CATEGORY_ENUM},
+                        "location": {"type": "string"},
+                        "problem": {"type": "string"},
+                        "fix": {"type": "string"},
+                        "citation": CITATION_SCHEMA,
+                    },
+                    "required": ["severity", "category", "problem", "fix"],
+                },
+            },
+        },
+        "required": ["verdict", "summary", "checks"],
     },
 }

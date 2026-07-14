@@ -45,7 +45,7 @@ def test_markdown_renders_verified_citation_link():
     }
     md = protocol_to_markdown(proto)
     assert "[Doe J 2020 — 12345678](https://pubmed.ncbi.nlm.nih.gov/12345678/)" in md
-    assert "✓ verified" in md
+    assert "✓ citation metadata verified" in md
     assert "`literature_grounded`" in md
 
 
@@ -158,7 +158,7 @@ def test_assay_selection_to_markdown():
             "assays": [chosen, {"id": "itc", "name": "ITC", "key_limitation": "needs lots of protein"}]}
     md = assay_selection_to_markdown(chosen, opts)
     for chunk in ["# Assay selection", "Fluorescence polarization", "+X vs -X",
-                  "Alternatives considered", "ITC", "Why this pick", "✓ verified"]:
+                  "Alternatives considered", "ITC", "Why this pick", "✓ citation metadata verified"]:
         assert chunk in md, f"missing {chunk}"
 
 
@@ -206,7 +206,9 @@ def test_materials_csv_export():
     csv_text = materials_to_csv(p)
     lines = csv_text.strip().splitlines()
     assert lines[0].startswith("reagent,amount,unit")
-    assert "Mg,10,mM,Sigma,literature_grounded,12345678,yes" in csv_text
+    assert "claim_support_status" in lines[0]
+    # claim_support_status column sits after provenance; Mg has none → empty cell.
+    assert "Mg,10,mM,Sigma,literature_grounded,,12345678,yes" in csv_text
     assert "Buffer" in csv_text
 
 
@@ -253,6 +255,56 @@ def test_correctness_review_render():
 def test_correctness_review_render_sound():
     md = correctness_review_to_markdown({"verdict": "sound", "summary": "ok", "findings": []})
     assert "✅ Sound" in md and "No correctness defects" in md
+
+
+def test_render_support_badges():
+    proto = {
+        "title": "T", "summary": "", "estimated_duration": "1 h",
+        "materials": [
+            {"name": "Mg", "amount": 2, "unit": "mM", "provenance": "literature_grounded",
+             "citation": {"authors": "Doe J", "year": 2020, "identifier": "12345678",
+                          "url": "https://pubmed.ncbi.nlm.nih.gov/12345678/",
+                          "evidence": {"excerpt": "Binding was optimal at 2 mM Mg2+ in the assay.",
+                                       "section": "Abstract", "evidence_type": "abstract",
+                                       "source_type": "peer_reviewed"}},
+             "identifier_verified": True, "metadata_matched": True, "citation_verified": True,
+             "claim_support_status": "supported"},
+            {"name": "K", "amount": 50, "unit": "mM", "provenance": "literature_grounded",
+             "citation": {"authors": "Roe R", "year": 2019, "identifier": "10.1/x", "url": None,
+                          "evidence": {"excerpt": "", "section": None,
+                                       "evidence_type": "metadata_only", "source_type": "preprint"}},
+             "identifier_verified": True, "metadata_matched": True, "citation_verified": True,
+             "claim_support_status": "evidence_unavailable"},
+        ],
+        "steps": [], "assumptions_log": [],
+    }
+    md = protocol_to_markdown(proto)
+    # supported entry: both badges + excerpt inside a <details> block
+    assert "citation metadata verified" in md
+    assert "supporting excerpt attached" in md
+    assert "<details><summary>supporting excerpt</summary>" in md
+    assert "Binding was optimal at 2 mM Mg2+" in md
+    # evidence_unavailable entry: marker present, no false support claim
+    assert "evidence unavailable" in md
+    # the preprint source-type marker surfaces
+    assert "preprint (not peer-reviewed)" in md
+
+
+def test_render_old_json_no_evidence_ok():
+    proto = {
+        "title": "T", "summary": "", "estimated_duration": "1 h",
+        "materials": [{
+            "name": "Mg", "amount": 10, "unit": "mM", "provenance": "literature_grounded",
+            "citation": {"authors": "Doe J", "year": 2020, "identifier": "12345678",
+                         "url": "https://pubmed.ncbi.nlm.nih.gov/12345678/"},
+            "citation_verified": True,
+        }],
+        "steps": [], "assumptions_log": [],
+    }
+    md = protocol_to_markdown(proto)  # must not raise
+    assert "citation metadata verified" in md
+    assert "supporting excerpt attached" not in md
+    assert "<details><summary>supporting excerpt</summary>" not in md
 
 
 if __name__ == "__main__":

@@ -18,6 +18,14 @@ from __future__ import annotations
 import re
 from typing import Callable, Iterator, Optional
 
+from .checks import (
+    assign_stable_ids,
+    compare_assumptions_log,
+    ensure_ids,
+    host_assumptions_log,
+    run_checks,
+)
+from .models import PROTOCOL_SCHEMA_VERSION, repair_structure
 from .resolvers import ResolvedCitation, resolve_citation
 
 Resolver = Callable[[str], Optional[ResolvedCitation]]
@@ -70,31 +78,115 @@ def _num_str(v) -> str:
         return str(v)
 
 
-def _quote_supports(entry: dict, quote: str) -> bool:
-    """A verified quote must actually CONTAIN the value it anchors — the quote merely
-    occurring in the source is not enough (a real but unrelated sentence would otherwise
-    launder a wrong number into a 'source-anchored' badge). Entries with no scalar value
-    to check (prose steps/substeps) pass this gate on quote presence alone."""
-    nq = _normalize_source(quote)
+def _value_tokens_present(entry: dict, text: str) -> bool:
+    """True iff every scalar value token on the entry (its `value`/`amount`) occurs as a
+    whole token in the already-normalized `text`. Entries with no scalar value pass
+    vacuously. Shared by `_quote_supports` (source quote) and `_evidence_relevant`
+    (retrieved excerpt)."""
     for key in ("value", "amount"):
         v = entry.get(key)
         if v in (None, ""):
             continue
         token = _normalize_source(_num_str(v))
-        if token and not re.search(r"(?<!\w)" + re.escape(token) + r"(?!\w)", nq):
+        if token and not re.search(r"(?<!\w)" + re.escape(token) + r"(?!\w)", text):
             return False
     return True
 
 
+def _quote_supports(entry: dict, quote: str) -> bool:
+    """A verified quote must actually CONTAIN the value it anchors — the quote merely
+    occurring in the source is not enough (a real but unrelated sentence would otherwise
+    launder a wrong number into a 'source-anchored' badge). Entries with no scalar value
+    to check (prose steps/substeps) pass this gate on quote presence alone."""
+    return _value_tokens_present(entry, _normalize_source(quote))
+
+
+def _param_identity_present(entry: dict, excerpt: str) -> bool:
+    """True iff this entry's PARAMETER IDENTITY appears in the (already-normalized)
+    `excerpt`: some name token equals an excerpt token, or (for name tokens of length ≥2)
+    prefixes one — so `mg`⊑`mg2+` and `mgcl2`==`mgcl2` corroborate, while a 1-char token
+    like `k` must match a whole token and can never latch onto `kept`. Name text is pulled
+    from every field an entry uses for its label (`name`/`parameter`/`material`/`variable`).
+    An entry with no name tokens cannot demonstrate identity -> False (never vacuous)."""
+    name_text = " ".join(str(entry.get(k) or "") for k in
+                         ("name", "parameter", "material", "variable"))
+    name_tokens = _WORD_RE.findall(name_text.lower())
+    if not name_tokens:
+        return False
+    excerpt_tokens = _WORD_RE.findall(excerpt)
+    for nt in name_tokens:
+        for et in excerpt_tokens:
+            if nt == et or (len(nt) >= 2 and et.startswith(nt)):
+                return True
+    return False
+
+
+def _unit_compatible_present(entry: dict, excerpt: str) -> bool:
+    """True iff the `excerpt` carries a COMPATIBLE UNIT for this scalar value. A unitless
+    entry has no dimension to corroborate, so it passes vacuously. Otherwise the entry's
+    unit is normalized the same way as the excerpt and required to occur as a WHOLE token
+    (`mM`->`mm` must match `… 2 mm …`, not the `mm` embedded in another word)."""
+    unit = entry.get("unit")
+    if unit in (None, ""):
+        return True
+    u = _normalize_source(str(unit))
+    if not u:
+        return True
+    return bool(re.search(r"(?<!\w)" + re.escape(u) + r"(?!\w)", excerpt))
+
+
+def _evidence_relevant(entry: dict, evidence) -> bool:
+    """True iff the model-attached `evidence` excerpt actually addresses THIS value —
+    the gate that separates a resolvable-but-unrelated citation (metadata_matched) from
+    genuine excerpt support (claim_support_status == "supported"). Metadata-only evidence
+    can never support a claim; a scalar value's number must appear in the excerpt AND be
+    accompanied by this parameter's identity and a compatible unit; a prose value needs one
+    of its significant name words to appear."""
+    if not isinstance(evidence, dict):
+        return False
+    if evidence.get("evidence_type") == "metadata_only":
+        return False
+    excerpt = _normalize_source(evidence.get("excerpt") or "")
+    if len(excerpt) < 8:
+        return False
+    if any(entry.get(k) not in (None, "") for k in ("value", "amount")):
+        # BLOCKER-3: scalar value host-corroborated only if excerpt carries ALL of
+        # (a) this parameter's identity, (b) the normalized value, (c) a compatible unit.
+        # A bare number, a wrong/absent unit, or an unrelated parameter -> NOT supported.
+        return (_value_tokens_present(entry, excerpt)
+                and _param_identity_present(entry, excerpt)
+                and _unit_compatible_present(entry, excerpt))
+    # Prose entry: require a significant DESCRIPTIVE word to appear in the excerpt. Pull the
+    # text from every field an entry type uses for its label — steps/substeps hold theirs in
+    # title/instruction, not name; omitting those made this return True vacuously and let an
+    # UNRELATED excerpt "support" a grounded step. With no descriptive text at all, relevance
+    # cannot be shown -> False (never a vacuous "supported").
+    desc = " ".join(str(entry.get(k) or "") for k in
+                    ("name", "parameter", "title", "instruction", "variable"))
+    sig = [w for w in _WORD_RE.findall(desc.lower()) if len(w) >= 4]
+    if not sig:
+        return False
+    return any(w in excerpt for w in sig)
+
+
 def _iter_citation_entries(protocol: dict) -> Iterator[tuple[dict, str]]:
-    """Yield (entry, human-readable location) for every value that carries a
-    provenance tier and may carry a citation."""
+    """Yield (entry, human-readable location) for every provenance-bearing value the
+    citation invariants apply to. Steps/substeps/titration have no citation field in the
+    schema, so including them here is what enforces the invariant that a step tagged
+    'literature_grounded' with no citation gets downgraded (otherwise an unverifiable
+    grounding badge would ship on a step, unchecked)."""
     for i, mat in enumerate(protocol.get("materials") or []):
         yield mat, f"materials[{i}] '{mat.get('name', '?')}'"
     for step in protocol.get("steps") or []:
         snum = step.get("number", "?")
+        yield step, f"step {snum} '{step.get('title', '?')}'"
         for j, cp in enumerate(step.get("critical_parameters") or []):
             yield cp, f"step {snum} critical_parameters[{j}] '{cp.get('name', '?')}'"
+        for k, ss in enumerate(step.get("substeps") or []):
+            yield ss, f"step {snum} substeps[{k}] '{ss.get('number', '?')}'"
+    ts = protocol.get("titration_series")
+    if isinstance(ts, dict):
+        yield ts, "titration_series"
     for k, a in enumerate(protocol.get("assumptions_log") or []):
         yield a, f"assumptions_log[{k}] '{a.get('parameter', '?')}'"
 
@@ -122,7 +214,11 @@ def _iter_all_provenance_entries(protocol: dict) -> Iterator[tuple[dict, str]]:
 def _downgrade(entry: dict, note: str) -> None:
     entry["provenance"] = "default_verify"
     entry["citation"] = None
-    entry["citation_verified"] = False
+    # `citation_verified` is a DERIVED back-compat alias meaning "the cited identifier
+    # resolved to the cited work". It is NOT a claim of semantic support — that is
+    # `claim_support_status`. A downgraded entry has metadata_matched False (except the
+    # mismatch case where the citation is nulled), so the alias renders no misleading badge.
+    entry["citation_verified"] = bool(entry.get("identifier_verified") and entry.get("metadata_matched"))
     entry["quote_verified"] = False  # a downgraded value is not source-anchored
     if "verify" in entry or "basis" in entry:  # assumptions_log shape
         entry["verify"] = True
@@ -187,6 +283,7 @@ def validate_and_finalize(
         "malformed_dropped": 0,
         "quotes": {"verified": [], "downgraded": [], "unverified": [], "source_checked": False},
         "consistency": {"inline_missing_from_log": [], "log_missing_from_inline": []},
+        "support": {"supported": [], "evidence_unavailable": [], "mismatch": []},
     }
     open_questions = list(protocol.get("open_questions") or [])
 
@@ -201,12 +298,26 @@ def validate_and_finalize(
             f"dropped from the model's output; regenerate if the protocol looks incomplete."
         )
 
+    # Per-entry structural repair (EPIC-2 §I.3): a step is never left without an
+    # instruction, a material without a name, a parameter without name/value, etc.
+    # Each incomplete field is filled with its frozen sentinel and a BLOCKED
+    # open_question is appended; run_checks(_check_structure) then emits the loud
+    # STRUCT_* blocker so a repaired-placeholder protocol can never ship clean.
+    # Idempotent: only empty fields are filled, so repeated runs add nothing.
+    repair_structure(protocol, open_questions)
+
+    # schema_version is host-authoritative: overwrite unconditionally with the string,
+    # namespaced emitted-protocol version (orthogonal to projects.CURRENT_SCHEMA_VERSION).
+    protocol["schema_version"] = PROTOCOL_SCHEMA_VERSION
+
     # SECURITY: quote_verified is a HOST-ONLY attestation. Never trust a model-supplied
     # value — strip it from every entry so only the verification pass below can set it.
     # (Item schemas are open, dict(block.input) is used verbatim, and the badge is the
     # tool's whole trust signal, so a forged quote_verified must not survive.)
     for entry, _loc in _iter_all_provenance_entries(protocol):
-        entry.pop("quote_verified", None)
+        for k in ("quote_verified", "identifier_verified", "metadata_matched",
+                  "claim_support_status", "citation_verified"):
+            entry.pop(k, None)
 
     if not allow_stated:
         for entry, location in _iter_all_provenance_entries(protocol):
@@ -263,6 +374,15 @@ def validate_and_finalize(
         prov = entry.get("provenance")
         citation = entry.get("citation")
         selected = bool(entry.get("selected_by_user"))
+
+        # Host-owned attestations, initialized before branching so every entry carries a
+        # defined value. `identifier_verified` = the DOI/PMID resolved; `metadata_matched`
+        # = the resolved title/year align; `claim_support_status` (unchecked | mismatch |
+        # evidence_unavailable | supported) = whether a retrieved excerpt actually supports
+        # THIS value. A resolvable identifier with matching metadata is NOT support.
+        entry["identifier_verified"] = False
+        entry["metadata_matched"] = False
+        entry["claim_support_status"] = "unchecked"
 
         # --- Invariant: literature_grounded MUST carry a citation. ---
         if prov == "literature_grounded" and not citation:
@@ -331,7 +451,14 @@ def validate_and_finalize(
             if title_mismatch:
                 bits.append(f"title overlap {overlap:.0%} with source '{resolved.title}'")
             reason = "citation metadata mismatch (" + "; ".join(bits) + ")"
+            # The identifier resolved to a real record, but to a clearly different work.
+            entry["identifier_verified"] = True
+            entry["metadata_matched"] = False
             _downgrade(entry, reason + "; downgraded to default_verify.")
+            # Set AFTER the downgrade so the "resolves to a different work" diagnostic
+            # survives even though provenance is now default_verify and citation is nulled.
+            entry["claim_support_status"] = "mismatch"
+            report["support"]["mismatch"].append(location)
             report["downgraded"].append(
                 {"location": location, "identifier": identifier, "reason": reason}
             )
@@ -341,9 +468,22 @@ def validate_and_finalize(
             )
             continue
 
-        # Verified.
+        # Verified: identifier resolved AND metadata matches. This earns the
+        # `literature_grounded` tier and the derived `citation_verified` alias, but NOT
+        # `supported` unless an attached excerpt actually addresses the value.
+        entry["identifier_verified"] = True
+        entry["metadata_matched"] = True
         entry["citation_verified"] = True
         entry["citation"]["url"] = entry["citation"].get("url") or _canonical_url(resolved)
+        ev = (entry.get("citation") or {}).get("evidence")
+        if _evidence_relevant(entry, ev):
+            entry["claim_support_status"] = "supported"
+            report["support"]["supported"].append(location)
+        else:
+            # Identifier + metadata are genuinely verified; the value simply carries no
+            # excerpt-support badge. It STAYS literature_grounded.
+            entry["claim_support_status"] = "evidence_unavailable"
+            report["support"]["evidence_unavailable"].append(location)
         report["verified"].append(
             {
                 "location": location,
@@ -355,6 +495,23 @@ def validate_and_finalize(
         )
 
     _consistency_check(protocol, report, open_questions)
+
+    # --- QUALITY GATE (Epic 2): runs LAST, on the fully finalized protocol. ---
+    # ensure_ids is idempotent (positional overwrite), so calling it here freezes
+    # structural anchors on the converged protocol before run_checks reads them.
+    # Every key below is ADDITIVE; no pre-existing report key is touched.
+    ensure_ids(protocol)
+    # Additive, content-derived stable ids (material_id/step_id/parameter_id/…),
+    # parallel to the positional _id. Idempotent and preserving, so re-finalizing
+    # carries every id across a fresh re-emit or an in-place edit.
+    assign_stable_ids(protocol)
+    report["id_scheme"] = "structural-path-v1"
+    report["stable_id_scheme"] = "content-hash-v1"
+    report["assumptions"] = []
+    findings = run_checks(protocol)              # pure, deterministic
+    _apply_quality_gate(report, open_questions, findings)
+    report.pop("_assumption_keys", None)         # scratch dedup state never ships
+
     protocol["open_questions"] = open_questions
     protocol["validation_report"] = report
     return report
@@ -369,8 +526,34 @@ def _canonical_url(resolved: ResolvedCitation) -> Optional[str]:
 
 
 def _consistency_check(protocol: dict, report: dict, open_questions: list) -> None:
-    """Surface parameters that appear inline but not in the assumptions_log (or
-    vice versa). Informational — we flag, we don't silently trust either copy."""
+    """Host-generated canonical assumptions log + the COMPLETE field-level
+    comparison against the model's emitted ``assumptions_log`` (EPIC-2 §III).
+
+    The model's log is never trusted as an independent copy: the host derives its
+    OWN canonical log from the inline non-stated entries (``host_assumptions_log``),
+    stores it on both the report and the protocol (the renderer consumes the host
+    copy), then ``compare_assumptions_log`` reports every field-level disagreement
+    (value/citation/unit/provenance/selected/verify, plus missing/extra/duplicate).
+
+    Back-compat: the existing name-based ``report["consistency"]`` keys are still
+    populated byte-identically, and the ``_CONSISTENCY_MARK`` open_questions and
+    idempotent-strip behavior are unchanged. This layer does NOT route the
+    disagreements through the quality gate (the ALOG_* gate findings are the next
+    layer); they are attached as additive data under ``report["consistency"]``."""
+    # Freeze the id anchors (positional + stable) before building the host log so
+    # each canonical row carries its entity's _id and stable_id. Both are idempotent
+    # and the quality gate re-runs them, so this is a safe no-op there.
+    ensure_ids(protocol)
+    assign_stable_ids(protocol)
+
+    # --- Host canonical log + complete comparison (additive) ---
+    host_log = host_assumptions_log(protocol)
+    report["host_assumptions_log"] = host_log
+    protocol["host_assumptions_log"] = host_log
+    disagreements = compare_assumptions_log(protocol, host_log)
+    report["consistency"]["disagreements"] = disagreements
+
+    # --- Existing name-based sets (kept byte-identical) ---
     inline_names: set[str] = set()
     for mat in protocol.get("materials") or []:
         if mat.get("provenance") not in (None, "stated"):
@@ -392,16 +575,96 @@ def _consistency_check(protocol: dict, report: dict, open_questions: list) -> No
     report["consistency"]["inline_missing_from_log"] = inline_missing
     report["consistency"]["log_missing_from_inline"] = log_missing
 
+    # Idempotency: open_questions is seeded from the protocol's prior value, so strip
+    # any consistency lines a previous validate_and_finalize left behind before
+    # re-appending — otherwise repeated runs stack duplicates (mirrors the gate pass).
+    open_questions[:] = [q for q in open_questions
+                         if not (isinstance(q, str) and q.startswith(_CONSISTENCY_MARK))]
+
     for name in inline_missing:
         open_questions.append(
-            f"Consistency: '{name}' is filled inline but missing from the "
+            f"{_CONSISTENCY_MARK}'{name}' is filled inline but missing from the "
             f"assumptions_log (the log must be exhaustive)."
         )
     # log-only entries are allowed (step-level assumptions) but still worth noting
     for name in log_missing:
         open_questions.append(
-            f"Consistency: assumptions_log lists '{name}' with no matching inline "
+            f"{_CONSISTENCY_MARK}assumptions_log lists '{name}' with no matching inline "
             f"material or critical parameter — confirm it is applied somewhere."
+        )
+
+
+_GATE_MARK = "[QUALITY GATE] "
+_CONSISTENCY_MARK = "Consistency: "
+
+# Additive top-level gate label (§V): a pure projection of the existing status.
+_GATE_STATUS_LABEL = {
+    "ok": "ready",
+    "warnings": "ready_with_warnings",
+    "blocked": "blocked",
+}
+
+
+def _add_assumption(report, location, assumption, why, _id=None):
+    """Project one assumption finding into the human-facing report['assumptions']
+    log, deduped by (anchor, normalized-text). Sole writer of that key."""
+    key = (_id or location or "", _norm_param(assumption))
+    seen = report.setdefault("_assumption_keys", set())
+    if key in seen:
+        return
+    seen.add(key)
+    report["assumptions"].append(
+        {"location": location, "id": _id, "assumption": assumption, "why": why}
+    )
+
+
+def _apply_quality_gate(report, open_questions, findings):
+    """Fold the pure run_checks output into ADDITIVE report keys and surface ONLY
+    blocking (error) findings into open_questions. Idempotent: report is rebuilt
+    fresh each call and prior gate lines are stripped before re-appending, so a
+    second validate_and_finalize on the same protocol yields identical output."""
+    errors      = [f for f in findings if f.get("severity") == "error"]
+    warnings    = [f for f in findings if f.get("severity") == "warning"]
+    assumptions = [f for f in findings if f.get("severity") == "assumption"]
+    info        = [f for f in findings if f.get("severity") == "info"]
+
+    status = "blocked" if errors else ("warnings" if warnings else "ok")
+
+    report["quality_gate"] = {
+        "version": 1,
+        "status": status,
+        # Additive spec-facing label alongside the unchanged internal `status`;
+        # a pure projection, so every reader of `status`/`counts` is untouched.
+        "status_label": _GATE_STATUS_LABEL[status],
+        "errors": errors,
+        "warnings": warnings,
+        "assumptions": assumptions,
+        "info": info,
+        "counts": {
+            "errors": len(errors), "warnings": len(warnings),
+            "assumptions": len(assumptions), "info": len(info),
+        },
+    }
+
+    # Project assumption findings into the human-facing log (deduped), in the
+    # already-sorted run_checks order.
+    for f in assumptions:
+        _add_assumption(
+            report,
+            location=f.get("location"),
+            assumption=f.get("message", ""),
+            why=(f.get("detail") or {}).get("why", ""),
+            _id=f.get("id"),
+        )
+
+    # Surface ONLY blocking errors into open_questions. Strip prior gate lines first
+    # so repeated validate_and_finalize calls never stack or drift. Warnings,
+    # assumptions, and info stay in-report only.
+    open_questions[:] = [q for q in open_questions
+                         if not (isinstance(q, str) and q.startswith(_GATE_MARK))]
+    for f in errors:
+        open_questions.append(
+            f"{_GATE_MARK}{f.get('location', '?')}: {f.get('message', 'blocking issue')}"
         )
 
 
@@ -590,6 +853,178 @@ def validate_correctness_review(review: dict, resolver: Resolver = resolve_citat
         review["verdict"] = "serious_issues"
     review["validation_report"] = report
     return report
+
+
+# --- Independent fix-verification adjudication (Epic-3) ---------------------
+
+_VERIFY_OUTCOMES = ("confirmed_fixed", "not_applicable", "unconfirmed",
+                    "still_present", "partially_addressed", "regressed")
+# Most-skeptical-wins when two checks target one key (§7.2). `unconfirmed` ("I can't tell")
+# outranks confirmed_fixed/not_applicable but loses to any positively-observed problem.
+_VERIFY_SKEPTIC_RANK = {"regressed": 5, "still_present": 4, "partially_addressed": 3,
+                        "unconfirmed": 2, "not_applicable": 1, "confirmed_fixed": 0}
+# `unconfirmed` counts as unresolved (and blocking when the finding is critical/major), so a
+# clean verdict is never granted merely because a re-emission completed.
+_UNRESOLVED_OUTCOMES = frozenset({"still_present", "partially_addressed",
+                                  "regressed", "unconfirmed"})
+_BLOCKING_SEVERITY = frozenset({"critical", "major"})
+
+
+def assign_finding_keys(findings: list) -> list:
+    """Stamp each finding with a stable, host-computed content-hash ``_key``
+    (see checks.finding_key). Order-independent collision handling: byte-identical
+    findings that collide keep one shared key (they *are* one defect); genuinely
+    distinct findings that collide disambiguate by a hash of their own (problem, fix)
+    text — never by list position. Mutates and returns ``findings``. Idempotent."""
+    import hashlib
+    from collections import defaultdict
+
+    from .checks import finding_key
+    buckets: dict = defaultdict(list)
+    for f in findings:
+        if isinstance(f, dict):
+            buckets[finding_key(f)].append(f)
+    for k, group in buckets.items():
+        if len(group) == 1:
+            group[0]["_key"] = k
+            continue
+        for f in group:  # distinct findings collided — disambiguate order-independently
+            raw = (str(f.get("problem", "")) + "␟" + str(f.get("fix", ""))).encode("utf-8")
+            f["_key"] = k + "." + hashlib.sha256(raw).hexdigest()[:4]
+    return findings
+
+
+def build_review_status(
+    prior_findings: list, verify_result: dict, checked: bool,
+    resolver: Resolver = resolve_citation,
+) -> dict:
+    """Host-adjudicate an independent fix-verification pass into the single, host-owned
+    ``fix_verification`` object (Epic-3 §6/§7). Pure function of its inputs. The model's
+    own ``verdict`` is advisory only — the host recomputes status/flags. Skeptical by
+    construction: forged keys are dropped, omitted keys default to ``still_present``, and
+    new findings with a bad/missing severity are treated as ``major`` (blocking)."""
+    prior_findings = [f for f in (prior_findings or []) if isinstance(f, dict)]
+    assign_finding_keys(prior_findings)  # ensure _key present (idempotent)
+    verify_result = verify_result or {}
+
+    # 7.1 authoritative key set — the model can only speak to keys the host issued.
+    issued: dict = {f["_key"]: f for f in prior_findings}
+
+    # 7.2 index the model's checks; drop forged keys; keep the most skeptical on a dup key.
+    chosen: dict = {}
+    for chk in (verify_result.get("checks") or []):
+        if not isinstance(chk, dict):
+            continue
+        key = chk.get("finding_key")
+        if key not in issued:
+            continue  # forged / unknown key — the model cannot smuggle identity
+        outcome = chk.get("outcome")
+        if outcome not in _VERIFY_OUTCOMES:
+            outcome = "still_present"
+        evidence = str(chk.get("evidence") or "")
+        prev = chosen.get(key)
+        if prev is None or _VERIFY_SKEPTIC_RANK[outcome] > _VERIFY_SKEPTIC_RANK[prev[0]]:
+            chosen[key] = (outcome, evidence)
+
+    # 7.3 fill omissions skeptically + assemble findings, ordered as issued.
+    findings: list = []
+    counts = {o: 0 for o in _VERIFY_OUTCOMES}
+    for key, pf in issued.items():
+        if key in chosen:
+            outcome, evidence = chosen[key]
+        else:
+            outcome = "still_present"
+            evidence = "no verification returned — defaulting to unresolved"
+        counts[outcome] += 1
+        findings.append({
+            "finding_key": key,
+            "severity": pf.get("severity") or "major",
+            "category": pf.get("category") or "other",
+            "location": pf.get("location") or "",
+            "problem": pf.get("problem") or "",
+            "outcome": outcome,
+            "evidence": evidence,
+        })
+
+    # 7.5 new findings: verify citations, dedup against issued keys.
+    from .checks import finding_key
+    citations_checked = 0
+    new_findings: list = []
+    for nf in (verify_result.get("new_findings") or [])[:5]:
+        if not isinstance(nf, dict):
+            continue
+        nkey = finding_key(nf)
+        if nkey in issued:
+            # Recomputed key collides with a prior — reclassify as that prior's
+            # still_present; do NOT list it in new_findings, do NOT double-count.
+            existing = next((x for x in findings if x["finding_key"] == nkey), None)
+            if existing is not None and existing["outcome"] not in _UNRESOLVED_OUTCOMES:
+                counts[existing["outcome"]] -= 1
+                counts["still_present"] += 1
+                existing["outcome"] = "still_present"
+                if not existing.get("evidence"):
+                    existing["evidence"] = "re-reported as a new defect on the same finding"
+            continue
+        sev = nf.get("severity")
+        if sev not in _BLOCKING_SEVERITY and sev != "minor":
+            sev = "major"  # bad/missing severity -> safe blocking direction
+        cit = nf.get("citation")
+        resolved_cit = None
+        if cit:
+            citations_checked += 1
+            ok, resolved, _reason = check_citation(cit, resolver)
+            if ok:
+                cit["citation_verified"] = True
+                cit["url"] = cit.get("url") or (_canonical_url(resolved) if resolved else None)
+                resolved_cit = cit
+        new_findings.append({
+            "finding_key": nkey,
+            "severity": sev,
+            "category": nf.get("category") or "other",
+            "location": nf.get("location") or "",
+            "problem": nf.get("problem") or "",
+            "fix": nf.get("fix") or "",
+            "citation": resolved_cit,
+        })
+
+    # 7.6 recompute status/flags (host-authoritative; ignore the model's verdict for gating).
+    if not checked:
+        status = "not_reviewed"
+    elif all(x["outcome"] in ("confirmed_fixed", "not_applicable") for x in findings) \
+            and not new_findings:
+        status = "verified_clean"
+    else:
+        status = "issues_remain"
+
+    unresolved_blocking = (
+        any(x["severity"] in _BLOCKING_SEVERITY
+            for x in findings if x["outcome"] in _UNRESOLVED_OUTCOMES)
+        or any(nf["severity"] in _BLOCKING_SEVERITY for nf in new_findings)
+    )
+    unresolved_count = (
+        sum(x["outcome"] in _UNRESOLVED_OUTCOMES for x in findings) + len(new_findings)
+    )
+    new_blocking = sum(nf["severity"] in _BLOCKING_SEVERITY for nf in new_findings)
+
+    counts_out = dict(counts)
+    counts_out["new"] = len(new_findings)
+    counts_out["new_blocking"] = new_blocking
+    counts_out["citations_checked"] = citations_checked
+
+    return {
+        "version": 1,
+        "status": status,
+        "checked": bool(checked),
+        "reason": None if prior_findings else "no_original_findings",
+        "verdict": verify_result.get("verdict"),
+        "summary": str(verify_result.get("summary") or ""),
+        "reviewed_count": len(findings),
+        "unresolved_count": unresolved_count,
+        "unresolved_blocking": unresolved_blocking,
+        "counts": counts_out,
+        "findings": findings,
+        "new_findings": new_findings,
+    }
 
 
 def validate_assay_options(opts: dict, resolver: Resolver = resolve_citation) -> dict:

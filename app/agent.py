@@ -29,13 +29,16 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from . import config, literature
+from .checks import finding_key
 from .llm import OpenRouterClient
+from .models import coerce_emit_payload
 from .prompts import (
     CHOOSE_ASSAY_INSTRUCTION,
     CORRECTNESS_REVIEW_INSTRUCTION,
     DESIGN_ALIGNMENT_INSTRUCTION,
     DESIGN_REVIEW_INSTRUCTION,
     DISCOVERY_SYSTEM_PROMPT,
+    FIX_VERIFICATION_INSTRUCTION,
     SYSTEM_ASK,
     SYSTEM_EMIT,
     SYSTEM_PROMPT,
@@ -45,6 +48,7 @@ from .schemas import (
     EMIT_CORRECTNESS_REVIEW_TOOL,
     EMIT_DESIGN_ALIGNMENT_TOOL,
     EMIT_DESIGN_REVIEW_TOOL,
+    EMIT_FIX_VERIFICATION_TOOL,
     EMIT_PROTOCOL_TOOL,
     REQUEST_CLARIFICATIONS_TOOL,
     SEARCH_PREPRINTS_TOOL,
@@ -79,8 +83,10 @@ class Session:
     #                            False: lossy host extraction (PDF) — confirm-only, don't accuse
     assay_options: Optional[dict] = None  # validated emit_assay_options payload
     chosen_assay: Optional[dict] = None  # the picked assay dict (for brief + export)
+    protocol: Optional[dict] = None  # last emitted/corrected protocol (post-apply, ensure_ids'd)
     grounding_log: list = field(default_factory=list)  # queries the app ran
     grounding_call_ids: list = field(default_factory=list)  # tool_call_ids of grounding results (for compaction)
+    decisions: list = field(default_factory=list)  # host-captured user intent (clarification Q&A + chosen assay)
 
 
 @dataclass
@@ -119,6 +125,64 @@ def _pdf_text(pdf: bytes) -> Optional[str]:
         return text if text.strip() else None
     except Exception:  # noqa: BLE001 — extractor missing or PDF unparseable
         return None
+
+
+IMAGE_ONLY_MIN_CHARS = 16
+
+
+def _pdf_extract(pdf: bytes) -> "tuple[Optional[str], int]":
+    """Host-side (NO model). Returns (text_or_None, page_count). text is None when the
+    PDF has no readable text layer OR the extractor is unavailable/unparseable. Single parse."""
+    try:
+        import io
+
+        import pypdf
+
+        reader = pypdf.PdfReader(io.BytesIO(pdf))
+        pages = len(reader.pages)
+        text = "\n".join((p.extract_text() or "") for p in reader.pages)
+        return (text if text.strip() else None), pages
+    except Exception:  # noqa: BLE001
+        return None, 0
+
+
+def _ocr_available() -> bool:
+    """True once an OCR backend is wired into _ocr_pdf. Seam only."""
+    return False
+
+
+def _ocr_pdf(pdf: bytes) -> str:
+    """OCR integration SEAM — NOT implemented (no OCR dep bundled). Frozen signature
+    (bytes -> str). Callers must catch NotImplementedError and fall back to paste."""
+    raise NotImplementedError(
+        "OCR is not available in this build. This PDF has no selectable text "
+        "(it looks scanned or image-only). Paste the Methods section as text instead.")
+
+
+_CRITICAL_KEYWORDS = frozenset({
+    "concentration", "dose", "dosage", "volume", "temperature", "time", "duration",
+    "ph", "molarity", "ratio", "cycles", "dilution", "incubat", "antibiotic",
+    "selection", "readout", "control", "seeding", "density", "moi", "voltage",
+    "flow rate", "gradient", "wavelength", "exposure", "od600", "confluence",
+})
+
+
+def _is_outcome_critical(gap: dict) -> bool:
+    if gap.get("outcome_critical") is True:
+        return True
+    cls = gap.get("classification")
+    if cls == "deferred":
+        return False
+    if cls == "user_dependent":
+        return True
+    text = " ".join(str(gap.get(k, "")) for k in
+                    ("parameter", "why_it_matters", "question")).lower()
+    if any(kw in text for kw in _CRITICAL_KEYWORDS):
+        return True
+    if gap.get("answer_type") == "number" and (
+            gap.get("plausible_min") is not None or gap.get("plausible_max") is not None):
+        return True
+    return False
 
 
 def _enabled_client_tools() -> dict:
@@ -237,14 +301,118 @@ def _compact_grounding(session: Session) -> None:
                               "the grounded values and their citations are in the protocol above]")
 
 
+def _render_verification_input(corrected: dict, prior_findings: list) -> str:
+    """Build the ONE user message for an independent fix-verification run.
+
+    Contains exactly: (1) the corrected protocol as JSON (already ensure_ids'd by the
+    caller); (2) the prior findings to verify, each rendered with its host ``_key`` as
+    ``finding_key`` (verbatim, must be echoed) plus severity/category/location/problem and
+    the ``fix`` supposedly applied; (3) FIX_VERIFICATION_INSTRUCTION. It deliberately omits
+    the apply-instruction turn, the review's verdict/summary/strengths, and the original
+    pre-fix protocol body, so the verifier judges only the corrected artifact."""
+    findings_view = []
+    for f in prior_findings or []:
+        if not isinstance(f, dict):
+            continue
+        findings_view.append({
+            "finding_key": f.get("_key") or finding_key(f),
+            "severity": f.get("severity"),
+            "category": f.get("category"),
+            "location": f.get("location"),
+            "problem": f.get("problem"),
+            "fix": f.get("fix"),
+        })
+    parts = [
+        "=== CORRECTED PROTOCOL (JSON) ===",
+        json.dumps(corrected, indent=2, ensure_ascii=False, default=str),
+        "",
+        "=== PRIOR FINDINGS TO VERIFY ===",
+        "Each finding below was raised against an EARLIER draft and someone claims to have "
+        "fixed it. Echo each finding_key VERBATIM; return exactly one check per key.",
+        json.dumps(findings_view, indent=2, ensure_ascii=False, default=str),
+        "",
+        FIX_VERIFICATION_INSTRUCTION,
+    ]
+    return "\n".join(parts)
+
+
+_SOURCE_CAP = 12000  # chars; longer source is head+tail summarized so the reviewer isn't flooded
+
+
+def _render_review_input(protocol: dict, *, source_text=None, source_exact=True,
+                         decisions=None, grounding_log=None, quality_gate=None) -> str:
+    """Build the ONE user message for a FRESH-context adversarial correctness review.
+
+    Assembles EXACTLY five whitelisted blocks and, BY CONSTRUCTION, includes nothing from
+    ``session.messages`` — no authoring assistant turns, no chain-of-thought, no prior
+    self-justification, no SYSTEM_EMIT reasoning. The reviewer sees only the artifact and
+    the host-owned ground truth, so it audits independently rather than re-reading (and
+    trusting) the reasoning that produced the protocol.
+
+    Blocks, in order: SOURCE (methods), PROTOCOL (JSON), USER DECISIONS, RETRIEVED EVIDENCE
+    (searches run), DETERMINISTIC VALIDATION FINDINGS (quality_gate). Trailing:
+    CORRECTNESS_REVIEW_INSTRUCTION."""
+    parts: list = []
+
+    # 1. SOURCE (methods) — full when short; head+tail summary when oversized; a marker
+    #    when absent (hypothesis-first). Always declare source_exact so lossy PDF text is
+    #    not over-trusted.
+    if source_text:
+        parts.append("=== SOURCE (methods) ===")
+        parts.append(f"source_exact: {'true' if source_exact else 'false'}")
+        text = str(source_text)
+        if len(text) > _SOURCE_CAP:
+            head = text[: _SOURCE_CAP // 2]
+            tail = text[-(_SOURCE_CAP // 2):]
+            parts.append("source_summary (summarized): head+tail of an oversized source")
+            parts.append(head)
+            parts.append("… [middle omitted] …")
+            parts.append(tail)
+        else:
+            parts.append(text)
+    else:
+        parts.append("=== SOURCE === (none — hypothesis-first draft)")
+    parts.append("")
+
+    # 2. PROTOCOL (JSON) — the artifact under audit (already ensure_ids'd / validated).
+    parts.append("=== PROTOCOL (JSON) ===")
+    parts.append(json.dumps(protocol, indent=2, default=str))
+    parts.append("")
+
+    # 3. USER DECISIONS — host-captured intent (clarification Q&A + chosen assay). Never
+    #    the transcript.
+    parts.append("=== USER DECISIONS ===")
+    parts.append(json.dumps(decisions or [], indent=2, default=str))
+    parts.append("")
+
+    # 4. RETRIEVED EVIDENCE (searches run) — the grounding log; cited excerpts already live
+    #    inline in the protocol's citation.evidence.
+    parts.append("=== RETRIEVED EVIDENCE (searches run) ===")
+    parts.append("\n".join(str(q) for q in (grounding_log or [])) or "(no searches run)")
+    parts.append("")
+
+    # 5. DETERMINISTIC VALIDATION FINDINGS (quality_gate) — the host's deterministic verdict
+    #    handed to the reviewer as ground truth.
+    parts.append("=== DETERMINISTIC VALIDATION FINDINGS (quality_gate) ===")
+    parts.append(json.dumps(quality_gate or {}, indent=2, default=str))
+    parts.append("")
+
+    parts.append(CORRECTNESS_REVIEW_INSTRUCTION)
+    return "\n".join(parts)
+
+
 class GapFillerAgent:
     def __init__(self, client: Optional[OpenRouterClient] = None, model: Optional[str] = None,
-                 model_fast: Optional[str] = None):
+                 model_fast: Optional[str] = None, review_model: Optional[str] = None):
         self.client = client or OpenRouterClient()
         self.model = model or config.MODEL
         # Fast tier for the light phases (analyze/clarifications, discovery); falls back
         # to the main model when unset. The heavy emit always uses the main model.
         self.model_fast = model_fast or config.MODEL_FAST or self.model
+        # Reviewer tier for the adversarial correctness review + post-fix verify. Defaults
+        # to REVIEW_MODEL (== MODEL unless GAPFILLER_REVIEW_MODEL is set), so a byte-identical
+        # run by default and an independent second-opinion model when configured.
+        self.review_model = review_model or config.REVIEW_MODEL or self.model
         # Reasoning effort: full on the heavy phases, lower on the light ones — spend
         # expensive thinking tokens only where they add value.
         self.effort = config.REASONING_EFFORT          # heavy phases (None -> this default)
@@ -309,6 +477,11 @@ class GapFillerAgent:
 
         budget = config.MAX_TOKENS or 0  # escalates on truncation; growth persists across rounds
         for _round in range(config.MAX_TOOL_ROUNDS):
+            # Heartbeat: a model round can take many seconds on a large context. Without a
+            # per-round note the live feed looks frozen for the whole call, so a slow run
+            # reads as a hang. The search dispatches add their own, more specific lines.
+            if state.progress and _round > 0:
+                state.progress(f"Working through the results… (step {_round + 1})")
             # A truncated response is an incomplete (broken-JSON) tool call. Rather than
             # hard-failing — a 502 telling the user to raise an env var they can't reach
             # mid-run — retry the SAME call with a doubled output budget up to MAX_TOKENS_CAP.
@@ -340,11 +513,11 @@ class GapFillerAgent:
                         f"output truncated — retrying with max_tokens={budget}")
                     continue
                 if finish == "length":
-                    # Even at the cap the response didn't fit — fail loud and actionable.
+                    # Even at the cap the response didn't fit — fail with a user-actionable
+                    # message (no server-tuning internals leaked to the client).
                     raise AgentError(
-                        "The model hit the max_tokens output limit before finishing, even at "
-                        f"the maximum budget ({config.MAX_TOKENS_CAP}). The protocol may be "
-                        "unusually large; narrow the request or raise GAPFILLER_MAX_TOKENS_CAP."
+                        "The protocol was too large to finish generating. Try a narrower "
+                        "scope — fewer conditions or a simpler assay — and rebuild."
                     )
                 break
 
@@ -427,7 +600,9 @@ class GapFillerAgent:
         effective_text = extracted_methods or text
         session.source_text = effective_text  # verify quotes against exactly what the model read
         session.source_exact = not is_full_paper  # PDF-derived text is lossy vs the paper
-        state = RunState(session=session, searches_left=config.PUBMED_BUDGET, progress=progress)
+        # Analyze only scopes gaps — a small search budget keeps it fast and bounds the
+        # tool-round loop so a large/off-topic doc can't grind past the browser's timeout.
+        state = RunState(session=session, searches_left=config.ANALYZE_PUBMED_BUDGET, progress=progress)
 
         hyp_preamble = (
             f"The student's hypothesis (what they want to test) is:\n{session.hypothesis}\n\n"
@@ -469,6 +644,8 @@ class GapFillerAgent:
             raise AgentError("Phase 1 ended without calling request_clarifications.")
         session.request_tool_use_id = block.id
         session.phase1 = dict(block.input)
+        for _g in (session.phase1.get("gaps") or []):
+            _g["outcome_critical"] = _is_outcome_critical(_g)
         return session
 
     # -- Phase 0 (hypothesis-first): discover candidate assays -------------------
@@ -515,6 +692,7 @@ class GapFillerAgent:
         if chosen is None:
             raise AgentError(f"Unknown assay id: {assay_id}")
         session.chosen_assay = chosen
+        session.decisions.append({"decision": "chose_assay", "assay": chosen.get("name")})
         brief = CHOOSE_ASSAY_INSTRUCTION.format(
             hypothesis=session.hypothesis or "(not explicitly stated)",
             assay_name=chosen.get("name", assay_id),
@@ -528,9 +706,51 @@ class GapFillerAgent:
         session.request_tool_use_id = session.pending_tool_use_id
         session.pending_tool_use_id = None
         session.phase1 = phase1
+        for _g in (session.phase1.get("gaps") or []):
+            _g["outcome_critical"] = _is_outcome_critical(_g)
         return phase1
 
     # -- Phase 2 + 3 ------------------------------------------------------------
+    # -- Emit-boundary bounded repair (§I.5) ------------------------------------
+    def _gate_emit_payload(self, session: Session, block: "_ToolCall", state: "RunState",
+                           system: Optional[str] = None, model: Optional[str] = None,
+                           effort: Optional[str] = None) -> tuple:
+        """Gate an ``emit_protocol`` terminal at the boundary. If the payload is
+        structurally UNUSABLE (the FATAL class: not a dict / empty title / steps not
+        a list), re-emit exactly ONCE — appending a user turn quoting the errors and
+        forcing emit_protocol with no search tools (mirrors the nudge-once block) —
+        then re-check. A still-unusable result raises AgentError (surfaced by the
+        transactional rollback as a normal error, never a partial render).
+
+        Per-entry gaps are NOT fatal: they are repaired deterministically downstream
+        by repair_structure + STRUCT_* blocker, so model calls stay bounded. Returns
+        ``(raw, block)`` on success."""
+        raw = dict(block.input)
+        usable, fatal, _ = coerce_emit_payload(raw)
+        if usable:
+            return raw, block
+        summary = "; ".join(f"{e['loc']}: {e['msg']}" for e in fatal) or "structurally unusable"
+        session.messages.append(
+            {"role": "user", "content": (
+                "Your emit_protocol payload is structurally unusable and cannot be "
+                f"rendered ({summary}). Call emit_protocol ONCE more with a valid protocol: "
+                "a non-empty title and a steps array with at least one step. Do not search.")}
+        )
+        block2 = self._run(session.messages, [EMIT_PROTOCOL_TOOL], "emit_protocol", state,
+                           system=system or self.system_emit, force_terminal=True,
+                           model=model or self.model,
+                           effort=effort if effort is not None else self.effort)
+        if block2 is None:
+            raise AgentError(
+                "emit_protocol produced a structurally unusable protocol: " + summary)
+        raw2 = dict(block2.input)
+        usable2, fatal2, _ = coerce_emit_payload(raw2)
+        if not usable2:
+            summary2 = "; ".join(f"{e['loc']}: {e['msg']}" for e in fatal2) or summary
+            raise AgentError(
+                "emit_protocol produced a structurally unusable protocol: " + summary2)
+        return raw2, block2
+
     def continue_with_answers(self, session: Session, answers: list,
                               progress: Optional[Any] = None) -> dict:
         if session.request_tool_use_id is None:
@@ -542,12 +762,35 @@ class GapFillerAgent:
         # instead of dying with "Session has no pending clarification to answer".
         saved_request = session.request_tool_use_id
         saved_len = len(session.messages)
+        # Capture user intent host-side (never scraped from the transcript) so the fresh
+        # correctness review can be shown the clarification Q&A. Guarded: if phase1 carries
+        # no questions, decisions stays empty rather than raising.
+        questions = (session.phase1 or {}).get("questions") or []
+        if questions:
+            session.decisions = [{"question": q, "answer": a.get("value"), "mode": a.get("mode")}
+                                 for q, a in zip(questions, answers)]
         # Answer the request_clarifications call with the user's answers.
         session.messages.append(
             {"role": "tool", "tool_call_id": session.request_tool_use_id,
              "content": json.dumps({"answers": answers})}
         )
         session.request_tool_use_id = None  # prevent a second answer submission
+        # Host directive: honor the explicit per-gap modes exactly (empty is NEVER a default).
+        # Guard: no answers -> no directive (preserves the no-gap fast path).
+        if answers:
+            lines = []
+            for a in answers:
+                if a.get("mode") == "default":
+                    lines.append(f"- {a['id']}: USE its suggested_default; tag provenance "
+                                 f"'default_verify' and add an open_question noting it was accepted unverified.")
+                elif a.get("mode") == "unresolved":
+                    lines.append(f"- {a['id']}: LEAVE UNRESOLVED — do not fabricate a value; emit "
+                                 f"it as default_verify with an explicit open_question asking the user to supply it.")
+                else:
+                    lines.append(f"- {a['id']}: use the provided value.")
+            directive = ("The user made an explicit choice per gap. Honor these modes exactly "
+                         "(an empty field is NOT a default):\n" + "\n".join(lines))
+            session.messages.append({"role": "user", "content": directive})
         try:
             tools = _grounding_tools() + [EMIT_PROTOCOL_TOOL]
             block = self._run(session.messages, tools, "emit_protocol", state,
@@ -563,13 +806,17 @@ class GapFillerAgent:
                                   effort=self.effort)
                 if block is None:
                     raise AgentError("Phase 3 ended without calling emit_protocol.")
+            # Emit-boundary bounded repair: at most one re-emit on a FATAL payload,
+            # else AgentError (rolled back below). Runs inside the try so a failure
+            # restores the pending clarification and drops the appended answer.
+            raw, block = self._gate_emit_payload(session, block, state)
         except Exception:
             del session.messages[saved_len:]
             session.request_tool_use_id = saved_request
             session.pending_tool_use_id = None
             raise
         session.pending_tool_use_id = block.id
-        return dict(block.input)
+        return raw
 
     # -- Continue after an emit (ack the pending tool call) ---------------------
     def _followup(self, session: Session, instruction: str, terminal: str, tool: dict,
@@ -602,12 +849,20 @@ class GapFillerAgent:
                               system=system, model=model, effort=effort)
             if block is None:
                 raise AgentError(f"Model ended without calling {terminal}.")
+            # Only emit_protocol follow-ups (revise/apply_fixes) pass through the
+            # emit-boundary gate; other terminals (design review/alignment) are not
+            # protocols. Runs inside the try so a fatal re-emit failure rolls back.
+            if terminal == "emit_protocol":
+                raw, block = self._gate_emit_payload(
+                    session, block, state, system=system, model=model, effort=effort)
+            else:
+                raw = dict(block.input)
         except Exception:
             del session.messages[saved_len:]           # drop the ack + instruction we appended
             session.pending_tool_use_id = saved_pending  # re-arm the emit so a retry works
             raise
         session.pending_tool_use_id = block.id
-        return dict(block.input)
+        return raw
 
     # -- Revise (edit-and-regenerate) -------------------------------------------
     def revise(self, session: Session, instruction: str, progress: Optional[Any] = None) -> dict:
@@ -627,13 +882,14 @@ class GapFillerAgent:
         )
 
     # -- Design review (teach the experiment around the protocol) ---------------
-    def design_review(self, session: Session) -> dict:
+    def design_review(self, session: Session, progress: Optional[Any] = None) -> dict:
         """Produce an experiment-design review of the emitted protocol."""
         return self._followup(session, DESIGN_REVIEW_INSTRUCTION, "emit_design_review",
-                               EMIT_DESIGN_REVIEW_TOOL, compact=True)
+                               EMIT_DESIGN_REVIEW_TOOL, compact=True, progress=progress)
 
     # -- Design alignment (does it directly test the hypothesis?) ---------------
-    def design_alignment(self, session: Session, hypothesis: Optional[str] = None) -> dict:
+    def design_alignment(self, session: Session, hypothesis: Optional[str] = None,
+                         progress: Optional[Any] = None) -> dict:
         """Assess whether the protocol directly tests the hypothesis and recommend
         concrete protocol changes. A hypothesis passed here overrides/sets the one
         captured at analyze time."""
@@ -647,15 +903,41 @@ class GapFillerAgent:
                 + instruction
             )
         return self._followup(session, instruction, "emit_design_alignment",
-                               EMIT_DESIGN_ALIGNMENT_TOOL, compact=True)
+                               EMIT_DESIGN_ALIGNMENT_TOOL, compact=True, progress=progress)
 
     # -- Adversarial correctness review (attack the emitted protocol) -----------
-    def correctness_review(self, session: Session, progress: Optional[Any] = None) -> dict:
+    def correctness_review(self, session: Session, quality_gate: dict = None,
+                           progress: Optional[Any] = None) -> dict:
         """Skeptical, independent audit of the emitted protocol for logic/value/ordering/
-        control errors. Model-generated reasoning (not a host guarantee); its citations are
-        host-verified. Runs on the main model — this is reasoning-heavy."""
-        return self._followup(session, CORRECTNESS_REVIEW_INSTRUCTION, "emit_correctness_review",
-                              EMIT_CORRECTNESS_REVIEW_TOOL, compact=True, progress=progress)
+        control errors. Runs in a FRESH, ephemeral reviewer context: the live session's
+        authoring transcript (its reasoning, self-justification, SYSTEM_EMIT turns) is NEVER
+        shown to the reviewer and is NOT mutated. The reviewer sees only the whitelisted
+        blocks assembled by ``_render_review_input`` (source/summary, normalized protocol,
+        user decisions, retrieved evidence, deterministic findings). Model-generated
+        reasoning (not a host guarantee); its citations are host-verified. Runs on the
+        review model — reasoning-heavy, with grounding bounded by PUBMED_BUDGET so an
+        implausible_value / unit_or_scaling claim can be re-derived."""
+        protocol = session.protocol
+        if protocol is None:
+            raise AgentError("Nothing to review yet — emit a protocol first.")
+        if quality_gate is None:
+            quality_gate = ((protocol.get("validation_report") or {}).get("quality_gate"))
+        payload = _render_review_input(
+            protocol,
+            source_text=session.source_text, source_exact=session.source_exact,
+            decisions=session.decisions, grounding_log=session.grounding_log,
+            quality_gate=quality_gate,
+        )
+        messages = [{"role": "user", "content": payload}]  # throwaway transcript
+        state = RunState(session=session, searches_left=config.PUBMED_BUDGET, progress=progress)
+        block = self._run(
+            messages, _grounding_tools() + [EMIT_CORRECTNESS_REVIEW_TOOL],
+            "emit_correctness_review", state,
+            system=self.system_prompt, model=self.review_model, effort=self.effort,
+        )
+        if block is None:
+            raise AgentError("Reviewer ended without calling emit_correctness_review.")
+        return dict(block.input)
 
     def apply_correctness_fixes(self, session: Session, findings: list,
                                 progress: Optional[Any] = None) -> dict:
@@ -686,3 +968,31 @@ class GapFillerAgent:
         return self._followup(session, instruction, "emit_protocol", EMIT_PROTOCOL_TOOL,
                               compact=True, system=self.system_emit, model=self.model,
                               effort=self.effort, progress=progress)
+
+    # -- Independent fix verification (fresh, ephemeral context) ----------------
+    def verify_fixes(self, session: Session, prior_findings: list,
+                     progress: Optional[Any] = None) -> dict:
+        """Independent, fresh-context re-review of the CORRECTED protocol against the
+        prior findings. Builds its OWN throwaway transcript via ``_run`` — the live
+        session's apply turn and armed emit are NEVER shown to it and are NOT mutated,
+        so this is safe to run after apply. Returns the raw verification dict
+        (``dict(block.input)``); the host adjudicates it into ``fix_verification``.
+
+        Grounding tools are included so an implausible_value / unit_or_scaling claim can
+        be re-derived independently, bounded by PUBMED_BUDGET."""
+        corrected = session.protocol                      # post-apply, already ensure_ids'd
+        payload = _render_verification_input(corrected, prior_findings)
+        messages = [{"role": "user", "content": payload}]  # throwaway local list
+        state = RunState(session=session, searches_left=config.PUBMED_BUDGET, progress=progress)
+        block = self._run(
+            messages,
+            _grounding_tools() + [EMIT_FIX_VERIFICATION_TOOL],
+            "emit_fix_verification",
+            state,
+            system=self.system_prompt,
+            model=self.review_model,
+            effort=self.effort,
+        )
+        if block is None:
+            raise AgentError("Verifier ended without calling emit_fix_verification.")
+        return dict(block.input)

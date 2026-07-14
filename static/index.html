@@ -54,6 +54,26 @@
     border-radius: 7px; padding: 8px 10px; width: 100%; font-size: 14px;
   }
   .skip { margin-left: auto; }
+  /* ---- Bucket-1: clarification three-choice + preflight + PDF preview ---- */
+  .gap.gap-blocked { border-color: var(--verify); }
+  .gap-critical-badge { display:inline-block; margin-left:8px; font-size:11px; padding:1px 7px; border-radius:999px; background:rgba(242,177,58,.16); color:var(--verify); vertical-align:middle; font-weight:700; }
+  fieldset.gap-mode { border:0; margin:8px 0 0; padding:0; min-width:0; }
+  .gap-mode .mode-row { display:flex; align-items:baseline; gap:8px; padding:5px 0; flex-wrap:wrap; }
+  .gap-mode .mode-row label { cursor:pointer; }
+  .gap-mode .mode-sub { color:var(--muted); font-size:12px; width:100%; margin-left:24px; }
+  .gap-mode .answerwrap { margin:4px 0 8px 24px; }
+  #gate-error { color:var(--verify); font-size:13px; margin:8px 0 0; min-height:1.1em; }
+  .notice { border:1px solid var(--verify); background:rgba(242,177,58,.10); color:var(--text); border-radius:8px; padding:10px 12px; font-size:13px; margin:8px 0; }
+  #pdf-preview textarea { min-height:160px; margin-top:6px; }
+  .preflight-overlay { position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:flex-start; justify-content:center; padding:40px 16px; overflow:auto; z-index:1000; }
+  .preflight-panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:22px 24px; max-width:640px; width:100%; }
+  .preflight-panel h2 { margin:0 0 6px; }
+  .preflight-section { margin:16px 0; }
+  .preflight-section h3 { margin:0 0 6px; font-size:14px; }
+  .preflight-list { margin:0; padding-left:20px; }
+  .preflight-list li { padding:3px 0; font-size:14px; }
+  .preflight-footer { justify-content:flex-end; margin-top:20px; }
+  .preflight-panel:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   a { color: var(--accent); }
   .tier { font-size: 11px; padding: 1px 8px; border-radius: 999px; font-weight: 700; letter-spacing: .3px; text-transform: uppercase; }
   .t-stated { background: rgba(74,192,122,.16); color: var(--stated); }
@@ -71,6 +91,24 @@
   .cite { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
   .badge-ok { color: var(--stated); font-weight: 700; }
   .badge-warn { color: var(--verify); font-weight: 700; }
+  .badge-bad { color: #e5484d; font-weight: 700; }
+  .badge-src { color: var(--muted); font-weight: 600; font-size: 11.5px; border: 1px solid var(--line); border-radius: 6px; padding: 0 5px; margin-left: 4px; }
+  details.evidence { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+  details.evidence summary { cursor: pointer; color: var(--lit); font-weight: 600; }
+  details.evidence blockquote { margin: 6px 0 0; padding-left: 10px; border-left: 2px solid var(--line); }
+  /* Collapsible sections — keep the initial protocol view a lean walkthrough. */
+  details.collapse { margin: 8px 0; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.02); }
+  details.collapse > summary { cursor: pointer; padding: 8px 12px; font-weight: 600; color: var(--text); list-style: none; user-select: none; }
+  details.collapse > summary::-webkit-details-marker { display: none; }
+  details.collapse > summary::before { content: "▸ "; color: var(--muted); }
+  details.collapse[open] > summary::before { content: "▾ "; }
+  details.collapse > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .collapse-body { padding: 4px 12px 12px; }
+  /* the per-step "Details" expander is lighter — it nests inside a .step */
+  .step details.collapse { border: none; background: none; margin: 4px 0 0; }
+  .step details.collapse > summary { padding: 2px 0; font-weight: 500; font-size: 12.5px; color: var(--lit); }
+  .step .collapse-body { padding: 4px 0 0 10px; }
+  @media print { details.collapse > summary::before { content: ""; } .collapse-body { padding-left: 0; } }
   .cp { font-size: 13px; color: var(--muted); margin-top: 4px; }
   .warn { color: var(--verify); font-size: 13px; margin-top: 4px; }
   .pnote { color: var(--muted); font-size: 12.5px; font-family: ui-monospace, monospace; }
@@ -133,6 +171,31 @@
   .diff ins { color: var(--stated); text-decoration: none; background: rgba(74,192,122,.12); }
   .diff del { color: var(--danger); background: rgba(239,106,106,.12); }
   .hint { color: var(--muted); font-size: 12.5px; margin: 6px 0 0; }
+  /* ---------- projects layer (additive) ---------- */
+  #project-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+  #project-header h1 { flex: 1 1 auto; min-width: 180px; margin: 0; }
+  .ph-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+  .ph-actions { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+  .ph-actions button { padding: 7px 12px; font-size: 13px; }
+  #ph-stale { flex-basis: 100%; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+  .ph-badge { text-transform: none; letter-spacing: 0; }
+  .lc-intake_received, .lc-awaiting_confirmation, .lc-workflow_confirmed,
+  .lc-superseded, .lc-archived { color: var(--muted); border-color: var(--line); }
+  .lc-building, .lc-needs_clarification, .lc-selecting_assay { color: var(--lit); border-color: var(--lit); }
+  .lc-protocol_ready { color: var(--best); border-color: var(--best); }
+  .lc-failed { color: var(--danger); border-color: var(--danger); }
+  #workflow-cards, #detect-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin-top: 10px; }
+  .wf-card { background: var(--panel2); color: var(--muted); border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px 14px; cursor: pointer; text-align: left; font-weight: 600; font-size: 14px; display: block; width: 100%; }
+  .wf-card small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .wf-card[aria-checked="true"] { border-color: var(--accent); color: var(--text); background: rgba(110,168,254,.10); }
+  .wf-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .recent-list { list-style: none; margin: 10px 0 0; padding: 0; }
+  .recent-item { display: block; }
+  .recent-item a { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; text-decoration: none;
+    color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin: 8px 0; background: var(--panel2); }
+  .recent-item a:hover { border-color: var(--accent); }
+  .recent-item .r-title { font-weight: 600; flex: 1 1 auto; min-width: 140px; }
   @keyframes gf-spin { to { transform: rotate(360deg); } }
   .busy {
     position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
@@ -153,6 +216,7 @@
   .busy .busy-x { background: transparent; border: 0; color: var(--muted); font-size: 14px;
     line-height: 1; padding: 0 2px; margin-left: 2px; cursor: pointer; font-weight: 700; }
   .btn:disabled, button:disabled { cursor: default; }
+  .op-locked { pointer-events: none; }   /* neutralizes <a>/non-button controls while an op runs */
   #activity-panel { border-color: var(--accent); }
   #activity-panel h2 { margin: 0; font-size: 15px; }
   ul.activity { list-style: none; margin: 10px 0 0; padding: 0; max-height: 240px; overflow-y: auto;
@@ -165,11 +229,80 @@
   @media print {
     body { background: #fff; color: #000; }
     header, #input-panel, #questions-panel, #discovery-panel, #assays-panel, .modebar, .noprint, .toolbar, .refine { display: none !important; }
+    #home-panel, #detect-panel, #project-header .ph-actions, #ph-stale { display: none !important; }
     .panel { border: 0; background: #fff; margin: 0; padding: 0; }
     main { max-width: 100%; padding: 0; }
     a { color: #000; text-decoration: underline; }
-    .tier { border: 1px solid #999; color: #000 !important; background: #fff !important; }
+    /* Print always uses the clean bench layout — hide the provenance chrome (same closed set as
+       §7.3, but ungated by .view-bench so it applies regardless of the on-screen view). */
+    .viewbar { display: none !important; }
+    #result-panel .tier, #result-panel .cite, #result-panel details.evidence, #result-panel .pnote,
+    #result-panel .badge-src, #result-panel .legend, #result-panel .summary, #result-panel .gnd { display: none !important; }
+    #result-panel table.materials th:nth-child(4), #result-panel table.materials td:nth-child(4) { display: none !important; }
+    #project-header { display: block !important; border: 0; padding: 0 0 8px; }
+    #project-header .ph-badge { border: 1px solid #999; color: #000 !important; background: #fff !important; }
   }
+  /* ---------- Epic-4: readiness card + flash (additive) ---------- */
+  .readiness{border:1px solid var(--border,var(--line));border-left-width:5px;border-radius:8px;padding:12px 14px;margin:0 0 14px;}
+  .readiness-head{margin:0 0 4px;font-size:1.15rem;}
+  .readiness-rationale{margin:0 0 6px;}
+  .readiness-why{margin:6px 0 0;padding-left:20px;}
+  .readiness-why li{margin:2px 0;}
+  .readiness-jump{font-size:.85em;margin-left:4px;}
+  .readiness-ready{border-left-color:var(--user,#35c2c2);}
+  .readiness-attention{border-left-color:var(--verify,#f2b13a);}
+  .readiness-blocked{border-left-color:#e5534b;}
+  .flash{outline:2px solid var(--verify,#f2b13a);transition:outline .3s;}
+  /* ---------- Epic-4: bench / evidence view toggle ---------- */
+  .viewbar{display:flex;gap:8px;margin:0 0 14px;}
+  .viewbtn{flex:1;background:var(--panel2);color:var(--muted);border:1px solid var(--line);
+    border-radius:10px;padding:10px 14px;cursor:pointer;text-align:left;font-weight:600;font-size:14px;}
+  .viewbtn.active{border-color:var(--accent);color:var(--text);background:rgba(110,168,254,.10);}
+  .viewbtn small{display:block;font-weight:400;color:var(--muted);font-size:12px;margin-top:2px;}
+  #result-panel.view-bench .tier,
+  #result-panel.view-bench .cite,
+  #result-panel.view-bench details.evidence,
+  #result-panel.view-bench .pnote,
+  #result-panel.view-bench .badge-src,
+  #result-panel.view-bench .legend,
+  #result-panel.view-bench .summary,
+  #result-panel.view-bench .gnd { display:none !important; }
+  #result-panel.view-bench table.materials th:nth-child(4),
+  #result-panel.view-bench table.materials td:nth-child(4) { display:none !important; }
+  #result-panel.view-bench .step { padding:9px 0; }
+  #result-panel.view-bench table.materials td,
+  #result-panel.view-bench table.materials th { padding:6px 8px; }
+  /* ---------- Epic-4: inline value editing + focus + a11y ---------- */
+  .btn-inline{background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:6px;cursor:pointer;font-size:12px;line-height:1;padding:2px 6px;margin-left:6px;}
+  .btn-inline:hover{color:var(--text);border-color:var(--accent);}
+  .inline-edit{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:4px;}
+  .inline-edit input{font:inherit;padding:3px 6px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--text);width:auto;}
+  .inline-edit button{padding:4px 10px;font-size:12.5px;}
+  .visually-hidden{position:absolute !important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0;}
+  .viewbtn:focus-visible,.modebtn:focus-visible,.btn:focus-visible,#result-panel button:focus-visible,#result-panel a:focus-visible,#result-panel summary:focus-visible,[tabindex="-1"]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px;}
+  [tabindex="-1"]:focus{outline:none;}
+  /* ---------- Epic-4 Bucket 2: locks + deep diff + recovery + a11y ---------- */
+  button:focus-visible,.lock-toggle:focus-visible,.modebtn:focus-visible,.table-wrap:focus-visible,[role="tab"]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px;}
+  .lock-toggle{background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:6px;cursor:pointer;font-size:12px;line-height:1;padding:2px 6px;margin-left:6px;}
+  .lock-toggle:hover{color:var(--text);border-color:var(--accent);}
+  .lock-toggle[aria-pressed="true"]{color:var(--text);border-color:var(--accent);background:rgba(110,168,254,.12);}
+  .table-wrap{overflow-x:auto;max-width:100%;-webkit-overflow-scrolling:touch;}
+  .table-wrap>table{margin:0;}
+  table.deepdiff caption,#result-panel table caption{caption-side:top;text-align:left;color:var(--muted);font-size:12.5px;padding:0 0 6px;}
+  table.deepdiff td,table.deepdiff th{vertical-align:top;}
+  table.deepdiff del{color:var(--danger);text-decoration:line-through;}
+  table.deepdiff ins{color:var(--user,#35c2c2);text-decoration:none;}
+  #deepdiff-details summary{cursor:pointer;color:var(--muted);font-size:13px;margin:8px 0;}
+  #unrelated-gate{border:1px solid var(--verify,#f2b13a);border-left-width:5px;border-radius:8px;padding:12px 14px;margin:0 0 14px;background:rgba(242,177,58,.06);}
+  #unrelated-gate h3{margin:0 0 6px;font-size:1.05rem;}
+  #unrelated-gate ul{margin:6px 0;padding-left:20px;}
+  #unrelated-gate .row{display:flex;gap:8px;margin-top:10px;}
+  .prov-legend{margin:8px 0 0;}
+  .prov-legend dt{display:inline-block;margin-right:8px;}
+  .prov-legend dd{display:inline;margin:0 0 0 4px;color:var(--muted);font-size:12.5px;}
+  .prov-legend div{margin:3px 0;}
+  .busy .busy-cancel,.busy .busy-retry{pointer-events:auto;background:transparent;border:1px solid var(--line);color:var(--text);border-radius:999px;font-size:12px;line-height:1;padding:4px 10px;margin-left:4px;cursor:pointer;font-weight:600;}
+  .busy .busy-cancel:hover,.busy .busy-retry:hover{border-color:var(--accent);}
 </style>
 </head>
 <body>
@@ -177,6 +310,25 @@
   <h1>Methods Gap-Filler</h1>
   <p>Start from a <b>hypothesis</b> — and find the assay that tests it — or start from a <b>paper</b> and adapt it.
      Either way you get an executable protocol where every value is provenance-tagged and every citation is verified.</p>
+</header>
+
+<header id="project-header" class="hidden" tabindex="-1">
+  <h1 id="ph-title"></h1>
+  <div class="ph-badges">
+    <span class="pill ph-badge" id="ph-workflow"></span>
+    <span class="pill ph-badge" id="ph-lifecycle"></span>
+    <span class="pill ph-badge" id="ph-version"></span>
+  </div>
+  <div class="ph-actions noprint">
+    <button type="button" class="secondary" id="ph-copy">Copy link</button>
+    <button type="button" class="secondary" id="ph-new">New project</button>
+    <button type="button" class="secondary" id="ph-delete">Delete project</button>
+  </div>
+  <p id="ph-retention" class="muted small noprint">Saved locally: this project's Methods text and protocol versions live in the app's SQLite database until you delete the project.</p>
+  <div id="ph-stale" class="hidden noprint">
+    <span class="pill ph-badge">Read-only</span>
+    <span class="muted small">This is a saved snapshot — the editing session has expired, so editing controls are disabled. Start a new project to make changes.</span>
+  </div>
 </header>
 
 <main>
@@ -189,15 +341,50 @@
     </div>
   </section>
 
-  <div class="modebar">
-    <button class="modebtn active" id="mode-paper">I have a paper / protocol
+  <section class="panel" id="home-panel">
+    <form id="universal-form">
+      <label class="muted" for="u-input">What do you want to build?</label>
+      <textarea id="u-input" placeholder="Describe your goal, paste a protocol or Methods section, give a DOI / PMID / URL, or state a hypothesis…"></textarea>
+      <div class="or">— and / or —</div>
+      <label class="filebtn" for="u-file">
+        <input type="file" id="u-file" accept="application/pdf,.pdf" />
+        <span id="u-file-label">Upload a paper as a PDF</span>
+      </label>
+      <p class="muted small">We'll detect which workflow fits and let you confirm before building.</p>
+      <div class="row">
+        <button type="submit" id="u-go">Start</button>
+        <button type="button" class="secondary" id="u-example">Load example (CFPS)</button>
+        <span class="muted" id="u-status"></span>
+      </div>
+      <p class="muted small" style="margin:16px 0 0">…or pick a workflow directly:</p>
+      <div id="workflow-cards" role="radiogroup" aria-label="Choose a workflow"></div>
+    </form>
+    <section id="recent-panel" style="margin-top:22px">
+      <h2>Recent projects</h2>
+      <ol id="recent-list" class="recent-list"></ol>
+      <p class="muted hidden" id="recent-empty">No projects yet — start one above.</p>
+    </section>
+  </section>
+
+  <section class="panel hidden" id="detect-panel" aria-live="polite">
+    <h2>Which workflow fits?</h2>
+    <p class="muted" id="detect-summary"></p>
+    <div id="detect-cards" role="radiogroup" aria-label="Confirm the workflow"></div>
+    <div class="row">
+      <button id="detect-confirm">Confirm &amp; continue</button>
+      <button class="secondary" id="detect-cancel">Back</button>
+    </div>
+  </section>
+
+  <div class="modebar" role="tablist" aria-label="Entry mode">
+    <button class="modebtn active" id="mode-paper" role="tab" aria-selected="true" aria-controls="input-panel" tabindex="0">I have a paper / protocol
       <small>Paste a Methods section or upload a PDF — adapt it to your needs</small></button>
-    <button class="modebtn" id="mode-hyp">I have a hypothesis
+    <button class="modebtn" id="mode-hyp" role="tab" aria-selected="false" aria-controls="discovery-panel" tabindex="-1">I have a hypothesis
       <small>Find the best assay to test it, then draft the protocol</small></button>
   </div>
   <p id="gstatus" class="muted noprint" style="min-height:1.2em; margin:0 0 8px"></p>
 
-  <section class="panel" id="input-panel">
+  <section class="panel" id="input-panel" role="tabpanel" aria-labelledby="mode-paper">
     <label class="muted" for="methods">Paste a Methods section</label>
     <textarea id="methods" placeholder="Paste the Methods / protocol text here…"></textarea>
     <div class="or">— or —</div>
@@ -205,18 +392,24 @@
       <input type="file" id="pdf" accept="application/pdf,.pdf" />
       <span id="pdf-label">Upload the paper as a PDF</span>
     </label>
-    <p class="muted small">If you choose a PDF, it's used instead of the pasted text — the tool finds the Methods section for you. Your file is sent to the model only to build this protocol and is held in memory for this session (about an hour), not stored permanently.</p>
+    <p class="muted small">If you choose a PDF, it's used instead of the pasted text — the tool finds the Methods section for you. The raw PDF bytes are never stored: they're used only to build this protocol. For a saved project, the extracted Methods text is stored in the app's local SQLite project database so the project can be reopened; you can remove it any time with <b>Delete project</b>. A one-off paste that isn't saved as a project stays in memory only (about an hour).</p>
+    <section id="pdf-preview" class="panel hidden" role="region" aria-label="Extracted Methods preview">
+      <p id="pdf-report" class="muted small" aria-live="polite"></p>
+      <div id="pdf-image-only" class="notice hidden" role="status"></div>
+      <label class="muted" for="pdf-extracted">Extracted Methods — review and correct before analyzing</label>
+      <textarea id="pdf-extracted" aria-describedby="pdf-report"></textarea>
+    </section>
     <label class="muted" for="hypothesis" style="display:block;margin-top:14px">Your hypothesis <span class="small">(optional — orients the protocol and lets you check it's directly tested)</span></label>
     <input type="text" id="hypothesis" placeholder="e.g. Adding DsbC increases the yield of correctly folded, disulfide-bonded scFv" style="margin-top:6px" />
     <div class="row">
-      <button id="analyze">Analyze</button>
+      <button id="analyze" class="op-control">Analyze</button>
       <button class="secondary" id="example">Load example (CFPS)</button>
       <button class="secondary hidden" id="clear-pdf">Clear PDF</button>
       <span class="muted" id="status"></span>
     </div>
   </section>
 
-  <section class="panel hidden" id="discovery-panel">
+  <section class="panel hidden" id="discovery-panel" role="tabpanel" aria-labelledby="mode-hyp">
     <label class="muted" for="disc-hyp">What's your hypothesis or goal?</label>
     <textarea id="disc-hyp" placeholder="e.g. Overexpressing the GroEL/ES chaperone increases the soluble yield of my membrane protein"></textarea>
     <p class="muted small">No paper needed — describe what you want to find out. The tool proposes candidate assays, each grounded in the literature, and recommends one.</p>
@@ -235,8 +428,8 @@
       </div>
     </div>
     <div class="row">
-      <button id="discover">Find the best assay</button>
-      <button class="secondary" id="autopick">Just pick the best &amp; start</button>
+      <button id="discover" class="op-control">Find the best assay</button>
+      <button class="secondary op-control" id="autopick">Just pick the best &amp; start</button>
       <span class="muted" id="disc-status"></span>
     </div>
   </section>
@@ -251,24 +444,30 @@
     <h2>A few questions</h2>
     <p class="muted" id="q-summary"></p>
     <div id="gaps"></div>
+    <p id="gate-error" role="alert" aria-live="assertive"></p>
     <div class="row">
-      <button id="submit-answers">Build protocol</button>
-      <span class="muted">Skip a question to accept its default (flagged “verify before use”).</span>
+      <button id="submit-answers" class="op-control">Build protocol</button>
+      <span class="muted">Choose how to handle each question, then review before generating.</span>
     </div>
   </section>
 
   <section class="panel hidden noprint" id="activity-panel">
     <h2>Working… <span class="muted small" style="font-weight:400">live activity — what the model is doing</span></h2>
-    <ul id="activity" class="activity"></ul>
+    <ul id="activity" class="activity" role="log" aria-live="polite" aria-atomic="false" aria-label="Live activity"></ul>
   </section>
 
-  <section class="panel hidden" id="result-panel"></section>
+  <section class="panel hidden" id="result-panel" role="region" aria-label="Reconstructed protocol"></section>
 </main>
 
 <div id="busy" class="busy hidden noprint" role="status" aria-live="polite">
   <span class="spin"></span><span class="busy-msg"></span>
+  <button type="button" class="busy-cancel cancel-control hidden" aria-label="Cancel the operation in progress">Cancel</button>
+  <button type="button" class="busy-retry hidden" aria-label="Retry the last operation">Retry</button>
   <button type="button" class="busy-x hidden" aria-label="Dismiss">✕</button>
 </div>
+
+<div id="sr-announce" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+<div id="sr-alert" class="visually-hidden" role="alert" aria-live="assertive" aria-atomic="true"></div>
 
 <script>
 const $ = (s) => document.querySelector(s);
@@ -283,6 +482,26 @@ let MD_URL = null;
 let CSV_URL = null;
 let GLOG = [];
 let HYP = "";
+let PDF_PREVIEWED = false;      // Bucket-1: a server-side /api/extract_pdf preview is showing
+let PDF_FILENAME = "";          // echoed filename for the reviewed-text analyze path
+let INTAKE_FILE = null;         // PDF uploaded on the universal landing page, carried into the paper panel
+let _preflightPrevFocus = null; // element to restore focus to when the preflight dialog closes
+
+/* ---------- Bucket 2: value-lock state (persisted, keyed by stable id) ---------- */
+let LOCKED = new Set();                 // stable ids the user has locked
+let CURRENT_ABORT = null;               // AbortController for the in-flight long op (cancel)
+let LAST_OP = null;                     // { name, fn } — last mutating op, for Retry
+let LAST_REVISE_INSTRUCTION = null;     // set right before a /api/revise POST; consumed once in renderResult
+function lockScope() { return (PROJECT && PROJECT.id) ? String(PROJECT.id) : String(SESSION || "session"); }
+function lockKey() { return "gf_locks:" + lockScope(); }
+function loadLocks() { try { const v = JSON.parse(localStorage.getItem(lockKey()) || "[]"); return Array.isArray(v) ? v : []; } catch (e) { return []; } }
+function saveLocks(set) { try { localStorage.setItem(lockKey(), JSON.stringify([...set])); } catch (e) { /* private mode — locks stay in-memory */ } }
+function isLocked(id) { return !!id && LOCKED.has(id); }
+function toggleLock(id) { if (!id) return false; if (LOCKED.has(id)) LOCKED.delete(id); else LOCKED.add(id); saveLocks(LOCKED); return LOCKED.has(id); }
+function refreshLocks() { LOCKED = new Set(loadLocks()); }
+function isAbort(e) { return !!e && (e.name === "AbortError" || e === "AbortError"); }
+function opSignal() { return CURRENT_ABORT ? CURRENT_ABORT.signal : undefined; }
+function announceBlocker(msg) { const n = $("#sr-alert"); if (n) { n.textContent = ""; n.textContent = String(msg || ""); } }
 
 /* ---------- access token (only when this instance requires one) ---------- */
 let AUTH = localStorage.getItem("gf_token") || "";
@@ -329,31 +548,93 @@ $("#authsave").onclick = () => {
 let CURR_PROTOCOL = null;
 let PREV_PROTOCOL = null;
 
+/* ---------- projects layer (additive) ---------- */
+// PROJECT is the single source of truth for identity (§6.1). The globals above are derived
+// caches, written only through hydrateFromProject / handlePhase / renderResult.
+let PROJECT = null;
+let PENDING_WF = null;   // a workflow card pre-selected on the home screen (before submit)
+const WORKFLOWS = [
+  {id:"reproduce",label:"Reproduce",entry:"paper",blurb:"Rebuild a published protocol exactly, filling every unstated value."},
+  {id:"adapt",label:"Adapt",entry:"paper",blurb:"Change scale, organism, or conditions of an existing protocol."},
+  {id:"design",label:"Design",entry:"hypothesis",blurb:"Start from a hypothesis; find the assay, then draft the protocol."},
+  {id:"measure",label:"Measure",entry:"hypothesis",blurb:"Characterize or quantify a parameter (Km, kcat, Kd, IC50…)."},
+  {id:"review",label:"Review",entry:"paper",blurb:"Audit an existing protocol for correctness and design."},
+  {id:"troubleshoot",label:"Troubleshoot",entry:"paper",blurb:"Diagnose why a protocol failed and propose fixes."},
+  {id:"scale",label:"Scale",entry:"paper",blurb:"Move a protocol between bench, prep, and plate scales."},
+];
+function wfLabel(id) { const w = WORKFLOWS.find((x) => x.id === id); return w ? w.label : (id || ""); }
+function lcLabel(s) { return String(s || "").replace(/_/g, " "); }
+
 const EXAMPLE = `CFPS reactions were assembled with S30 extract prepared as described previously and a PANOx-SP energy system, and incubated at 30 C. The template plasmid encoded a single-chain antibody fragment. Disulfide-bonded, correctly folded product was obtained. Reactions were quenched and product yield was quantified by radioactive leucine incorporation.`;
 
 $("#example").onclick = () => { $("#methods").value = EXAMPLE; clearPdf(); };
 
-$("#pdf").onchange = () => {
+$("#pdf").onchange = async () => {
   const f = $("#pdf").files[0];
   $("#pdf-label").textContent = f ? f.name : "Upload the paper as a PDF";
-  $(".filebtn").classList.toggle("has-file", !!f);
+  $("#input-panel .filebtn").classList.toggle("has-file", !!f);
   $("#clear-pdf").classList.toggle("hidden", !f);
+  // Reset any previous preview state before (re)extracting.
+  PDF_PREVIEWED = false; PDF_FILENAME = "";
+  hide("#pdf-preview");
+  if (!f) return;
+  // Auto-extract a preview so the user can review/correct the Methods text before analyzing.
+  // Any failure (404 on older backends, non-200, network) degrades silently to direct upload.
+  try {
+    const fd = new FormData(); fd.append("file", f);
+    const r = await postForm("/api/extract_pdf", fd);
+    $("#pdf-extracted").value = r.methods_text || "";
+    let msg = `Pages: ${r.pages != null ? r.pages : "?"} • Characters included: ${r.chars_included != null ? r.chars_included : 0} of ${r.chars_total != null ? r.chars_total : 0}`;
+    if (r.truncated) msg += ` • Truncated to ${r.max_chars} — earlier pages kept, tail dropped`;
+    $("#pdf-report").textContent = msg;
+    const io = $("#pdf-image-only");
+    if (r.is_image_only) {
+      let t = "This PDF has no selectable text — it looks scanned or photographed. Nothing could be extracted automatically.";
+      if (!r.ocr_available) t += " Automatic text recognition (OCR) isn't available here. Paste the Methods section into the box above, then Analyze.";
+      io.textContent = t; io.classList.remove("hidden");
+    } else { io.textContent = ""; io.classList.add("hidden"); }
+    PDF_PREVIEWED = true;
+    PDF_FILENAME = r.filename || f.name;
+    show("#pdf-preview");
+  } catch (e) {
+    // Degrade: keep the preview hidden; #analyze falls back to the direct-upload path.
+    PDF_PREVIEWED = false; PDF_FILENAME = "";
+    hide("#pdf-preview");
+  }
 };
 function clearPdf() {
   $("#pdf").value = "";
   $("#pdf-label").textContent = "Upload the paper as a PDF";
-  $(".filebtn").classList.remove("has-file");
+  $("#input-panel .filebtn").classList.remove("has-file");
   $("#clear-pdf").classList.add("hidden");
+  PDF_PREVIEWED = false; PDF_FILENAME = "";
+  hide("#pdf-preview");
+  const ta = $("#pdf-extracted"); if (ta) ta.value = "";
+  const io = $("#pdf-image-only"); if (io) { io.textContent = ""; io.classList.add("hidden"); }
+  const rep = $("#pdf-report"); if (rep) rep.textContent = "";
 }
 $("#clear-pdf").onclick = clearPdf;
 
 /* ---------- mode toggle ---------- */
-function setMode(mode) {
+let MODE = "paper";
+// applyMode paints the tabs + toggles the input panels + keeps ARIA in sync. It does NOT
+// reset any result — it's the funnel used by restore/routing. setMode wraps it and adds the
+// result-wipe for the manual toggle only.
+function applyMode(mode) {
+  MODE = mode;
   const paper = mode === "paper";
   $("#mode-paper").classList.toggle("active", paper);
   $("#mode-hyp").classList.toggle("active", !paper);
+  $("#mode-paper").setAttribute("aria-selected", paper ? "true" : "false");
+  $("#mode-hyp").setAttribute("aria-selected", paper ? "false" : "true");
+  $("#mode-paper").tabIndex = paper ? 0 : -1;
+  $("#mode-hyp").tabIndex = paper ? -1 : 0;
   $("#input-panel").classList.toggle("hidden", !paper);
   $("#discovery-panel").classList.toggle("hidden", paper);
+}
+function setMode(mode) {
+  if (mode === MODE) return;  // re-clicking the active tab must not wipe a shown result
+  applyMode(mode);
   // reset any downstream panels + diff baseline when switching entry paths
   ["#questions-panel", "#assays-panel", "#result-panel"].forEach(hide);
   PREV_PROTOCOL = null; CURR_PROTOCOL = null;
@@ -361,6 +642,15 @@ function setMode(mode) {
 }
 $("#mode-paper").onclick = () => setMode("paper");
 $("#mode-hyp").onclick = () => setMode("hyp");
+$(".modebar").addEventListener("keydown", (e) => {
+  let target = null;
+  if (e.key === "ArrowLeft" || e.key === "ArrowUp" || e.key === "Home") target = "paper";
+  else if (e.key === "ArrowRight" || e.key === "ArrowDown" || e.key === "End") target = "hyp";
+  else return;
+  e.preventDefault();
+  setMode(target);
+  $(target === "paper" ? "#mode-paper" : "#mode-hyp").focus();
+});
 
 /* ---------- hypothesis-first: discover assays ---------- */
 function discoverBody(autoPick) {
@@ -383,11 +673,13 @@ async function runDiscover(autoPick) {
   const body = discoverBody(autoPick);
   if (body.hypothesis.length < 12) { discStatus("State a hypothesis or goal (a sentence).", true); return; }
   const pid = newPid(); body.progress_id = pid;
+  if (PROJECT) body.project_id = PROJECT.id;
   discLock(true, autoPick ? "Finding and picking the best assay…" : "Searching the literature for the best assays to test this… (this can take a minute)");
   startProgress(pid);
   try {
     const r = await postJSON("/api/discover", body);
     handlePhase(r);
+    discStatus("");                // clear only on success
   } catch (e) { discStatus(e.message, true); }
   discLock(false);
   stopProgress();
@@ -395,26 +687,41 @@ async function runDiscover(autoPick) {
 $("#discover").onclick = () => runDiscover(false);
 $("#autopick").onclick = () => runDiscover(true);
 function discStatus(msg, isErr) { const s = $("#disc-status"); s.textContent = msg || ""; s.className = isErr ? "err" : "muted"; setToast(msg, isErr); }
-function discLock(on, msg) { $("#discover").disabled = on; $("#autopick").disabled = on; discStatus(on ? (msg || "Working…") : ""); }
+// on=true shows the working message; on=false only re-enables the buttons and does NOT
+// clear the status — so an error set in a catch survives (callers clear on success).
+function discLock(on, msg) { $("#discover").disabled = on; $("#autopick").disabled = on; if (on) discStatus(msg || "Working…"); }
 
 $("#analyze").onclick = async () => {
   const file = $("#pdf").files[0];
   const text = $("#methods").value.trim();
-  if (!file && text.length < 40) { setStatus("Paste a Methods section or choose a PDF.", true); return; }
+  // Source selection order: reviewed PDF preview text → direct PDF upload → pasted text.
+  const reviewed = ($("#pdf-extracted") ? $("#pdf-extracted").value : "").trim();
+  const usePreview = PDF_PREVIEWED && reviewed.length >= 40;
+  if (!usePreview && !file && text.length < 40) { setStatus("Paste a Methods section or choose a PDF.", true); return; }
   const pid = newPid();
-  lock(true, file ? "Reading the PDF and scoping gaps… (this can take a minute or two)"
+  lock(true, (file && !usePreview) ? "Reading the PDF and scoping gaps… (this can take a minute or two)"
                   : "Reading the methods and scoping gaps… (this can take a minute)");
   startProgress(pid);
   try {
     const fd = new FormData();
-    if (file) fd.append("file", file); else fd.append("methods_text", text);
+    if (usePreview) {
+      fd.append("methods_text", reviewed);
+      fd.append("is_full_paper", "true");
+      fd.append("pdf_filename", PDF_FILENAME || (file ? file.name : ""));
+    } else if (file) {
+      fd.append("file", file);
+    } else {
+      fd.append("methods_text", text);
+    }
     const hyp = $("#hypothesis").value.trim();
     if (hyp) fd.append("hypothesis", hyp);
     fd.append("progress_id", pid);
+    if (PROJECT) fd.append("project_id", PROJECT.id);
     HYP = hyp;
     const r = await postForm("/api/analyze", fd);
     handlePhase(r);
-  } catch (e) { setStatus(e.message, true); }
+    setStatus("");                 // clear the working message only on success
+  } catch (e) { setStatus(e.message, true); }  // error survives — lock(false) no longer wipes it
   lock(false);
   stopProgress();
 };
@@ -423,6 +730,8 @@ function handlePhase(r) {
   // A new session id == a new protocol lineage: don't diff across unrelated protocols.
   if (r.session_id !== SESSION) { PREV_PROTOCOL = null; CURR_PROTOCOL = null; }
   SESSION = r.session_id;
+  if (PROJECT) { PROJECT.session_id = r.session_id;
+    if (r.phase) PROJECT.lifecycle_status = ({questions:"needs_clarification",assays:"selecting_assay",complete:"protocol_ready"}[r.phase]||PROJECT.lifecycle_status); }
   if (r.phase === "rejected") {
     const reason = (r.assay_options && r.assay_options.reason) || (r.phase1 && r.phase1.reason)
       || "This input does not look like something the tool can build from.";
@@ -432,6 +741,8 @@ function handlePhase(r) {
   if (r.phase === "assays") { renderAssays(r.assay_options); return; }
   if (r.phase === "questions") { renderQuestions(r.phase1); return; }
   if (r.phase === "complete") { renderResult(r); return; }
+  // Unknown/missing phase — surface it instead of silently doing nothing.
+  showResultMessage("Unexpected response", "The tool returned a step this page doesn't recognize. Please try again; if it persists, check the server logs.");
 }
 
 const LEVEL = { high: "hi", medium: "med", low: "lo" };
@@ -453,8 +764,8 @@ function renderAssays(opts) {
     if (a.materials_burden) box.appendChild(el("div", "kv", `<b>Materials:</b> ${esc(a.materials_burden)}`));
     if (a.equipment_burden) box.appendChild(el("div", "kv", `<b>Equipment:</b> ${esc(a.equipment_burden)}`));
     box.appendChild(el("div", "kv", `<b>Key limitation:</b> ${esc(a.key_limitation)}`));
-    const prov = el("div", "kv"); prov.innerHTML = tierPill(a.provenance) + citeInline(a); box.appendChild(prov);
-    const btn = el("button", "btn", a.id === rec ? "Use this assay (recommended)" : "Use this assay");
+    const prov = el("div", "kv"); prov.innerHTML = tierPill(a.provenance) + citeInline(a) + evidenceInline(a); box.appendChild(prov);
+    const btn = el("button", "btn op-control", a.id === rec ? "Use this assay (recommended)" : "Use this assay");
     btn.onclick = () => chooseAssay(a.id, btn);
     box.appendChild(el("div", "row", "")).appendChild(btn);
     wrap.appendChild(box);
@@ -484,15 +795,43 @@ async function chooseAssay(assayId, btn) {
 }
 
 function renderResult(r) {
+  if (!r || !r.protocol) {  // never render half a result silently
+    showResultMessage("No protocol returned", "The server responded without a protocol. Please try again; if it persists, check the server logs.");
+    return;
+  }
   // capture the just-rendered protocol so the next rebuild can diff against it
   PREV_PROTOCOL = CURR_PROTOCOL;
   CURR_PROTOCOL = r.protocol;
+  refreshLocks();                     // re-hydrate locks for the current scope (project/session)
   MD_URL = r.markdown_url || null;
   CSV_URL = r.materials_csv_url || null;
   GLOG = r.grounding_log || [];
-  renderProtocol(r.protocol);
-  // The audit runs in the pipeline; if this result carries one, show what it caught/fixed.
-  if (r.correctness_review) renderCritique(r.correctness_review, !!r.auto_review && (r.fixes_applied || 0) > 0, r.fixes_applied || 0);
+  try {
+    renderProtocol(r.protocol);
+  } catch (e) {
+    showResultMessage("Couldn't display the protocol", "The protocol came back in an unexpected shape. It may still be downloadable; otherwise please rebuild.");
+    return;
+  }
+  // The correctness/practicality audit AND its fixes run on the BACKEND; we surface only the
+  // final, corrected protocol. The adversarial review detail and the fix-verification breakdown
+  // are intentionally NOT shown (they were confusing); the concise, honest verdict still appears
+  // in the readiness card below. Clear the anchors so a panel from a prior render never lingers.
+  { const c = $("#critique-anchor"); if (c) c.innerHTML = ""; const v = $("#verify-anchor"); if (v) v.innerHTML = ""; }
+  // Epic-4 tail — fixed order: readiness card first, then sync view, announce, focus.
+  try {                                                    // 1. readiness card as first child
+    const P = $("#result-panel");
+    const card = renderReadiness(r);
+    if (card && P) P.insertBefore(card, P.firstChild);
+  } catch (e) { /* readiness is non-critical chrome */ }
+  applyView(currentView());                                // 2. sync view class + tab ARIA from storage
+  announceReadiness(r);                                    // 3. set the single polite SR message
+  focusResult();                                           // 4. move focus onto #readiness
+  // Epic-4 Bucket 2 tail — deep field-level diff + (revise-only) unrelated-change gate. Runs
+  // last so the gate (when present) takes focus over the readiness card. LAST_REVISE_INSTRUCTION
+  // is consumed once: only a revise op arms the gate.
+  const reviseInstr = LAST_REVISE_INSTRUCTION; LAST_REVISE_INSTRUCTION = null;
+  try { renderDeepDiffTail(PREV_PROTOCOL, CURR_PROTOCOL, reviseInstr); } catch (e) { /* diff chrome is non-critical */ }
+  if (PROJECT) onProtocolRendered(r);
 }
 
 function renderQuestions(p1) {
@@ -500,17 +839,77 @@ function renderQuestions(p1) {
   $("#q-summary").textContent = (p1.protocol_title ? p1.protocol_title + " — " : "") + (p1.source_summary || "");
   const wrap = $("#gaps"); wrap.innerHTML = "";
   GAPS.forEach((g, i) => wrap.appendChild(renderGap(g, i)));
+  updateSubmitGate();
   show("#questions-panel");
   $("#questions-panel").scrollIntoView({ behavior: "smooth" });
 }
 
 function renderGap(g, i) {
   const box = el("div", "gap");
-  box.appendChild(el("h4", null, `${i + 1}. ${esc(g.question)}`));
+  box.id = "gap_" + g.id;
+  const critical = !!g.outcome_critical;   // absent (older phase1) ⇒ non-critical ⇒ never blocks
+  if (critical) box.dataset.critical = "1";
+  const h = el("h4", null, `${i + 1}. ${esc(g.question)}`);
+  if (critical) h.appendChild(el("span", "gap-critical-badge", "Outcome-critical"));
+  box.appendChild(h);
   box.appendChild(el("p", "why", `${esc(g.parameter)} · ${esc(g.why_it_matters)}`));
   if (g.option_context) box.appendChild(el("p", "muted", esc(g.option_context)));
 
   const name = "gap_" + g.id;
+  const modeName = name + "_mode";
+  const fs = el("fieldset", "gap-mode");
+  fs.setAttribute("role", "radiogroup");
+  fs.setAttribute("aria-label", g.question || g.parameter || "Answer choice");
+
+  // Choice 1 — Provide an answer (reveals the typed-input surface). Preselected only when
+  // the gap is NOT outcome-critical; critical gaps start with no mode selected, forcing a choice.
+  const answerRow = el("div", "mode-row");
+  const answerRadio = el("input"); answerRadio.type = "radio"; answerRadio.name = modeName;
+  answerRadio.value = "answered"; answerRadio.id = name + "_mode_answer";
+  if (!critical) answerRadio.checked = true;
+  const answerLab = el("label", null, "Provide an answer"); answerLab.setAttribute("for", answerRadio.id);
+  answerRow.appendChild(answerRadio); answerRow.appendChild(answerLab);
+  fs.appendChild(answerRow);
+
+  const answerWrap = el("div", "answerwrap"); answerWrap.id = name + "_answerwrap";
+  buildTypedInputs(g, name, answerWrap);
+  fs.appendChild(answerWrap);
+
+  // Choice 2 — Use suggested default (only rendered when a default exists).
+  if (g.suggested_default != null) {
+    const defRow = el("div", "mode-row");
+    const defRadio = el("input"); defRadio.type = "radio"; defRadio.name = modeName;
+    defRadio.value = "default"; defRadio.id = name + "_mode_default";
+    const defLab = el("label", null, `Use suggested default “${esc(g.suggested_default)}” (flag to verify)`);
+    defLab.setAttribute("for", defRadio.id);
+    defRow.appendChild(defRadio); defRow.appendChild(defLab);
+    fs.appendChild(defRow);
+  }
+
+  // Choice 3 — Leave unresolved (always present).
+  const unRow = el("div", "mode-row");
+  const unRadio = el("input"); unRadio.type = "radio"; unRadio.name = modeName;
+  unRadio.value = "unresolved"; unRadio.id = name + "_mode_unresolved";
+  const unLab = el("label", null, "Leave unresolved"); unLab.setAttribute("for", unRadio.id);
+  unRow.appendChild(unRadio); unRow.appendChild(unLab);
+  unRow.appendChild(el("span", "mode-sub", "Records this as an open question in the protocol."));
+  fs.appendChild(unRow);
+
+  box.appendChild(fs);
+
+  // Show the typed inputs only while "Provide an answer" is chosen; refresh the submit gate.
+  fs.addEventListener("change", () => {
+    const mode = (fs.querySelector(`input[name="${modeName}"]:checked`) || {}).value;
+    answerWrap.classList.toggle("hidden", mode !== "answered");
+    updateSubmitGate();
+  });
+  answerWrap.classList.toggle("hidden", answerRadio.checked !== true);
+  return box;
+}
+
+// Typed-input builders (single/multi_select, number-with-range, text) — the former inline
+// renderGap body, refactored verbatim to append into the passed container (the answerwrap).
+function buildTypedInputs(g, name, box) {
   if (g.answer_type === "single_select" || g.answer_type === "multi_select") {
     const multi = g.answer_type === "multi_select";
     (g.options || []).forEach((o, j) => {
@@ -551,15 +950,20 @@ function renderGap(g, i) {
     inp.placeholder = g.suggested_default != null ? `default: ${g.suggested_default}` : "";
     box.appendChild(inp);
   }
+}
 
-  const skipRow = el("label", "row skip muted");
-  const skip = el("input"); skip.type = "checkbox"; skip.id = name + "_skip";
-  skipRow.appendChild(skip);
-  skipRow.appendChild(el("span", null, g.suggested_default != null
-    ? `Skip — use default “${esc(g.suggested_default)}” (flag to verify)`
-    : "Skip this question"));
-  box.appendChild(skipRow);
-  return box;
+// Disable submit while any outcome-critical gap has no mode chosen; announce via #gate-error.
+function updateSubmitGate() {
+  const blockers = GAPS.filter(g => g.outcome_critical &&
+    !document.querySelector(`input[name="gap_${g.id}_mode"]:checked`));
+  const btn = $("#submit-answers");
+  if (btn) btn.disabled = blockers.length > 0;
+  const err = $("#gate-error");
+  if (err) err.textContent = blockers.length
+    ? `Please choose an option for ${blockers.length} outcome-critical question(s) before generating.`
+    : "";
+  GAPS.forEach(g => { const b = document.getElementById("gap_" + g.id); if (b) b.classList.remove("gap-blocked"); });
+  blockers.forEach(g => { const b = document.getElementById("gap_" + g.id); if (b) b.classList.add("gap-blocked"); });
 }
 
 function optionLabel(o) {
@@ -583,151 +987,651 @@ function optionRow(name, value, labelHtml, multi, id) {
   return row;
 }
 
-$("#submit-answers").onclick = async () => {
-  const answers = GAPS.map(collectAnswer);
+// Submit is a two-step gate: the button (enabled only once every outcome-critical gap has a
+// mode) opens the preflight summary; the dialog's "Generate protocol" performs the POST.
+$("#submit-answers").onclick = () => openPreflight();
+
+async function submitAnswers(answers) {
   lock(true, "Grounding values in the literature and verifying citations… (this can take a minute or two)");
   startProgress(SESSION);
   try {
     const r = await postJSON("/api/resolve", { session_id: SESSION, answers });
     renderResult(r);
     hide("#questions-panel");
+    setStatus("");                 // clear only on success
   } catch (e) { setStatus(e.message, true); }
   lock(false);
   stopProgress();
-};
+}
+
+function fmtVal(v) { return Array.isArray(v) ? v.join(", ") : (v == null ? "" : String(v)); }
+
+// Preflight confirmation dialog: groups the per-gap choices into answers / defaults / unresolved
+// and requires an explicit confirm before generation. Shown even when everything is answered.
+function openPreflight() {
+  const answers = GAPS.map(collectAnswer);
+  const groups = { answered: [], default: [], unresolved: [] };
+  GAPS.forEach((g, i) => { (groups[answers[i].mode] || groups.answered).push({ g, a: answers[i] }); });
+
+  closePreflight();  // guarantee a single instance
+  const overlay = el("div", "preflight-overlay"); overlay.id = "preflight-overlay";
+  const panel = el("div", "preflight-panel"); panel.id = "preflight-panel";
+  panel.setAttribute("role", "dialog");
+  panel.setAttribute("aria-modal", "true");
+  panel.setAttribute("aria-labelledby", "preflight-h");
+  panel.tabIndex = -1;
+
+  const hd = el("h2", null, "Review before generating"); hd.id = "preflight-h";
+  panel.appendChild(hd);
+  panel.appendChild(el("p", "muted small", "Confirm how each question will be handled. Go back to change any choice."));
+
+  const section = (title, items, render) => {
+    const sec = el("section", "preflight-section");
+    sec.appendChild(el("h3", null, `${esc(title)} (${items.length})`));
+    if (!items.length) { sec.appendChild(el("p", "muted small", "None.")); return sec; }
+    const ul = el("ul", "preflight-list");
+    items.forEach(({ g, a }) => ul.appendChild(el("li", null, render(g, a))));
+    sec.appendChild(ul);
+    return sec;
+  };
+  panel.appendChild(section("Answers you provided", groups.answered,
+    (g, a) => `<b>${esc(g.parameter)}</b> → ${esc(fmtVal(a.value))}`));
+  panel.appendChild(section("Defaults being used", groups.default,
+    (g) => `<b>${esc(g.parameter)}</b> → “${esc(fmtVal(g.suggested_default))}” <span class="muted">(will be flagged to verify)</span>`));
+  panel.appendChild(section("Left unresolved", groups.unresolved,
+    (g) => `<b>${esc(g.parameter)}</b> <span class="muted">— will appear as an open question</span>`));
+
+  const footer = el("div", "row preflight-footer");
+  const back = el("button", "secondary", "Back"); back.type = "button";
+  const gen = el("button", "op-control", "Generate protocol"); gen.type = "button";
+  back.onclick = () => closePreflight();
+  gen.onclick = () => { closePreflight(); submitAnswers(answers); };
+  footer.appendChild(back); footer.appendChild(gen);
+  panel.appendChild(footer);
+
+  overlay.appendChild(panel);
+  document.body.appendChild(overlay);
+  _preflightPrevFocus = document.activeElement;
+  panel.addEventListener("keydown", _preflightKeydown);
+  panel.focus();
+  const sr = $("#sr-announce"); if (sr) sr.textContent = "Review before generating dialog opened.";
+}
+
+function closePreflight() {
+  const o = $("#preflight-overlay");
+  if (o) o.remove();
+  if (_preflightPrevFocus && _preflightPrevFocus.focus) { try { _preflightPrevFocus.focus(); } catch (e) {} }
+  _preflightPrevFocus = null;
+}
+
+// Esc closes; Tab is trapped within the dialog.
+function _preflightKeydown(e) {
+  if (e.key === "Escape") { e.preventDefault(); closePreflight(); return; }
+  if (e.key !== "Tab") return;
+  const panel = $("#preflight-panel"); if (!panel) return;
+  const foci = [...panel.querySelectorAll('button, [href], input, textarea, select, [tabindex]:not([tabindex="-1"])')]
+    .filter(n => !n.disabled && n.offsetParent !== null);
+  if (!foci.length) { e.preventDefault(); panel.focus(); return; }
+  const first = foci[0], last = foci[foci.length - 1];
+  if (e.shiftKey && (document.activeElement === first || document.activeElement === panel)) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+}
 
 function collectAnswer(g) {
   const name = "gap_" + g.id;
-  const skip = document.getElementById(name + "_skip");
-  if (skip && skip.checked) return { id: g.id, value: null, skipped: true };
+  const mode = (document.querySelector(`input[name="${name}_mode"]:checked`) || {}).value || null;
+  if (mode === "unresolved") return { id: g.id, value: null, mode: "unresolved", skipped: true };
+  if (mode === "default")    return { id: g.id, value: g.suggested_default, mode: "default", skipped: true };
+  const v = collectTypedValue(g, name);
+  const empty = v == null || (Array.isArray(v) ? v.length === 0 : String(v).trim() === "");
+  return { id: g.id, value: empty ? null : v, mode: empty ? "unresolved" : "answered", skipped: empty };
+}
 
+// Raw typed value from the answer surface (unchanged select/number/text extraction).
+// An empty field returns null/[] so collectAnswer maps it to "unresolved" (never a default).
+function collectTypedValue(g, name) {
   if (g.answer_type === "multi_select") {
     const vals = [...document.querySelectorAll(`input[name="${name}"]:checked`)].map((i) => i.value);
     const idx = vals.indexOf("__other__");
     if (idx >= 0) { vals.splice(idx, 1); const t = document.getElementById(name + "_othertext"); if (t && t.value.trim()) vals.push(t.value.trim()); }
-    return { id: g.id, value: vals, skipped: vals.length === 0 };
+    return vals;
   }
   if (g.answer_type === "single_select") {
     const sel = document.querySelector(`input[name="${name}"]:checked`);
-    if (!sel) return { id: g.id, value: null, skipped: true };
+    if (!sel) return null;
     if (sel.value === "__other__") {
       const t = document.getElementById(name + "_othertext");
       const v = t && t.value.trim();
-      return { id: g.id, value: v || "not sure", skipped: !v };
+      return v || null;
     }
-    return { id: g.id, value: sel.value, skipped: false };
+    return sel.value;
   }
   const inp = document.getElementById(name + "_val");
   const v = inp ? inp.value.trim() : "";
-  return { id: g.id, value: v || null, skipped: !v };
+  return v || null;
+}
+
+/* ===================== Epic-4: honest readiness + views + inline edit (additive) ===================== */
+
+/* Mirror the backend constants verbatim (validation.py). */
+const _UNRESOLVED   = new Set(["still_present","partially_addressed","regressed"]);
+const _BLOCKING_SEV = new Set(["critical","major"]);
+
+function _readinessSignals(r) {
+  r = r || {};
+  const gate = (r.validation_report && r.validation_report.quality_gate) || null;
+  const gateStatus = gate ? gate.status : null;                 // "ok"|"warnings"|"blocked"|null
+  const gateErrors = (gate && Array.isArray(gate.errors))   ? gate.errors   : [];
+  const gateWarns  = (gate && Array.isArray(gate.warnings)) ? gate.warnings : [];
+
+  const fv = (r.fix_verification && typeof r.fix_verification === "object") ? r.fix_verification : null;
+  const reviewStatus = r.review_status || (fv && fv.status) || null;
+  const unresolvedBlocking = !!(fv && fv.unresolved_blocking);
+  const fvFindings = (fv && Array.isArray(fv.findings))     ? fv.findings     : [];
+  const fvNew      = (fv && Array.isArray(fv.new_findings)) ? fv.new_findings : [];
+  const reviewNA = !fv;                                          // axis absent ⇒ pre-Epic-3 result
+
+  const cov = countGrounding(CURR_PROTOCOL);
+  return { gate, gateStatus, gateErrors, gateWarns, fv, reviewStatus,
+           unresolvedBlocking, fvFindings, fvNew, reviewNA, cov };
+}
+
+/* ----- the ONE grounding coverage counter (reads CURR_PROTOCOL) ----- */
+function _classifyEntity(e) {
+  if (!e || typeof e !== "object") return null;
+  const tier = e.provenance;
+  if (!tier) return null;                                   // no tier ⇒ not a groundable value; skip
+  const support = e.claim_support_status;                   // "supported"|"evidence_unavailable"|undef
+  const metaVerified = !!e.citation_verified ||
+                       !!(e.identifier_verified && e.metadata_matched);
+  const anchored = !!e.source_quote && !!e.quote_verified;
+
+  // UNVERIFIED — "verify before use" (worst)
+  if (e.needs_user_input) return "unverified";
+  if (tier === "default_verify") return "unverified";
+  if (tier === "literature_grounded" && !metaVerified) return "unverified";
+  if (tier === "literature_grounded" && support === "evidence_unavailable" && !metaVerified) return "unverified";
+
+  // VERIFIED — user-owned, source-anchored, or independently confirmed (best)
+  if (tier === "user_input") return "verified";
+  if (tier === "stated" && anchored) return "verified";
+  if (tier === "literature_grounded" && metaVerified && support === "supported") return "verified";
+
+  // SUPPORTED — reasonable but not independently confirmed (middle)
+  return "supported";
+}
+
+function countGrounding(p) {
+  const c = { total:0, verified:0, supported:0, unverified:0, unverifiedItems:[] };
+  if (!p || typeof p !== "object") return c;
+  const bump = (e) => {
+    const k = _classifyEntity(e); if (!k) return;
+    c.total++; c[k]++;
+    if (k === "unverified" && c.unverifiedItems.length < 6)
+      c.unverifiedItems.push({ _id:e._id, label:e.name || e.title || (e.number!=null?("step "+e.number):"value") });
+  };
+  (p.materials || []).forEach(bump);
+  (p.steps || []).forEach((s) => { bump(s);
+    (s.critical_parameters || []).forEach(bump);
+    (s.substeps || []).forEach(bump); });
+  const ts = p.titration_series;
+  if (ts) (ts.points || []).forEach((pt) => { bump(pt); (pt.components || []).forEach(bump); });
+  return c;
+}
+
+// "strong" = nothing flagged for the bench AND a real majority independently confirmed.
+function _groundingStrong(cov) {
+  return cov.total > 0 && cov.unverified === 0 && cov.verified >= Math.ceil(cov.total / 2);
+}
+
+/* ----- the ONE verdict classifier ----- */
+function _readinessVerdict(s) {
+  const cov = s.cov;
+  const reviewBlocks = s.reviewStatus === "issues_remain" &&
+    (s.unresolvedBlocking ||
+     s.fvFindings.some(f => _UNRESOLVED.has(f.outcome) && _BLOCKING_SEV.has(f.severity)) ||
+     s.fvNew.some(f => _BLOCKING_SEV.has(f.severity)));
+  if (s.gateStatus === "blocked" || reviewBlocks) return "blocked";
+
+  const reviewOk = s.reviewStatus === "verified_clean" || s.reviewNA;
+  if (s.gateStatus === "ok" && reviewOk && _groundingStrong(cov)) return "ready";
+
+  return "attention";
+}
+
+const _READINESS_META = {
+  ready:     { cls:"readiness-ready",     icon:"✅", head:"Looks ready — verify at the bench" },
+  attention: { cls:"readiness-attention", icon:"⚠️", head:"Needs attention" },
+  blocked:   { cls:"readiness-blocked",   icon:"⛔", head:"Not ready — blocked" },
+};
+
+function _readinessRationale(v, s) {
+  const cov = s.cov;
+  if (v === "ready")
+    return `All automated checks pass, fixes were independently verified, and ${cov.verified}/${cov.total} values are grounded. Still confirm critical values at the bench — this is not a guarantee.`;
+  if (v === "blocked") {
+    const bits = [];
+    if (s.gateStatus === "blocked") bits.push("a deterministic check found an arithmetic/unit error");
+    bits.push("an unresolved critical/major review finding remains");
+    return "Fix before running: " + bits.join("; and ") + ".";
+  }
+  const bits = [];
+  if (s.cov.unverified > 0) bits.push(`${s.cov.unverified} value(s) need bench verification`);
+  if (s.gateStatus === "warnings") bits.push("automated checks raised warnings");
+  if (!s.reviewNA && s.reviewStatus !== "verified_clean") bits.push("the correctness audit is not clean");
+  if (s.gateStatus === null) bits.push("automated checks did not run");
+  return (bits.length ? bits.join("; ") : "Review the items below") + " — verify before running.";
+}
+
+function _idIfAnchor(loc){ return (typeof loc==="string" && /^(mat:|step:|tit)/.test(loc)) ? loc : null; }
+
+function _readinessReasons(v, s) {
+  const out = [];
+  s.gateErrors.slice(0,4).forEach(f => out.push({ text:`Blocking: ${f.message||f.code||"error"} (${f.location||"?"})`, id:f.id }));
+  if (v !== "blocked")
+    s.gateWarns.slice(0,3).forEach(f => out.push({ text:`Warning: ${f.message||f.code||"warning"} (${f.location||"?"})`, id:f.id }));
+  s.fvFindings.filter(f => _UNRESOLVED.has(f.outcome)).slice(0,3).forEach(f =>
+    out.push({ text:`Unresolved (${f.severity}): ${f.problem||f.category||"review finding"}`, id:_idIfAnchor(f.location) }));
+  s.fvNew.slice(0,2).forEach(f =>
+    out.push({ text:`New defect (${f.severity}): ${f.problem||f.category||"introduced by a fix"}`, id:_idIfAnchor(f.location) }));
+  if (s.reviewStatus === "not_reviewed" && !s.reviewNA)
+    out.push({ text:"The independent fix-verification couldn't run — fixes are unconfirmed." });
+  if (s.cov.unverified > 0) {
+    out.push({ text:`${s.cov.unverified} of ${s.cov.total} values are unverified and flagged "verify before use".` });
+    s.cov.unverifiedItems.slice(0,3).forEach(it => out.push({ text:`• ${it.label}`, id:it._id }));
+  }
+  return out.slice(0,6);
+}
+
+/* ----- readiness card DOM ----- */
+function _domId(_id){ return _id ? "ent-"+String(_id).replace(/[^A-Za-z0-9_-]/g,"_") : null; }
+
+/* Bucket 2: content-stable id for an entity, by kind. Falls back to the positional _id,
+   then to a kind+index synthetic so the deep diff can still pair rows. */
+function _stableId(ent, kind) {
+  if (!ent || typeof ent !== "object") return null;
+  const f = { material: "material_id", step: "step_id", critical_parameter: "parameter_id",
+              substep: "substep_id", titration_point: "point_id", titration_component: "component_id" }[kind];
+  return (f && ent[f]) || ent._id || null;
+}
+
+/* Bucket 2: a lock toggle keyed by a stable id. No stable id ⇒ caller renders no toggle. */
+function lockToggle(stableId, labelText) {
+  const b = el("button", "lock-toggle op-control", isLocked(stableId) ? "🔒" : "🔓");
+  b.type = "button";
+  b.setAttribute("aria-pressed", isLocked(stableId) ? "true" : "false");
+  b.setAttribute("aria-label", "Lock " + String(labelText || "this value") + " so a revision can't change it");
+  b.title = "Lock this value so revisions and fixes can't change it";
+  b.onclick = (ev) => {
+    ev.preventDefault();
+    const now = toggleLock(stableId);
+    b.textContent = now ? "🔒" : "🔓";
+    b.setAttribute("aria-pressed", now ? "true" : "false");
+  };
+  return b;
+}
+
+function _entityLink(_id) {
+  const a = el("a","readiness-jump","jump to it");
+  a.href = "#"; a.setAttribute("role","button");
+  a.setAttribute("aria-label","Scroll to the flagged value");
+  a.addEventListener("click",(ev)=>{ ev.preventDefault();
+    const t = document.getElementById(_domId(_id)); if(!t) return;   // inert if no target
+    _openAncestors(t);   // reveal it if it lives inside a collapsed section
+    t.scrollIntoView({behavior:"smooth",block:"center"});
+    t.classList.add("flash"); setTimeout(()=>t.classList.remove("flash"),1600);
+  });
+  return a;
+}
+
+// Open every <details> ancestor of a node so a jump/anchor target inside a collapsed
+// section actually becomes visible.
+function _openAncestors(node){ let n = node; while(n){ if(n.tagName === "DETAILS") n.open = true; n = n.parentElement; } }
+
+// A collapsed section: a <details class="collapse"> whose body is built lazily by `build`.
+// Keeps the initial protocol view lean; the user expands what they want.
+function collapsible(title, build, open){
+  const d = el("details","collapse");
+  if (open) d.open = true;
+  d.appendChild(el("summary", null, esc(title)));
+  const body = el("div","collapse-body");
+  try { build(body); } catch (_e) { /* a malformed section never blanks the panel */ }
+  d.appendChild(body);
+  return d;
+}
+
+// Printing must show the whole protocol, not just section headers: open collapsibles for
+// the print, then restore whatever the user had expanded.
+window.addEventListener("beforeprint", () => {
+  document.querySelectorAll("#result-panel details.collapse").forEach((d) => {
+    if (!d.open) { d.open = true; d.dataset.wasClosed = "1"; }
+  });
+});
+window.addEventListener("afterprint", () => {
+  document.querySelectorAll('#result-panel details.collapse[data-was-closed="1"]').forEach((d) => {
+    d.open = false; delete d.dataset.wasClosed;
+  });
+});
+
+function renderReadiness(r) {
+  const s = _readinessSignals(r);
+  const v = _readinessVerdict(s);
+  const meta = _READINESS_META[v];
+
+  const card = el("div","readiness "+meta.cls);
+  card.id = "readiness";                              // focus target
+  card.setAttribute("role","region");
+  card.setAttribute("aria-label", meta.head);        // NO aria-live — the polite announce is #sr-announce
+  card.setAttribute("tabindex","-1");
+
+  card.appendChild(el("h2","readiness-head", `${meta.icon} ${esc(meta.head)}`));
+  card.appendChild(el("p","readiness-rationale muted", esc(_readinessRationale(v,s))));
+
+  const reasons = _readinessReasons(v,s);
+  if (reasons.length) {
+    const ul = el("ul","readiness-why");
+    reasons.forEach((rn)=>{ const li = el("li"); li.innerHTML = esc(rn.text);
+      if (rn.id){ li.appendChild(document.createTextNode(" ")); li.appendChild(_entityLink(rn.id)); }
+      ul.appendChild(li); });
+    card.appendChild(ul);
+  }
+  return card;
+}
+
+/* ----- SR announcement + focus (single polite announcer, verdict-unified) ----- */
+function announceReadiness(r) {
+  const s = _readinessSignals(r);
+  const v = _readinessVerdict(s);
+  const cov = s.cov;
+  let msg;
+  if (v === "blocked")        msg = "Not ready to run — blocking issues found. See the readiness card at the top.";
+  else if (v === "attention") msg = "Built, but needs attention before running — see the readiness card.";
+  else                        msg = `Built. Automated checks pass and ${cov.verified} of ${cov.total} values are grounded; still verify critical values at the bench.`;
+  // When this render followed a rebuild, append the field-level change count from the deep diff.
+  if (PREV_PROTOCOL) {
+    const k = _deepChangeCount(PREV_PROTOCOL, CURR_PROTOCOL);
+    if (k) msg += ` Protocol updated — ${k} change${k > 1 ? "s" : ""}.`;
+  }
+  const n = $("#sr-announce"); if (n) n.textContent = msg;
+}
+
+function focusResult() {
+  const target = $("#readiness") || $("#result-panel h2") || $("#result-panel");
+  if (!target) return;
+  if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex","-1");
+  target.focus({ preventScroll:false });
+}
+
+/* ----- bench / evidence view toggle ----- */
+const VIEW_KEY = "gf_protocol_view";                     // "bench" | "evidence"; absent ⇒ evidence
+function currentView(){ try { return localStorage.getItem(VIEW_KEY) === "bench" ? "bench" : "evidence"; } catch(e){ return "evidence"; } }
+
+function applyView(v) {                                   // paint only; no persist, no focus
+  const P = $("#result-panel"); if (!P) return;
+  const bench = v === "bench";
+  P.classList.toggle("view-bench", bench);
+  P.classList.toggle("view-evidence", !bench);
+  const b = $("#view-bench"), e = $("#view-evidence");
+  if (b && e) {
+    b.classList.toggle("active", bench);  e.classList.toggle("active", !bench);
+    b.setAttribute("aria-selected", bench?"true":"false");
+    e.setAttribute("aria-selected", !bench?"true":"false");
+    b.tabIndex = bench?0:-1;               e.tabIndex = bench?-1:0;   // roving tabindex
+  }
+}
+function setView(v) {                                     // user action: persist + paint + focus tab
+  try { localStorage.setItem(VIEW_KEY, v); } catch(e){ /* private mode — paint anyway */ }
+  applyView(v);
+  const btn = v==="bench" ? $("#view-bench") : $("#view-evidence"); if (btn) btn.focus();
+}
+
+function viewToggle() {
+  const bar = el("div","viewbar noprint");
+  bar.setAttribute("role","tablist"); bar.setAttribute("aria-label","Protocol view");
+  const mk = (id, icon, label, sub) => {
+    const b = el("button","viewbtn", `<span aria-hidden="true">${icon}</span> ${label}<small>${sub}</small>`);
+    b.id = id; b.type = "button"; b.setAttribute("role","tab"); b.setAttribute("aria-controls","result-panel");
+    return b;
+  };
+  const bench = mk("view-bench","🧪","Bench","run &amp; print");
+  const evid  = mk("view-evidence","🔎","Evidence","provenance &amp; citations");
+  bench.onclick = () => setView("bench");
+  evid.onclick  = () => setView("evidence");
+  bar.append(bench, evid);
+  bar.addEventListener("keydown",(e)=>{ let t=null;
+    if (["ArrowLeft","ArrowUp","Home"].includes(e.key)) t="bench";
+    else if (["ArrowRight","ArrowDown","End"].includes(e.key)) t="evidence";
+    else return;
+    e.preventDefault(); setView(t);
+  });
+  return bar;
+}
+
+/* ----- inline value editing ----- */
+function editButton(labelText) {
+  const b = el("button","btn-inline noprint op-control","✎");
+  b.type = "button";
+  b.setAttribute("aria-label","Edit "+labelText);
+  b.title = "Edit this value";
+  return b;
+}
+
+let _OPEN_EDIT = null;   // { form, restore } — single-editor invariant
+function _closeOpenEdit() {
+  if (_OPEN_EDIT && _OPEN_EDIT.form && _OPEN_EDIT.form.parentNode) {
+    try { _OPEN_EDIT.restore && _OPEN_EDIT.restore(); } catch(e){ /* best-effort */ }
+    _OPEN_EDIT.form.remove();
+  }
+  _OPEN_EDIT = null;
+}
+
+function openInlineEdit(anchorEl, entity, kind, field) {
+  _closeOpenEdit();                                   // single open editor at a time
+  if (!anchorEl || !entity) return;
+  const hasUnit = (field === "amount" || field === "value");
+  const form = el("form","inline-edit");
+  form.setAttribute("aria-label", "Edit value");
+
+  const vId = "ie-val-" + Math.random().toString(36).slice(2,8);
+  const vLab = el("label","visually-hidden","New value"); vLab.setAttribute("for", vId);
+  const vInp = el("input","inline-edit-val"); vInp.type = "text"; vInp.id = vId;
+  vInp.value = (entity[field] != null ? String(entity[field]) : "");
+
+  form.appendChild(vLab); form.appendChild(vInp);
+
+  let uInp = null;
+  if (hasUnit) {
+    const uId = "ie-unit-" + Math.random().toString(36).slice(2,8);
+    const uLab = el("label","visually-hidden","Unit"); uLab.setAttribute("for", uId);
+    uInp = el("input","inline-edit-unit"); uInp.type = "text"; uInp.id = uId;
+    uInp.placeholder = "unit";
+    uInp.value = (entity.unit != null ? String(entity.unit) : "");
+    form.appendChild(uLab); form.appendChild(uInp);
+  }
+
+  const save = el("button","btn op-control","Save"); save.type = "submit";
+  const cancel = el("button","btn secondary","Cancel"); cancel.type = "button";
+  form.appendChild(save); form.appendChild(cancel);
+
+  const restore = () => {};   // non-destructive: we only appended a form; removing it restores the line
+  _OPEN_EDIT = { form, restore };
+
+  cancel.onclick = () => { _closeOpenEdit(); if (anchorEl.focus) anchorEl.focus(); };
+  form.addEventListener("keydown",(e)=>{ if (e.key === "Escape"){ e.preventDefault(); cancel.onclick(); } });
+  form.addEventListener("submit",(e)=>{
+    e.preventDefault();
+    const nv = vInp.value;
+    const nu = hasUnit ? uInp.value : undefined;
+    submitValueEdit(entity, kind, field, nv, nu, form);
+  });
+
+  anchorEl.appendChild(form);
+  vInp.focus(); vInp.select && vInp.select();
+}
+
+async function submitValueEdit(entity, kind, field, newValue, newUnit, formEl) {
+  // Inline edit doesn't use the progress feed, so guard the global lock explicitly.
+  if (!beginOp()) return;                    // another op is already running — don't start a second
+  if (formEl) formEl.querySelectorAll("input,button").forEach((x)=> x.disabled = true);
+  setStatus("Applying your edit and re-checking…");
+  try {
+    const body = { target_id: entity._id, field, value: newValue };
+    if (field !== "unit" && newUnit !== undefined) body.unit = newUnit;
+    const r = await postJSON(`/api/protocol/${SESSION}/edit`, body);
+    _OPEN_EDIT = null;                       // the whole panel is about to be rebuilt
+    renderResult(r);                         // single re-render entry point; card + view + announce refresh
+    setStatus("Value updated; readiness re-checked.");
+  } catch (e) {
+    if (formEl) formEl.querySelectorAll("input,button").forEach((x)=> x.disabled = false);
+    setStatus(e.message, true);              // old DOM untouched; CURR_PROTOCOL never mutated locally
+  } finally {
+    endOp();                                 // release on BOTH success and failure — never stuck disabled
+  }
 }
 
 /* ---------- protocol render ---------- */
 function renderProtocol(p) {
   const P = $("#result-panel"); P.innerHTML = "";
   P.appendChild(el("h2", null, esc(p.title || "Protocol")));
-  if (p.summary) P.appendChild(el("p", "muted", esc(p.summary)));
-  if (p.estimated_duration) P.appendChild(el("p", "muted", "Estimated duration: " + esc(p.estimated_duration)));
+  if (p.estimated_duration) P.appendChild(el("p", "muted small", "⏱ Estimated duration: " + esc(p.estimated_duration)));
 
+  P.appendChild(viewToggle());
   P.appendChild(toolbar());
   P.appendChild(el("div", null, "")).id = "align-anchor";
   P.appendChild(el("div", null, "")).id = "design-anchor";
   P.appendChild(el("div", null, "")).id = "critique-anchor";
+  P.appendChild(el("div", null, "")).id = "verify-anchor";
   const changes = protocolDiff(PREV_PROTOCOL, p);
   if (changes.length) P.appendChild(diffBox(changes));
-  P.appendChild(validationSummary(p.validation_report));
-  P.appendChild(legend());
 
-  // Materials
-  if ((p.materials || []).length) {
-    P.appendChild(el("h3", null, "Materials"));
-    const tbl = el("table");
-    tbl.innerHTML = "<tr><th>Reagent</th><th>Amount</th><th>Grade/vendor</th><th>Provenance</th></tr>";
-    (p.materials).forEach((m) => {
-      const tr = el("tr");
-      const amt = [m.amount, m.unit].filter((x) => x != null && x !== "").join(" ");
-      tr.appendChild(el("td", null, esc(m.name)));
-      tr.appendChild(el("td", null, esc(amt)));
-      tr.appendChild(el("td", null, esc(m.vendor_or_grade || "—")));
-      tr.appendChild(provCell(m));
-      tbl.appendChild(tr);
-    });
-    P.appendChild(tbl);
-  }
+  // Context / overview is collapsed so the step-by-step walkthrough leads, not a wall of preamble.
+  if (p.summary) P.appendChild(collapsible("Overview & context", (b) => {
+    b.appendChild(el("p", "muted", esc(p.summary)));
+  }, false));
 
-  if ((p.equipment || []).length) {
-    P.appendChild(el("h3", null, "Equipment"));
-    const ul = el("ul"); p.equipment.forEach((e) => ul.appendChild(el("li", null, esc(e)))); P.appendChild(ul);
-  }
-
-  // Steps
+  // PROCEDURE — the salient walkthrough. Each step shows its title, instruction, timing, and any
+  // safety warning up front; the denser per-step detail (parameters, sub-steps, provenance) tucks
+  // into a collapsed "Details" expander so the initial view stays scannable.
   P.appendChild(el("h3", null, "Procedure"));
   const steps = el("div");
   (p.steps || []).forEach((s) => {
     const d = el("div", "step");
-    d.appendChild(el("div", null, `<span class="num">${esc(s.number)}.</span> <b>${esc(s.title)}</b> ${tierPill(s.provenance)}${anchorInline(s)}`));
+    if (s._id) d.id = _domId(s._id);
+    d.appendChild(el("div", null, `<span class="num">${esc(s.number)}.</span> <b>${esc(s.title)}</b>`));
     d.appendChild(el("div", null, esc(s.instruction)));
     const meta = [s.duration ? "⏱ " + esc(s.duration) : "", s.temperature ? "🌡 " + esc(s.temperature) : ""].filter(Boolean).join(" · ");
     if (meta) d.appendChild(el("div", "cp", meta));
-    (s.critical_parameters || []).forEach((cp) => {
-      const line = el("div", "cp", `${esc(cp.name)}: <b>${esc([cp.value, cp.unit].filter(Boolean).join(" "))}</b> ${tierPill(cp.provenance)} ${citeInline(cp)}${anchorInline(cp)}${flagInline(cp)}`);
-      if (cp.provenance_note) line.appendChild(el("div", "pnote", esc(cp.provenance_note)));
-      d.appendChild(line);
-    });
-    (s.substeps || []).forEach((ss) => d.appendChild(el("div", "cp", `${esc(ss.number)} ${esc(ss.instruction)} ${tierPill(ss.provenance)}${anchorInline(ss)}${flagInline(ss)}`)));
-    (s.warnings || []).forEach((w) => d.appendChild(el("div", "warn", "⚠ " + esc(w))));
+    (s.warnings || []).forEach((w) => d.appendChild(el("div", "warn", "⚠ " + esc(w))));  // safety stays visible
+
+    const cps = s.critical_parameters || [];
+    const subs = s.substeps || [];
+    if (cps.length || subs.length) {
+      const n = cps.length + subs.length;
+      d.appendChild(collapsible(`Details — ${n} item${n === 1 ? "" : "s"}`, (body) => {
+        cps.forEach((cp) => {
+          const line = el("div", "cp", `${esc(cp.name)}: <b>${esc([cp.value, cp.unit].filter(Boolean).join(" "))}</b> ${tierPill(cp.provenance)} ${citeInline(cp)}${anchorInline(cp)}${flagInline(cp)}${evidenceInline(cp)}`);
+          if (cp._id) {
+            line.id = _domId(cp._id);
+            const eb = editButton(cp.name || "critical parameter");
+            eb.onclick = () => openInlineEdit(line, cp, "critical_parameter", "value");
+            line.appendChild(eb);
+          }
+          if (cp.parameter_id) line.appendChild(lockToggle(cp.parameter_id, cp.name || "critical parameter"));
+          if (cp.provenance_note) line.appendChild(el("div", "pnote", esc(cp.provenance_note)));
+          body.appendChild(line);
+        });
+        subs.forEach((ss) => { const sl = el("div", "cp", `${esc(ss.number)} ${esc(ss.instruction)} ${tierPill(ss.provenance)}${anchorInline(ss)}${flagInline(ss)}`); if (ss._id) sl.id = _domId(ss._id); body.appendChild(sl); });
+      }, false));
+    }
     steps.appendChild(d);
   });
   P.appendChild(steps);
 
-  // Titration series worklist (present for dilution/dose-response/screen protocols)
-  const ts = p.titration_series;
-  if (ts && (ts.points || []).length) {
-    const unit = ts.unit ? ` (${esc(ts.unit)})` : "";
-    P.appendChild(el("h3", null, `Titration series — ${esc(ts.variable || "condition")}${unit} ${tierPill(ts.provenance)}`));
-    const meta = [ts.spacing ? "spacing: " + esc(ts.spacing) : "", esc(ts.rationale || "")].filter(Boolean).join(" · ");
-    if (meta) P.appendChild(el("p", "muted small", meta));
-    const comp = [];
-    ts.points.forEach((pt) => (pt.components || []).forEach((c) => { if (c.name && !comp.includes(c.name)) comp.push(c.name); }));
-    const tt = el("table");
-    tt.innerHTML = "<tr><th>Condition</th><th>Target</th>" + comp.map((n) => `<th>${esc(n)}</th>`).join("") + "</tr>";
-    ts.points.forEach((pt) => {
-      const vols = {}; (pt.components || []).forEach((c) => (vols[c.name] = c.volume));
-      const tr = el("tr");
-      tr.appendChild(el("td", null, esc(pt.label || "")));
-      tr.appendChild(el("td", null, esc(pt.target_concentration || "—")));
-      comp.forEach((n) => tr.appendChild(el("td", null, esc(vols[n] != null ? vols[n] : "—"))));
-      tt.appendChild(tr);
-    });
-    P.appendChild(tt);
+  // --- Everything below is collapsed by default: reference detail, not the walkthrough. ---
+
+  if ((p.materials || []).length) {
+    P.appendChild(collapsible(`Materials — ${p.materials.length}`, (b) => {
+      const tbl = el("table", "materials");
+      tbl.innerHTML = "<tr><th>Reagent</th><th>Amount</th><th>Grade/vendor</th><th>Provenance</th></tr>";
+      (p.materials).forEach((m) => {
+        const tr = el("tr");
+        if (m._id) tr.id = _domId(m._id);
+        const amt = [m.amount, m.unit].filter((x) => x != null && x !== "").join(" ");
+        tr.appendChild(el("td", null, esc(m.name)));
+        const amtCell = el("td", null, esc(amt));
+        if (m._id) { const eb = editButton((m.name || "material") + " amount"); eb.onclick = () => openInlineEdit(amtCell, m, "material", "amount"); amtCell.appendChild(eb); }
+        if (m.material_id) amtCell.appendChild(lockToggle(m.material_id, m.name || "material"));
+        tr.appendChild(amtCell);
+        tr.appendChild(el("td", null, esc(m.vendor_or_grade || "—")));
+        tr.appendChild(provCell(m));
+        tbl.appendChild(tr);
+      });
+      b.appendChild(tableWrap(tbl, "Materials", "Materials"));
+    }, false));
   }
 
-  // Assumptions log — the payoff panel
-  P.appendChild(el("h3", null, "Assumptions log — everything not stated in the source"));
-  const tbl = el("table");
-  tbl.innerHTML = "<tr><th>Parameter</th><th>Value</th><th>Provenance</th><th>Basis</th></tr>";
-  (p.assumptions_log || []).forEach((a) => {
-    const tr = el("tr");
-    tr.appendChild(el("td", null, esc(a.parameter)));
-    tr.appendChild(el("td", null, esc(a.value)));
-    tr.appendChild(provCell(a));
-    const basis = el("td"); basis.innerHTML = esc(a.basis || "") + (a.verify ? ' <span class="badge-warn">· verify</span>' : "");
-    tr.appendChild(basis);
-    tbl.appendChild(tr);
-  });
-  P.appendChild(tbl);
+  if ((p.equipment || []).length) {
+    P.appendChild(collapsible(`Equipment — ${p.equipment.length}`, (b) => {
+      const ul = el("ul"); p.equipment.forEach((e) => ul.appendChild(el("li", null, esc(e)))); b.appendChild(ul);
+    }, false));
+  }
+
+  const ts = p.titration_series;
+  if (ts && (ts.points || []).length) {
+    P.appendChild(collapsible(`Titration series — ${esc(ts.variable || "condition")}${ts.unit ? " (" + esc(ts.unit) + ")" : ""}`, (b) => {
+      b.appendChild(el("div", "cp", tierPill(ts.provenance)));
+      const meta = [ts.spacing ? "spacing: " + esc(ts.spacing) : "", esc(ts.rationale || "")].filter(Boolean).join(" · ");
+      if (meta) b.appendChild(el("p", "muted small", meta));
+      const comp = [];
+      ts.points.forEach((pt) => (pt.components || []).forEach((c) => { if (c.name && !comp.includes(c.name)) comp.push(c.name); }));
+      const tt = el("table");
+      tt.innerHTML = "<tr><th>Condition</th><th>Target</th>" + comp.map((n) => `<th>${esc(n)}</th>`).join("") + "</tr>";
+      ts.points.forEach((pt) => {
+        const vols = {}; (pt.components || []).forEach((c) => (vols[c.name] = c.volume));
+        const tr = el("tr");
+        if (pt._id) tr.id = _domId(pt._id);
+        tr.appendChild(el("td", null, esc(pt.label || "")));
+        tr.appendChild(el("td", null, esc(pt.target_concentration || "—")));
+        comp.forEach((n) => tr.appendChild(el("td", null, esc(vols[n] != null ? vols[n] : "—"))));
+        tt.appendChild(tr);
+      });
+      b.appendChild(tableWrap(tt, "Titration series worklist", "Titration series worklist"));
+    }, false));
+  }
+
+  P.appendChild(collapsible(`Assumptions log${(p.assumptions_log || []).length ? " — " + p.assumptions_log.length : ""} (values not stated in the source)`, (b) => {
+    const tbl = el("table");
+    tbl.innerHTML = "<tr><th>Parameter</th><th>Value</th><th>Provenance</th><th>Basis</th></tr>";
+    (p.assumptions_log || []).forEach((a) => {
+      const tr = el("tr");
+      tr.appendChild(el("td", null, esc(a.parameter)));
+      tr.appendChild(el("td", null, esc(a.value)));
+      tr.appendChild(provCell(a));
+      const basis = el("td"); basis.innerHTML = esc(a.basis || "") + (a.verify ? ' <span class="badge-warn">· verify</span>' : "");
+      tr.appendChild(basis);
+      tbl.appendChild(tr);
+    });
+    b.appendChild(tableWrap(tbl, "Assumptions log", "Assumptions log — values not stated in the source"));
+  }, false));
 
   if ((p.open_questions || []).length) {
-    P.appendChild(el("h3", null, "Open questions"));
-    const ul = el("ul"); p.open_questions.forEach((q) => ul.appendChild(el("li", "muted", esc(q)))); P.appendChild(ul);
+    P.appendChild(collapsible(`Open questions — ${p.open_questions.length}`, (b) => {
+      const ul = el("ul"); p.open_questions.forEach((q) => ul.appendChild(el("li", "muted", esc(q)))); b.appendChild(ul);
+    }, false));
   }
 
   if (GLOG.length) {
-    P.appendChild(el("h3", "noprint", "How values were grounded"));
-    const ul = el("ul", "noprint");
-    GLOG.forEach((g) => ul.appendChild(el("li", "muted", esc(g))));
-    P.appendChild(ul);
+    P.appendChild(collapsible("How values were grounded", (b) => {
+      const ul = el("ul", "gnd"); GLOG.forEach((g) => ul.appendChild(el("li", "muted", esc(g)))); b.appendChild(ul);
+    }, false)).classList.add("noprint");
   }
+
+  // The concise, honest verdict is the readiness card above; the full validation breakdown and
+  // the provenance legend are reference detail — collapsed.
+  P.appendChild(collapsible("Validation details & provenance legend", (b) => {
+    b.appendChild(validationSummary(p.validation_report));
+    b.appendChild(legend());
+  }, false));
 
   P.appendChild(refineBox());
 
@@ -749,15 +1653,15 @@ function toolbar() {
     cs.title = "The materials table as CSV, with provenance columns.";
     bar.appendChild(cs);
   }
-  const dr = el("button", "btn", "🎓 Design review");
+  const dr = el("button", "btn op-control", "🎓 Design review");
   dr.title = "Reason about the experiment around this protocol: controls, variables, readout, replication, pitfalls.";
   dr.onclick = () => requestDesign(dr);
   bar.appendChild(dr);
-  const cr = el("button", "btn", "🔍 Re-review & fix");
+  const cr = el("button", "btn op-control", "🔍 Re-review & fix");
   cr.title = "The correctness + practicality audit already ran automatically when this protocol was generated. Click to run it again (e.g. after a manual refine): it re-audits and auto-applies any new fixes. Model-generated; findings ranked by severity.";
   cr.onclick = () => requestCritique(cr);
   bar.appendChild(cr);
-  const al = el("button", "btn", HYP ? "🎯 Test my hypothesis" : "🎯 Test a hypothesis");
+  const al = el("button", "btn op-control", HYP ? "🎯 Test my hypothesis" : "🎯 Test a hypothesis");
   al.title = HYP
     ? "Does this protocol directly test your hypothesis? Get a verdict, the critical comparison, confounds, and one-click protocol fixes."
     : "Check whether this protocol directly tests a hypothesis. You didn't state one, so you can type it now (or let the tool infer it, clearly labelled).";
@@ -766,6 +1670,10 @@ function toolbar() {
   const pr = el("button", "btn secondary", "🖨 Print / Save PDF");
   pr.onclick = () => window.print();
   bar.appendChild(pr);
+  const so = el("button", "btn secondary op-control", "↺ Start over");
+  so.title = "Clear questions, diffs and banners and re-show the last valid protocol. Keeps your session, project and locks.";
+  so.onclick = startOver;
+  bar.appendChild(so);
   wrap.appendChild(bar);
   wrap.appendChild(el("p", "hint noprint",
     "A correctness &amp; practicality audit runs automatically (results above; if any fix couldn't be auto-applied you'll see a button to apply it). Use <b>Design review</b> to reason about the experiment, <b>Re-review &amp; fix</b> to re-audit after edits, and <b>Test a hypothesis</b> to confirm it's directly tested."));
@@ -773,38 +1681,54 @@ function toolbar() {
 }
 
 async function requestDesign(btn) {
+  LAST_OP = { name: "design", fn: () => requestDesign(btn) };
   btn.disabled = true; setStatus("Building the experiment-design review… (this can take a minute)");
+  startProgress(SESSION);
   try {
-    const r = await postJSON("/api/design", { session_id: SESSION });
+    const r = await postJSON("/api/design", { session_id: SESSION }, opSignal());
     renderDesign(r.design_review);
     setStatus("");
-  } catch (e) { setStatus(e.message, true); }
+  } catch (e) {
+    if (isAbort(e)) { setStatus("Canceled — your last protocol is unchanged."); btn.disabled = false; stopProgress(); return; }
+    setStatus(e.message, true);
+  }
   btn.disabled = false;
+  stopProgress();
 }
 
 // Apply the fixes the audit already proposed (no re-audit) — used when auto-apply didn't run.
 async function applyAuditFixes(btn) {
+  LAST_OP = { name: "apply_fixes", fn: () => applyAuditFixes(btn) };
   btn.disabled = true;
   setStatus("Applying the audit's fixes and rebuilding the protocol… (this can take a minute)");
   startProgress(SESSION);
   try {
-    const r = await postJSON("/api/apply_fixes", { session_id: SESSION });
+    const r = await postJSON("/api/apply_fixes", { session_id: SESSION, locked_ids: [...LOCKED] }, opSignal());
     renderResult(r);
     setStatus("");
-  } catch (e) { setStatus(e.message, true); btn.disabled = false; }
+  } catch (e) {
+    if (isAbort(e)) { setStatus("Canceled — your last protocol is unchanged."); btn.disabled = false; stopProgress(); return; }
+    if (e && e.status === 409) announceBlocker(e.message);
+    setStatus(e.message, true); btn.disabled = false;
+  }
   stopProgress();
 }
 
 async function requestCritique(btn) {
+  LAST_OP = { name: "critique", fn: () => requestCritique(btn) };
   btn.disabled = true;
   setStatus("Re-auditing correctness & practicality, then applying any fixes… (this can take a couple of minutes)");
   startProgress(SESSION);
   try {
-    const r = await postJSON("/api/critique", { session_id: SESSION, apply: true });
-    if (r.applied && r.protocol) renderResult(r);  // renderResult also renders the audit
-    else renderCritique(r.correctness_review, false, 0);  // sound / nothing to apply
-    setStatus("");
-  } catch (e) { setStatus(e.message, true); }
+    const r = await postJSON("/api/critique", { session_id: SESSION, apply: true, locked_ids: [...LOCKED] }, opSignal());
+    // Show only the final protocol — the adversarial review runs on the backend, no detail panel.
+    if (r.applied && r.protocol) { renderResult(r); setStatus("Re-reviewed and applied fixes."); }
+    else setStatus("No correctness issues found — your protocol is unchanged.");
+  } catch (e) {
+    if (isAbort(e)) { setStatus("Canceled — your last protocol is unchanged."); btn.disabled = false; stopProgress(); return; }
+    if (e && e.status === 409) announceBlocker(e.message);
+    setStatus(e.message, true);
+  }
   btn.disabled = false;
   stopProgress();
 }
@@ -840,7 +1764,7 @@ function renderCritique(r, applied, count) {
     // instead of implying the protocol was already corrected.
     box.appendChild(el("p", "badge-warn",
       `⚠ ${fixable} concrete fix${fixable > 1 ? "es are" : " is"} proposed below but <b>not yet applied</b> to the protocol above.`));
-    const applyBtn = el("button", "btn", `🛠 Apply ${fixable} fix${fixable > 1 ? "es" : ""} & rebuild the protocol`);
+    const applyBtn = el("button", "btn op-control", `🛠 Apply ${fixable} fix${fixable > 1 ? "es" : ""} & rebuild the protocol`);
     applyBtn.onclick = () => applyAuditFixes(applyBtn);
     box.appendChild(el("div", "row", "")).appendChild(applyBtn);
   }
@@ -870,6 +1794,84 @@ function renderCritique(r, applied, count) {
   box.scrollIntoView({ behavior: "smooth" });
 }
 
+// Independent fix-verification (Epic-3). Host-owned `fix_verification` object. Every field access
+// is guarded so an older result, a partial object, or a skipped verify degrades to a sensible
+// panel (or nothing) rather than crashing renderResult.
+const _OUTCOME_META = {
+  confirmed_fixed: { cls: "badge-ok", label: "✓ fixed" },
+  not_applicable: { cls: "muted small", label: "— n/a" },
+  still_present: { cls: "badge-bad", label: "✗ still present" },
+  partially_addressed: { cls: "badge-warn", label: "◐ partial" },
+  regressed: { cls: "badge-warn", label: "⚠ regressed" },
+};
+
+function renderFixVerification(v) {
+  const host = $("#verify-anchor");
+  if (!host) return;                 // anchor absent (older DOM) — nothing to mount into
+  host.innerHTML = "";
+  if (!v || typeof v !== "object") return;  // guard against a truthy-but-unusable value
+
+  const c = (v.counts && typeof v.counts === "object") ? v.counts : {};
+  const num = (x) => (typeof x === "number" && isFinite(x)) ? x : 0;
+  const confirmed = num(c.confirmed_fixed);
+  const reviewed = num(v.reviewed_count);
+  const remaining = num(c.still_present) + num(c.partially_addressed);
+  const regressed = num(c.regressed);
+  const brandNew = num(c.new);
+
+  const box = el("div", "design");
+  box.appendChild(el("h2", null, "🛡 Independent fix verification"));
+  box.appendChild(el("p", "muted small", "A separate, fresh-context adversarial re-audit of the corrected protocol — it never saw the fixes being applied and confirms each defect against the corrected steps. Unconfirmable defects default to <b>still present</b>."));
+
+  // Headline (always renderable, even from an empty/partial object).
+  let headline = `${confirmed} of ${reviewed} issues verified fixed, ${remaining} still present`;
+  if (regressed) headline += `, ${regressed} regressed`;
+  if (brandNew) headline += `, ${brandNew} new`;
+  box.appendChild(el("p", null, "<b>" + esc(headline) + "</b>"));
+
+  // Status badge.
+  const status = v.status;
+  if (status === "verified_clean") box.appendChild(el("p", "badge-ok", "✅ All fixes independently verified"));
+  else if (status === "issues_remain") box.appendChild(el("p", "badge-warn", "⚠️ Some issues remain after fixes"));
+  else box.appendChild(el("p", "muted", "Independent re-check couldn't run — fixes are unconfirmed"));  // not_reviewed / absent / unknown
+
+  if (v.summary) box.appendChild(el("p", null, esc(v.summary)));
+
+  // Per-finding outcome rows.
+  const findings = Array.isArray(v.findings) ? v.findings.filter((f) => f && typeof f === "object") : [];
+  findings.forEach((f) => {
+    const om = _OUTCOME_META[f.outcome] || { cls: "muted", label: esc(f.outcome || "") };
+    const card = el("div", "finding");
+    const head = [
+      `<span class="${om.cls}">${om.label}</span>`,
+      f.location ? esc(f.location) : "",
+      f.category ? `<span class="muted small">(${esc(f.category)})</span>` : "",
+    ].filter(Boolean).join(" — ");
+    card.appendChild(el("div", "finding-head", head));
+    if (f.problem) card.appendChild(el("p", null, `<b>Problem.</b> ${esc(f.problem)}`));
+    if (f.evidence) card.appendChild(el("p", "muted small", `Evidence: ${esc(f.evidence)}`));
+    box.appendChild(card);
+  });
+
+  // Newly-introduced defects — rendered like renderCritique cards via _SEV_META.
+  const news = Array.isArray(v.new_findings) ? v.new_findings.filter((f) => f && typeof f === "object") : [];
+  if (news.length) {
+    box.appendChild(el("h3", null, "Newly introduced by the fixes"));
+    news.forEach((f) => {
+      const meta = _SEV_META[f.severity] || { label: esc(f.severity || ""), cls: "" };
+      const card = el("div", "finding " + meta.cls);
+      const head = [meta.label, f.location ? esc(f.location) : "", f.category ? `<span class="muted small">(${esc(f.category)})</span>` : ""].filter(Boolean).join(" — ");
+      card.appendChild(el("div", "finding-head", head));
+      if (f.problem) card.appendChild(el("p", null, `<b>Problem.</b> ${esc(f.problem)}`));
+      if (f.fix) card.appendChild(el("p", null, `<b>Fix.</b> ${esc(f.fix)}`));
+      if (f.citation) card.appendChild(el("p", "muted small", "Evidence: " + esc(f.citation.identifier || "") + (f.citation_verified ? " ✓" : "")));
+      box.appendChild(card);
+    });
+  }
+
+  host.appendChild(box);
+}
+
 function requestAlignment(btn) {
   if (HYP) { runAlignment(HYP); return; }
   // No hypothesis on file — ask for one rather than silently inferring.
@@ -882,9 +1884,9 @@ function requestAlignment(btn) {
   inp.placeholder = "e.g. Adding DsbC increases the yield of correctly folded scFv";
   box.appendChild(inp);
   const row = el("div", "row");
-  const go = el("button", "btn", "Check alignment");
+  const go = el("button", "btn op-control", "Check alignment");
   go.onclick = () => { HYP = inp.value.trim(); runAlignment(HYP || null); };
-  const infer = el("button", "btn secondary", "Let the tool infer");
+  const infer = el("button", "btn secondary op-control", "Let the tool infer");
   infer.onclick = () => runAlignment(null);
   row.appendChild(go); row.appendChild(infer);
   box.appendChild(row);
@@ -892,15 +1894,25 @@ function requestAlignment(btn) {
   box.scrollIntoView({ behavior: "smooth" });
 }
 
+let ALIGN_BUSY = false;
 async function runAlignment(hyp) {
+  if (ALIGN_BUSY) return;  // don't double-fire on repeated clicks (F5)
+  ALIGN_BUSY = true;
+  LAST_OP = { name: "align", fn: () => runAlignment(hyp) };
   setStatus("Checking whether the protocol directly tests the hypothesis… (this can take a minute)");
+  startProgress(SESSION);
   try {
     const body = { session_id: SESSION };
     if (hyp) body.hypothesis = hyp;
-    const r = await postJSON("/api/align", body);
+    const r = await postJSON("/api/align", body, opSignal());
     renderAlignment(r.design_alignment);
     setStatus("");
-  } catch (e) { setStatus(e.message, true); }
+  } catch (e) {
+    if (isAbort(e)) { setStatus("Canceled — your last protocol is unchanged."); stopProgress(); ALIGN_BUSY = false; return; }
+    setStatus(e.message, true);
+  }
+  stopProgress();
+  ALIGN_BUSY = false;
 }
 
 const VERDICT = {
@@ -971,19 +1983,32 @@ function recRow(c) {
   const tag = c.type ? `<span class="type-tag">${esc(c.type.replace(/_/g, " "))}</span>` : "";
   row.appendChild(el("div", null, `${tag}${esc(c.change)}`));
   if (c.addresses) row.appendChild(el("div", "addresses", "Addresses: " + esc(c.addresses)));
-  const btn = el("button", "btn apply noprint", "Apply to protocol");
-  btn.onclick = async () => {
+  const btn = el("button", "btn apply noprint op-control", "Apply to protocol");
+  const run = async () => {
+    LAST_OP = { name: "revise", fn: run };
     btn.disabled = true; setStatus("Applying the change and rebuilding the protocol…");
     startProgress(SESSION);
+    LAST_REVISE_INSTRUCTION = c.change;   // gate unrelated-change detection to this instruction
     try {
-      const r = await postJSON("/api/revise", { session_id: SESSION, instruction: c.change });
-      row.classList.add("applied");
-      btn.textContent = "✓ Applied — protocol rebuilt below";
+      const r = await postJSON("/api/revise", { session_id: SESSION, instruction: c.change, locked_ids: [...LOCKED] }, opSignal());
+      // renderResult rebuilds #result-panel, which the alignment panel lives inside — so the
+      // (now-stale) alignment is replaced by a note explaining the rebuild + next step, rather
+      // than silently vanishing with the "✓ Applied" confirmation the user never sees.
       renderResult(r);
-    } catch (e) { setStatus(e.message, true); btn.disabled = false; }
-    setStatus("");
+      const host = $("#align-anchor");
+      if (host) {
+        host.innerHTML = "";
+        host.appendChild(el("p", "hint", `✓ Applied “${esc(c.change)}”. The protocol was rebuilt below. Re-run “Test my hypothesis” to re-check alignment against the updated protocol.`));
+      }
+      setStatus("");
+    } catch (e) {
+      if (isAbort(e)) { setStatus("Canceled — your last protocol is unchanged."); btn.disabled = false; stopProgress(); return; }
+      if (e && e.status === 409) announceBlocker(e.message);
+      setStatus(e.message, true); btn.disabled = false;
+    }
     stopProgress();
   };
+  btn.onclick = run;
   row.appendChild(btn);
   return row;
 }
@@ -1015,7 +2040,7 @@ function renderDesign(d) {
       tr.appendChild(el("td", null, esc(c.name)));
       tr.appendChild(el("td", null, esc(c.type)));
       tr.appendChild(el("td", null, esc(c.rules_out)));
-      const p = el("td"); p.innerHTML = tierPill(c.provenance || "best_practice") + citeInline(c);
+      const p = el("td"); p.innerHTML = tierPill(c.provenance || "best_practice") + citeInline(c) + evidenceInline(c);
       tr.appendChild(p);
       tbl.appendChild(tr);
     });
@@ -1079,19 +2104,26 @@ function refineBox() {
   box.appendChild(el("p", "muted small", "Describe a change and it rebuilds with full context — e.g. “use 150 µL wells and drop to 2 replicates”, or “switch the folding aid to DsbC”."));
   const ta = el("textarea"); ta.id = "revise-text"; ta.rows = 2; ta.placeholder = "Your correction…";
   box.appendChild(ta);
-  const btn = el("button", "btn", "Apply correction & rebuild");
-  btn.onclick = async () => {
+  const btn = el("button", "btn op-control", "Apply correction & rebuild");
+  const run = async () => {
     const instruction = ta.value.trim();
     if (instruction.length < 3) { setStatus("Describe the change first.", true); return; }
+    LAST_OP = { name: "revise", fn: run };
     btn.disabled = true; setStatus("Rebuilding with your correction…");
     startProgress(SESSION);
+    LAST_REVISE_INSTRUCTION = instruction;   // consumed once in renderResult for the unrelated-change gate
     try {
-      const r = await postJSON("/api/revise", { session_id: SESSION, instruction });
+      const r = await postJSON("/api/revise", { session_id: SESSION, instruction, locked_ids: [...LOCKED] }, opSignal());
       renderResult(r);
-    } catch (e) { setStatus(e.message, true); btn.disabled = false; }
-    setStatus("");
+      setStatus("");               // clear only on success — keep the error otherwise
+    } catch (e) {
+      if (isAbort(e)) { setStatus("Canceled — your last protocol is unchanged."); btn.disabled = false; stopProgress(); return; }
+      if (e && e.status === 409) announceBlocker(e.message);
+      setStatus(e.message, true); btn.disabled = false;
+    }
     stopProgress();
   };
+  btn.onclick = run;
   box.appendChild(btn);
   return box;
 }
@@ -1135,16 +2167,301 @@ function diffBox(changes) {
   return box;
 }
 
-function tierPill(t) { return `<span class="tier t-${esc(t)}">${esc((t || "").replace(/_/g, " "))}</span>`; }
+/* ============================================================================
+   Bucket 2: value locks, deep field-level diff, unrelated-change gate, tables.
+   All pure/self-contained; nothing here re-runs the model.
+   ============================================================================ */
+
+// Significant identity tokens for instruction-reference matching (mirrors backend `_sig_tokens`).
+function _sig_tokens(s) { return (String(s == null ? "" : s).toLowerCase().match(/[a-z]{4,}/g) || []); }
+
+// Wrap a <table> in a horizontally-scrollable region, add a <caption>, and hoist the
+// first all-<th> row into <thead> (remaining rows into <tbody>). Still a real <table>.
+function tableWrap(table, captionText, ariaLabel) {
+  if (!table || table.tagName !== "TABLE") return table;
+  if (captionText) {
+    let cap = table.querySelector("caption");
+    if (!cap) { cap = document.createElement("caption"); table.insertBefore(cap, table.firstChild); }
+    cap.textContent = captionText;
+  }
+  try {
+    if (!table.querySelector("thead")) {
+      const rows = Array.from(table.querySelectorAll("tr"));   // innerHTML auto-wraps rows in tbody
+      const first = rows[0];
+      const headerish = first && first.children.length && Array.from(first.children).every((c) => c.tagName === "TH");
+      if (headerish) {
+        const thead = document.createElement("thead");
+        const tbody = document.createElement("tbody");
+        thead.appendChild(first);
+        rows.slice(1).forEach((r) => tbody.appendChild(r));
+        Array.from(table.querySelectorAll("tbody")).forEach((tb) => { if (tb !== tbody && !tb.children.length) tb.remove(); });
+        table.appendChild(thead);
+        table.appendChild(tbody);
+      }
+    }
+  } catch (e) { /* structural best-effort; a flat <table> still renders */ }
+  const wrap = el("div", "table-wrap");
+  wrap.setAttribute("role", "region");
+  if (ariaLabel) wrap.setAttribute("aria-label", ariaLabel);
+  wrap.setAttribute("tabindex", "0");
+  if (table.parentNode) table.parentNode.insertBefore(wrap, table);
+  wrap.appendChild(table);
+  return wrap;
+}
+
+// Flatten a protocol into an ordered list of comparable entity records.
+function _flattenForDiff(proto) {
+  const out = [];
+  if (!proto || typeof proto !== "object") return out;
+  (proto.materials || []).forEach((m, i) => { if (m && typeof m === "object")
+    out.push({ kind: "material", idx: "m" + i, label: m.name || ("material " + (i + 1)), ent: m, where: "Material: " + (m.name || ("#" + (i + 1))) }); });
+  (proto.steps || []).forEach((s, si) => {
+    if (!s || typeof s !== "object") return;
+    const sn = s.number != null ? s.number : (si + 1);
+    out.push({ kind: "step", idx: "s" + si, label: s.title || ("step " + sn), ent: s, where: "Step " + sn + (s.title ? ": " + s.title : "") });
+    (s.critical_parameters || []).forEach((cp, ci) => { if (cp && typeof cp === "object")
+      out.push({ kind: "critical_parameter", idx: "s" + si + "p" + ci, label: cp.name || "parameter", ent: cp, where: "Step " + sn + " · " + (cp.name || "param") }); });
+    (s.substeps || []).forEach((ss, ki) => { if (ss && typeof ss === "object")
+      out.push({ kind: "substep", idx: "s" + si + "x" + ki, label: (ss.instruction || "substep").slice(0, 40), ent: ss, where: "Step " + sn + " · substep " + (ss.number || (ki + 1)) }); });
+  });
+  const ts = proto.titration_series;
+  if (ts && typeof ts === "object") (ts.points || []).forEach((pt, pi) => {
+    if (!pt || typeof pt !== "object") return;
+    out.push({ kind: "titration_point", idx: "tp" + pi, label: pt.label || ("point " + (pi + 1)), ent: pt, where: "Titration · " + (pt.label || ("#" + (pi + 1))) });
+    (pt.components || []).forEach((co, coi) => { if (co && typeof co === "object")
+      out.push({ kind: "titration_component", idx: "tp" + pi + "c" + coi, label: co.name || "component", ent: co, where: "Titration · " + (pt.label || "") + " · " + (co.name || "comp") }); });
+  });
+  return out;
+}
+
+// Match key: stable id, else positional _id, else kind+index — so a matched entity survives
+// a list reorder yet an unstamped protocol still pairs by position.
+function _diffKey(rec) {
+  const sid = _stableId(rec.ent, rec.kind);
+  return rec.kind + "|" + (sid || (rec.ent && rec.ent._id ? "id:" + rec.ent._id : "pos:" + rec.idx));
+}
+
+// Tracked scalar fields per entity kind (instruction/title, value+unit, citation, provenance).
+function _entFields(rec) {
+  const e = rec.ent || {}, k = rec.kind, f = {};
+  if (k === "step") { f["title"] = e.title; f["instruction"] = e.instruction; }
+  else if (k === "substep") { f["instruction"] = e.instruction; }
+  if (k === "material") { f["amount"] = e.amount; f["unit"] = e.unit; }
+  else if (k === "critical_parameter") { f["value"] = e.value; f["unit"] = e.unit; }
+  else if (k === "titration_component") { f["volume"] = e.volume; }
+  else if (k === "titration_point") { f["target"] = e.target_concentration; }
+  f["citation"] = e.citation && e.citation.identifier;
+  f["provenance"] = e.provenance;
+  f["provenance_note"] = e.provenance_note;
+  return f;
+}
+
+// List of {field, before, after} changes for a matched pair (scalars + warnings as a set).
+function _compareFields(pr, cr) {
+  const out = [], pf = _entFields(pr), cf = _entFields(cr);
+  const norm = (x) => (x == null ? "" : String(x));
+  Object.keys(cf).forEach((k) => { if (norm(pf[k]) !== norm(cf[k])) out.push({ field: k, before: norm(pf[k]), after: norm(cf[k]) }); });
+  const pw = Array.isArray((pr.ent || {}).warnings) ? pr.ent.warnings : [];
+  const cw = Array.isArray((cr.ent || {}).warnings) ? cr.ent.warnings : [];
+  const ps = new Set(pw), cs = new Set(cw);
+  cw.forEach((w) => { if (!ps.has(w)) out.push({ field: "warning added", before: "", after: String(w) }); });
+  pw.forEach((w) => { if (!cs.has(w)) out.push({ field: "warning removed", before: String(w), after: "" }); });
+  return out;
+}
+
+// Field-by-field before/after table (matched by stable id). Returns an HTMLElement.
+function renderDeepDiff(prev, curr) {
+  const rows = [];
+  const pv = _flattenForDiff(prev), cv = _flattenForDiff(curr);
+  const pMap = new Map(); pv.forEach((r) => pMap.set(_diffKey(r), r));
+  const seen = new Set();
+  cv.forEach((cr) => {
+    const key = _diffKey(cr); seen.add(key);
+    const pr = pMap.get(key);
+    if (!pr) { rows.push({ where: cr.where, field: "entity", before: "", after: cr.label, kind: "added" }); return; }
+    _compareFields(pr, cr).forEach((ch) => rows.push({ where: cr.where, field: ch.field, before: ch.before, after: ch.after, kind: "changed" }));
+  });
+  pv.forEach((pr) => { if (!seen.has(_diffKey(pr))) rows.push({ where: pr.where, field: "entity", before: pr.label, after: "", kind: "removed" }); });
+
+  if (!rows.length) return el("p", "muted small", "No field-level changes in this revision.");
+  const table = el("table", "deepdiff");
+  const head = el("tr");
+  ["Where", "Field", "Before", "After", "Kind"].forEach((h) => head.appendChild(el("th", null, esc(h))));
+  table.appendChild(head);
+  rows.forEach((r) => {
+    const tr = el("tr");
+    tr.appendChild(el("td", null, esc(r.where)));
+    tr.appendChild(el("td", null, esc(r.field)));
+    tr.appendChild(el("td", null, r.before !== "" ? "<del>" + esc(r.before) + "</del>" : "—"));
+    tr.appendChild(el("td", null, r.after !== "" ? "<ins>" + esc(r.after) + "</ins>" : "—"));
+    tr.appendChild(el("td", "muted small", esc(r.kind)));
+    table.appendChild(tr);
+  });
+  return tableWrap(table, "Before / after — this revision", "Field-by-field changes in this revision");
+}
+
+// Count field-level changes (for the SR announcement). Cheap re-walk of the diff.
+function _deepChangeCount(prev, curr) {
+  if (!prev || !curr) return 0;
+  const pv = _flattenForDiff(prev), cv = _flattenForDiff(curr);
+  const pMap = new Map(); pv.forEach((r) => pMap.set(_diffKey(r), r));
+  const cKeys = new Set(); let n = 0;
+  cv.forEach((cr) => { const k = _diffKey(cr); cKeys.add(k); const pr = pMap.get(k); if (!pr) { n++; return; } n += _compareFields(pr, cr).length; });
+  pv.forEach((pr) => { if (!cKeys.has(_diffKey(pr))) n++; });
+  return n;
+}
+
+// Which changed values weren't referenced by the revise instruction and aren't locked. Pure.
+function computeUnrelatedChanges(prev, curr, instruction, lockedSet) {
+  lockedSet = lockedSet || new Set();
+  const instrRaw = String(instruction || "").toLowerCase();
+  const instrTokens = new Set(_sig_tokens(instrRaw));
+  const pv = _flattenForDiff(prev), cv = _flattenForDiff(curr);
+  const pMap = new Map(); pv.forEach((r) => pMap.set(_diffKey(r), r));
+  const unrelated = [], related = [];
+  cv.forEach((cr) => {
+    const pr = pMap.get(_diffKey(cr));
+    if (!pr) return;                               // added entity — shown in diff, not an "unrelated value change"
+    const changes = _compareFields(pr, cr);
+    if (!changes.length) return;
+    const sid = _stableId(cr.ent, cr.kind);
+    const referenced = (sid && instrRaw.indexOf(String(sid).toLowerCase()) >= 0)
+      || _sig_tokens(cr.label).some((t) => instrTokens.has(t));
+    const rec = { id: sid || _diffKey(cr), label: cr.label, summary: changes.map((c) => c.field).join(", ") };
+    if (referenced) { related.push(rec); return; }
+    if (sid && lockedSet.has(sid)) return;         // locked ⇒ belt-and-suspenders with server restore
+    unrelated.push(rec);
+  });
+  return { unrelated, related };
+}
+
+// Deep diff + (revise-only) unrelated-change gate, mounted into #result-panel's Epic-4 tail.
+function renderDeepDiffTail(prev, curr, instruction) {
+  const P = $("#result-panel"); if (!P) return;
+  const oldD = $("#deepdiff-details"); if (oldD) oldD.remove();
+  const oldG = $("#unrelated-gate"); if (oldG) oldG.remove();
+  if (!prev) return;
+  const details = el("details"); details.id = "deepdiff-details";
+  details.appendChild(el("summary", null, "Detailed before / after (field-by-field)"));
+  details.appendChild(renderDeepDiff(prev, curr));
+  const anchor = P.querySelector(".diff");
+  if (anchor && anchor.parentNode === P && anchor.after) anchor.after(details);
+  else P.appendChild(details);
+  if (instruction) {
+    const { unrelated } = computeUnrelatedChanges(prev, curr, instruction, LOCKED);
+    if (unrelated.length) renderUnrelatedGate(unrelated, details);
+  }
+}
+
+// The confirm-on-unrelated-change gate: Keep (accept) or Revert unrelated (host-only /restore).
+function renderUnrelatedGate(unrelated, afterEl) {
+  const P = $("#result-panel"); if (!P) return;
+  const box = el("div"); box.id = "unrelated-gate";
+  box.setAttribute("role", "alertdialog");
+  box.setAttribute("aria-labelledby", "unrelated-gate-h");
+  box.setAttribute("tabindex", "-1");
+  const h = el("h3", null, `These ${unrelated.length} value${unrelated.length > 1 ? "s" : ""} changed but weren't part of your request:`);
+  h.id = "unrelated-gate-h";
+  box.appendChild(h);
+  const ul = el("ul");
+  unrelated.forEach((u) => ul.appendChild(el("li", null, `<b>${esc(u.label)}</b>${u.summary ? " — " + esc(u.summary) : ""}`)));
+  box.appendChild(ul);
+  const row = el("div", "row");
+  const keep = el("button", "btn secondary op-control", "Keep");
+  keep.onclick = () => { box.remove(); };
+  const revert = el("button", "btn op-control", "Revert unrelated");
+  const runRevert = async () => {
+    LAST_OP = { name: "restore", fn: runRevert };
+    revert.disabled = true; setStatus("Reverting the unrelated changes…");
+    startProgress(SESSION);
+    try {
+      const r = await postJSON("/api/protocol/" + encodeURIComponent(SESSION) + "/restore",
+        { session_id: SESSION, target_ids: unrelated.map((u) => u.id), locked_ids: [...LOCKED] }, opSignal());
+      renderResult(r);
+      setStatus("");
+    } catch (e) {
+      if (isAbort(e)) { setStatus("Canceled — your last protocol is unchanged."); revert.disabled = false; stopProgress(); return; }
+      setStatus(e.message, true); revert.disabled = false;
+    }
+    stopProgress();
+  };
+  revert.onclick = runRevert;
+  row.appendChild(keep); row.appendChild(revert);
+  box.appendChild(row);
+  if (afterEl && afterEl.after) afterEl.after(box); else P.appendChild(box);
+  try { box.focus(); } catch (e) { /* focus best-effort */ }
+  announceBlocker(`${unrelated.length} unrelated value${unrelated.length > 1 ? "s" : ""} changed — review before continuing.`);
+}
+
+// Soft reset: drop transient panels/state, keep SESSION/PROJECT/LOCKED and the last valid protocol.
+function startOver() {
+  try { if (CURRENT_ABORT) CURRENT_ABORT.abort(); } catch (e) { /* best-effort */ }
+  stopProgress();
+  hide("#questions-panel");
+  const gaps = $("#gaps"); if (gaps) gaps.innerHTML = "";
+  const gerr = $("#gate-error"); if (gerr) gerr.textContent = "";
+  const dd = $("#deepdiff-details"); if (dd) dd.remove();
+  const ug = $("#unrelated-gate"); if (ug) ug.remove();
+  GAPS = [];
+  LAST_REVISE_INSTRUCTION = null;
+  PREV_PROTOCOL = null;
+  setStatus("");
+  if (CURR_PROTOCOL) { renderProtocol(CURR_PROTOCOL); focusResult(); }
+}
+
+const PROV_EXPLAIN = {
+  stated: "copied verbatim from your source",
+  literature_grounded: "filled from a cited paper and citation-checked",
+  best_practice: "a common default for this method",
+  user_input: "you set this value",
+  default_verify: "a default we chose — please verify",
+};
+
+function tierPill(t) {
+  const key = t || "";
+  const sentence = PROV_EXPLAIN[key];
+  const attr = sentence ? ` title="${esc(sentence)}" aria-label="${esc(String(key).replace(/_/g, " ") + ": " + sentence)}"` : "";
+  return `<span class="tier t-${esc(key)}"${attr}>${esc(String(key).replace(/_/g, " "))}</span>`;
+}
+
+const SOURCE_MARKER = {
+  peer_reviewed: "peer-reviewed",
+  preprint: "preprint (not peer-reviewed)",
+  protocol: "protocol",
+};
 
 function citeInline(entry) {
   if (!entry.citation) return "";
   const c = entry.citation;
   const label = `${esc(c.authors || "")} ${esc(c.year || "")} — ${esc(c.identifier || "")}`;
-  const badge = entry.citation_verified ? ' <span class="badge-ok">✓ verified</span>' : ' <span class="badge-warn">⚠ unverified</span>';
+  const status = entry.claim_support_status;
+  // Metadata verified = the cited identifier resolved to the cited work. Back-compat: old JSON
+  // exposes only citation_verified; the raw host fields are the modern source of truth.
+  const metadataVerified = !!entry.citation_verified || !!(entry.identifier_verified && entry.metadata_matched);
+  const badges = [];
+  if (metadataVerified) badges.push('<span class="badge-ok">✓ citation metadata verified</span>');
+  if (status === "supported") {
+    badges.push('<span class="badge-ok">✓ supporting excerpt attached</span>');
+  } else if (metadataVerified && status === "evidence_unavailable") {
+    badges.push('<span class="badge-warn">⚠ evidence unavailable</span>');
+  } else if (!metadataVerified && entry.provenance === "literature_grounded") {
+    badges.push('<span class="badge-warn">⚠ unverified</span>');
+  }
+  const src = SOURCE_MARKER[(c.evidence || {}).source_type];
+  if (src) badges.push(`<span class="badge-src">${esc(src)}</span>`);
+  const badge = badges.length ? " " + badges.join(" ") : "";
   const u = safeUrl(c.url);
   const link = u ? `<a href="${esc(u)}" target="_blank" rel="noopener">${label}</a>` : `<span class="cite">${label}</span>`;
   return `<div class="cite">${link}${badge}</div>`;
+}
+
+// Collapsible supporting excerpt — rendered ONLY for excerpt-supported values.
+function evidenceInline(entry) {
+  if (!entry || entry.claim_support_status !== "supported") return "";
+  const ev = (entry.citation || {}).evidence;
+  if (!ev || !ev.excerpt) return "";
+  const label = ev.section || ev.evidence_type || "";
+  return `<details class="evidence"><summary>supporting excerpt</summary><blockquote>“${esc(ev.excerpt)}” <span class="muted small">${esc(label)}</span></blockquote></details>`;
 }
 
 // A verified verbatim source quote — shown only when the host confirmed it.
@@ -1165,17 +2482,23 @@ function provCell(entry) {
   const td = el("td");
   td.innerHTML = tierPill(entry.provenance);
   if (entry.provenance_note) td.appendChild(el("div", "pnote", esc(entry.provenance_note)));
-  td.insertAdjacentHTML("beforeend", citeInline(entry) + anchorInline(entry) + flagInline(entry));
+  td.insertAdjacentHTML("beforeend", citeInline(entry) + anchorInline(entry) + flagInline(entry) + evidenceInline(entry));
   return td;
 }
 
 function validationSummary(r) {
   const box = el("div", "summary");
   if (!r) return box;
-  box.appendChild(el("div", "stat", `<b>${r.verified.length}</b><div class="muted">citations verified</div>`));
-  box.appendChild(el("div", "stat", `<b>${r.downgraded.length}</b><div class="muted">downgraded (unverifiable)</div>`));
-  box.appendChild(el("div", "stat", `<b>${r.citations_checked}</b><div class="muted">citations checked</div>`));
-  const cons = (r.consistency.inline_missing_from_log.length + r.consistency.log_missing_from_inline.length);
+  // Guard every sub-field: a present-but-partial report must not throw mid-render (that would
+  // leave the whole protocol panel hidden with no error).
+  box.appendChild(el("div", "stat", `<b>${(r.verified || []).length}</b><div class="muted">citations verified</div>`));
+  box.appendChild(el("div", "stat", `<b>${(r.downgraded || []).length}</b><div class="muted">downgraded (unverifiable)</div>`));
+  const support = r.support || {};
+  box.appendChild(el("div", "stat", `<b>${(support.supported || []).length}</b><div class="muted">excerpt-supported</div>`));
+  box.appendChild(el("div", "stat", `<b>${(support.evidence_unavailable || []).length}</b><div class="muted">metadata-only (no excerpt)</div>`));
+  box.appendChild(el("div", "stat", `<b>${r.citations_checked || 0}</b><div class="muted">citations checked</div>`));
+  const c = r.consistency || {};
+  const cons = ((c.inline_missing_from_log || []).length + (c.log_missing_from_inline || []).length);
   box.appendChild(el("div", "stat", `<b>${cons}</b><div class="muted">log/inline mismatches</div>`));
   if ((r.stated_downgrades || []).length) {
     box.appendChild(el("div", "stat", `<b>${r.stated_downgrades.length}</b><div class="muted">stated → verify (no source)</div>`));
@@ -1189,8 +2512,14 @@ function validationSummary(r) {
 
 function legend() {
   const box = el("div", "legend");
-  ["stated", "literature_grounded", "best_practice", "user_input", "default_verify"].forEach((t) =>
-    box.appendChild(el("span", null, tierPill(t))));
+  const dl = el("dl", "prov-legend");
+  ["stated", "literature_grounded", "best_practice", "user_input", "default_verify"].forEach((t) => {
+    const row = el("div");
+    row.appendChild(el("dt", null, tierPill(t)));
+    row.appendChild(el("dd", null, esc(PROV_EXPLAIN[t] || "")));
+    dl.appendChild(row);
+  });
+  box.appendChild(dl);
   return box;
 }
 
@@ -1205,11 +2534,11 @@ function showResultMessage(title, body) {
 function _handleAuth(res, data) {
   if (res.status === 401) { showAuthBar("Access token required or invalid."); throw new Error(data.detail || "Access token required."); }
 }
-async function postJSON(url, body) {
-  const res = await fetch(url, { method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify(body) });
+async function postJSON(url, body, signal) {
+  const res = await fetch(url, { method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify(body), signal });
   const data = await res.json().catch(() => ({}));
   _handleAuth(res, data);
-  if (!res.ok) throw new Error(data.detail || `Request failed (${res.status})`);
+  if (!res.ok) { const err = new Error(data.detail || `Request failed (${res.status})`); err.status = res.status; throw err; }
   return data;
 }
 async function postForm(url, formData) {
@@ -1233,20 +2562,65 @@ function setToast(msg, isErr) {
   b.classList.toggle("as-error", show && !!isErr);
   b.querySelector(".spin").classList.toggle("hidden", !show || !!isErr);
   b.querySelector(".busy-x").classList.toggle("hidden", !show || !isErr);
+  // Cancel is offered only while a cancellable op is actually running (working, not error).
+  const cancel = b.querySelector(".busy-cancel");
+  if (cancel) cancel.classList.toggle("hidden", !(show && !isErr && operationActive && CURRENT_ABORT));
+  // Retry is offered only on an error that has a recorded last op to re-run.
+  const retry = b.querySelector(".busy-retry");
+  if (retry) retry.classList.toggle("hidden", !(show && !!isErr && LAST_OP));
   b.querySelector(".busy-msg").textContent = msg || "";
 }
 $("#busy .busy-x").onclick = () => $("#busy").classList.add("hidden");
+$("#busy .busy-cancel").onclick = () => {
+  try { if (CURRENT_ABORT) CURRENT_ABORT.abort(); } catch (e) { /* best-effort */ }
+  stopProgress();
+  setStatus("Canceled — your last protocol is unchanged.");
+};
+$("#busy .busy-retry").onclick = () => { const op = LAST_OP; if (op && typeof op.fn === "function") op.fn(); };
 function setStatus(msg, isErr) {
   const s = $("#gstatus"); s.textContent = msg || ""; s.className = "noprint " + (isErr ? "err" : "muted");
   setToast(msg, isErr);
 }
 
+/* ---------- global operation guard (single source of truth) ----------
+   While ANY session-mutating op is in flight, every `.op-control` is disabled so a
+   second toolbar click can't start concurrent work. Release is folded into the same
+   startProgress()/stopProgress() plumbing every long op already calls on BOTH the
+   success and failure paths, so controls can never get stuck disabled. Degrades
+   gracefully: if nothing carries the class, the querySelectorAll is a harmless no-op. */
+let operationActive = false;
+let READONLY = false;   // sticky: a session-less restored project is a read-only snapshot
+function setControlsDisabled(on) {
+  const off = on || READONLY;   // READONLY keeps controls disabled through endOp()/stopProgress()
+  document.querySelectorAll(".op-control").forEach((elm) => {
+    const native = ("disabled" in elm);                    // <button>/<input> leave tab order natively
+    if (native) elm.disabled = off;
+    elm.setAttribute("aria-disabled", off ? "true" : "false");
+    elm.classList.toggle("op-locked", off);                // pointer-events:none for non-button controls
+    if (off) {
+      elm.setAttribute("title", "Another operation is in progress…");
+      if (!native) { elm.setAttribute("data-op-tab", elm.getAttribute("tabindex") || ""); elm.setAttribute("tabindex", "-1"); }
+    } else {
+      elm.removeAttribute("title");
+      if (!native) { const t = elm.getAttribute("data-op-tab"); if (t) elm.setAttribute("tabindex", t); else elm.removeAttribute("tabindex"); elm.removeAttribute("data-op-tab"); }
+    }
+  });
+}
+function beginOp() {                 // returns false if an op is already running (caller should bail)
+  if (operationActive) return false;
+  operationActive = true; setControlsDisabled(true); return true;
+}
+function endOp() { operationActive = false; setControlsDisabled(false); }
+
 /* ---------- live activity feed (polls /api/progress while a long op runs) ---------- */
 let POLL = null, POLL_GEN = 0;
 function startProgress(sid) {
-  stopProgress();
+  stopProgress();                    // clears any prior poll AND releases a prior lock (endOp)
+  CURRENT_ABORT = new AbortController();  // fresh cancel handle for this op (callers pass opSignal())
+  operationActive = true;            // engage the global operation guard...
+  setControlsDisabled(true);         // ...disabling every session-mutating control synchronously
   const panel = $("#activity-panel"), list = $("#activity");
-  if (!sid || !panel) return;
+  if (!sid || !panel) return;        // guard stays engaged; the caller's stopProgress() releases it
   const gen = ++POLL_GEN;          // invalidates any late in-flight tick from a prior op
   list.innerHTML = "";
   panel.classList.remove("hidden");
@@ -1275,10 +2649,346 @@ function stopProgress() {
   if (POLL) { clearInterval(POLL); POLL = null; }
   const panel = $("#activity-panel");
   if (panel) panel.classList.add("hidden");
+  CURRENT_ABORT = null;              // op finished — no live cancel handle
+  endOp();                           // release the global operation guard (both success + failure paths)
 }
-function lock(on, msg) { $("#analyze").disabled = on; $("#submit-answers").disabled = on; setStatus(on ? (msg || "Working…") : ""); }
+// on=false only re-enables; it must NOT clear the status, or an error set in a catch is
+// wiped in the same tick and the user sees nothing. Callers clear the status on success.
+function lock(on, msg) { $("#analyze").disabled = on; $("#submit-answers").disabled = on; if (on) setStatus(msg || "Working…"); }
 function show(sel) { $(sel).classList.remove("hidden"); }
 function hide(sel) { $(sel).classList.add("hidden"); }
+
+/* ===================== projects layer (additive; never touches the run engine) ===================== */
+
+/* ---------- GET twin of postJSON (auth header + 401 bar) ---------- */
+async function getJSON(url) {
+  const res = await fetch(url, { headers: authHeaders({}) });
+  const data = await res.json().catch(() => ({}));
+  _handleAuth(res, data);
+  if (!res.ok) throw new Error(data.detail || `Request failed (${res.status})`);
+  return data;
+}
+
+/* ---------- DELETE twin of getJSON (auth header + 401 bar) ---------- */
+async function delJSON(url) {
+  const res = await fetch(url, { method: "DELETE", headers: authHeaders({}) });
+  const data = await res.json().catch(() => ({}));
+  _handleAuth(res, data);
+  if (!res.ok) { const err = new Error(data.detail || `Request failed (${res.status})`); err.status = res.status; throw err; }
+  return data;
+}
+
+/* ---------- URL <-> project id (survives refresh) ---------- */
+function projectIdFromUrl() {
+  try { return new URLSearchParams(location.search).get("project"); } catch (e) { return null; }
+}
+function setProjectUrl(id) {
+  try { history.replaceState(null, "", location.pathname + "?project=" + encodeURIComponent(id)); } catch (e) { /* best-effort */ }
+}
+function clearProjectUrl() {
+  try { history.replaceState(null, "", location.pathname); } catch (e) { /* best-effort */ }
+}
+
+/* ---------- home screen + recent list ---------- */
+function showHome() {
+  PROJECT = null;
+  READONLY = false;
+  INTAKE_FILE = null;  // don't leak a cancelled upload into a later flow
+  hide("#project-header"); hide("#detect-panel");
+  ["#input-panel", "#discovery-panel", "#questions-panel", "#assays-panel", "#result-panel"].forEach(hide);
+  hide(".modebar");
+  show("#home-panel");
+  renderWorkflowChooser($("#workflow-cards"), PENDING_WF, (id) => { PENDING_WF = id; });
+  renderRecent();
+  const inp = $("#u-input"); if (inp) inp.focus();
+}
+
+async function renderRecent() {
+  const list = $("#recent-list"), empty = $("#recent-empty");
+  list.innerHTML = "";
+  let projects = [];
+  try {
+    const d = await getJSON("/api/projects?limit=20");
+    projects = d.projects || [];
+  } catch (e) {
+    empty.textContent = "Couldn't load recent projects.";
+    empty.classList.remove("hidden");
+    return;
+  }
+  if (!projects.length) { empty.textContent = "No projects yet — start one above."; empty.classList.remove("hidden"); return; }
+  empty.classList.add("hidden");
+  projects.forEach((p) => list.appendChild(recentRow(p)));
+}
+
+function recentRow(p) {
+  const li = el("li", "recent-item");
+  const a = document.createElement("a");
+  a.href = "?project=" + encodeURIComponent(p.id);
+  const badges = `<span class="pill">${esc(wfLabel(p.workflow))}</span>`
+    + `<span class="pill lc-${esc(p.lifecycle_status || "")}">${esc(lcLabel(p.lifecycle_status))}</span>`
+    + (p.version ? `<span class="pill">v${esc(p.version)}</span>` : "");
+  a.innerHTML = `<span class="r-title">${esc(p.title || "Untitled project")}</span>${badges}`;
+  a.onclick = (e) => { e.preventDefault(); openProject(p.id); };
+  li.appendChild(a);
+  return li;
+}
+
+async function openProject(id) {
+  setToast("Loading project…", false);
+  try {
+    const p = await getJSON("/api/project/" + encodeURIComponent(id));
+    setToast("", false);
+    adoptProject(p);
+    restoreProjectView(p);
+  } catch (e) { setToast(e.message, true); }
+}
+
+/* ---------- workflow chooser (radiogroup, roving tabindex) ---------- */
+function renderWorkflowChooser(container, selectedId, onSelect) {
+  container.innerHTML = "";
+  WORKFLOWS.forEach((w, i) => {
+    const card = el("button", "wf-card");
+    card.type = "button";
+    card.setAttribute("role", "radio");
+    card.dataset.wf = w.id;
+    card.dataset.entry = w.entry;
+    const checked = w.id === selectedId;
+    card.setAttribute("aria-checked", checked ? "true" : "false");
+    // roving tabindex: the checked card (or the first, if none checked) is the tab stop
+    card.tabIndex = (checked || (!selectedId && i === 0)) ? 0 : -1;
+    card.innerHTML = `${esc(w.label)}<small>${esc(w.blurb)}</small>`;
+    card.onclick = () => selectWorkflow(container, w.id, onSelect);
+    card.addEventListener("keydown", (e) => wfKeydown(e, container, onSelect));
+    container.appendChild(card);
+  });
+}
+function selectWorkflow(container, id, onSelect) {
+  container.querySelectorAll(".wf-card").forEach((c) => {
+    const on = c.dataset.wf === id;
+    c.setAttribute("aria-checked", on ? "true" : "false");
+    c.tabIndex = on ? 0 : -1;
+  });
+  if (onSelect) onSelect(id);
+}
+function wfKeydown(e, container, onSelect) {
+  const cards = [...container.querySelectorAll(".wf-card")];
+  const idx = cards.indexOf(e.currentTarget);
+  if (idx < 0) return;
+  let ni = idx;
+  if (e.key === "ArrowRight" || e.key === "ArrowDown") ni = (idx + 1) % cards.length;
+  else if (e.key === "ArrowLeft" || e.key === "ArrowUp") ni = (idx - 1 + cards.length) % cards.length;
+  else if (e.key === "Home") ni = 0;
+  else if (e.key === "End") ni = cards.length - 1;
+  else if (e.key === " " || e.key === "Enter") { e.preventDefault(); selectWorkflow(container, cards[idx].dataset.wf, onSelect); return; }
+  else return;
+  e.preventDefault();
+  selectWorkflow(container, cards[ni].dataset.wf, onSelect);
+  cards[ni].focus();
+}
+
+/* ---------- universal input -> detect -> confirm ---------- */
+function uStatus(msg, isErr) { const s = $("#u-status"); if (s) { s.textContent = msg || ""; s.className = isErr ? "err" : "muted"; } setToast(msg, isErr); }
+
+$("#u-file").onchange = () => {
+  const f = $("#u-file").files[0];
+  $("#u-file-label").textContent = f ? f.name : "Upload a paper as a PDF";
+  $("#u-file").closest(".filebtn").classList.toggle("has-file", !!f);
+};
+$("#u-example").onclick = () => { $("#u-input").value = EXAMPLE; };
+
+$("#universal-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const file = $("#u-file").files[0];
+  const text = $("#u-input").value.trim();
+  INTAKE_FILE = file || null;   // carry the uploaded PDF into the chosen workflow's panel (below)
+  if (!file && !text) { uStatus("Describe what you want to build, paste a protocol, give an identifier, or upload a PDF.", true); return; }
+  $("#u-go").disabled = true;
+  uStatus("Detecting the best workflow…");
+  try {
+    const fd = new FormData();
+    if (text) fd.append("text", text);      // C-frontend alias for free_text (§5.1)
+    if (file) fd.append("file", file);
+    if (PENDING_WF) fd.append("workflow", PENDING_WF);  // alias for requested_workflow
+    const draft = await postForm("/api/project", fd);
+    uStatus("");
+    showDetect(draft);
+  } catch (err) { uStatus(err.message, true); }
+  $("#u-go").disabled = false;
+});
+
+function showDetect(draft) {
+  PROJECT = draft;
+  setProjectUrl(draft.id);
+  hide("#home-panel");
+  $("#detect-summary").textContent = draft.detection_reason || "";
+  renderWorkflowChooser($("#detect-cards"), draft.workflow, (id) => { PROJECT.workflow = id; });
+  show("#detect-panel");
+  $("#detect-confirm").focus();
+}
+
+$("#detect-confirm").onclick = async () => {
+  if (!PROJECT) return;
+  $("#detect-confirm").disabled = true;
+  try {
+    const p = await postJSON("/api/project/" + encodeURIComponent(PROJECT.id) + "/workflow", { workflow: PROJECT.workflow });
+    adoptProject(p);
+    routeIntoScreen(p);
+    maybeAutoRun(p);
+  } catch (e) { setToast(e.message, true); }
+  $("#detect-confirm").disabled = false;
+};
+$("#detect-cancel").onclick = () => { showHome(); };
+
+/* ---------- adopt / hydrate / header ---------- */
+function adoptProject(p) {
+  PROJECT = p;
+  setProjectUrl(p.id);
+  hydrateFromProject(p);
+  renderProjectHeader(p);
+  hide("#home-panel"); hide("#detect-panel");
+}
+
+// The ONLY writer of the demoted globals on restore (§6.4).
+function hydrateFromProject(p) {
+  SESSION = p.session_id || null;
+  HYP = p.hypothesis || "";
+  MODE = p.entry_mode;
+  if (p.latest_result) {
+    CURR_PROTOCOL = p.latest_result.protocol;
+    PREV_PROTOCOL = null;
+    MD_URL = p.latest_result.markdown_url || null;
+    CSV_URL = p.latest_result.materials_csv_url || null;
+    GLOG = p.latest_result.grounding_log || [];
+  }
+}
+
+function renderProjectHeader(p) {
+  $("#ph-title").textContent = p.title || "Untitled project";
+  const wf = $("#ph-workflow"); wf.textContent = wfLabel(p.workflow); wf.className = "pill ph-badge";
+  const lc = $("#ph-lifecycle"); lc.textContent = lcLabel(p.lifecycle_status); lc.className = "pill ph-badge lc-" + (p.lifecycle_status || "");
+  $("#ph-version").textContent = "v" + (p.version || 0);
+  const stale = (p.session_live === false && !!p.latest_result);
+  $("#ph-stale").classList.toggle("hidden", !stale);
+  show("#project-header");
+}
+
+$("#ph-new").onclick = () => { clearProjectUrl(); showHome(); };
+$("#ph-copy").onclick = async () => {
+  try { await navigator.clipboard.writeText(location.href); setToast("Link copied.", false); setTimeout(() => setToast("", false), 1500); }
+  catch (e) { setToast("Copy failed — copy the URL from the address bar.", true); }
+};
+$("#ph-delete").onclick = async () => {
+  if (!PROJECT) return;
+  if (!confirm("Delete this project permanently? Its stored Methods text and all protocol versions will be removed. This cannot be undone.")) return;
+  const btn = $("#ph-delete"); btn.disabled = true;
+  setToast("Deleting project…", false);
+  try {
+    await delJSON("/api/project/" + encodeURIComponent(PROJECT.id));
+    clearProjectUrl(); showHome();
+    setToast("Project deleted.", false);
+  } catch (e) {
+    setToast(e.message, true);
+    btn.disabled = false;
+  }
+};
+
+/* ---------- routing / restore ---------- */
+function routeIntoScreen(p) {
+  hide("#home-panel"); hide("#detect-panel");
+  show(".modebar");
+  applyMode(p.entry_mode);
+  const seed = (p.seed_input && p.seed_input.text) || "";
+  if (p.entry_mode === "paper") {
+    // Carry a PDF uploaded on the landing page into the paper panel so its content isn't
+    // lost on the way here (the intake only detected the workflow; analyze still needs the file).
+    if (INTAKE_FILE && $("#pdf")) {
+      try {
+        const dt = new DataTransfer();
+        dt.items.add(INTAKE_FILE);
+        $("#pdf").files = dt.files;
+        $("#pdf-label").textContent = INTAKE_FILE.name;
+        $("#pdf").closest(".filebtn").classList.toggle("has-file", true);
+        $("#clear-pdf").classList.remove("hidden");
+      } catch (_e) { /* DataTransfer unsupported — fall back to the text seed below */ }
+    }
+    if (seed && !INTAKE_FILE) $("#methods").value = seed;
+    if (p.hypothesis) $("#hypothesis").value = p.hypothesis;
+    ($("#pdf").files.length ? $("#analyze") : $("#methods")).focus();
+  } else {
+    if (p.hypothesis || seed) $("#disc-hyp").value = p.hypothesis || seed;
+    $("#disc-hyp").focus();
+  }
+  INTAKE_FILE = null;  // consumed
+}
+
+function restoreProjectView(p) {
+  hide("#home-panel"); hide("#detect-panel");
+  show(".modebar");
+  applyMode(p.entry_mode);
+  if (p.latest_result) {
+    // renderResult funnels through onProtocolRendered, which bumps version when the payload
+    // carries a protocol_version_id. On restore that id belongs to the CURRENT (already-counted)
+    // version, so snapshot the server-authoritative version and repaint the header with it.
+    const authVersion = p.version;
+    renderResult(p.latest_result);
+    PROJECT.version = authVersion;
+    renderProjectHeader(PROJECT);
+    // A saved project reopened with no live session is a READ-ONLY snapshot: gate every
+    // session-mutating control. setControlsDisabled honors the sticky READONLY flag, so the
+    // lock survives later endOp()/stopProgress() calls.
+    READONLY = (p.session_live === false);
+    setControlsDisabled(false);
+  } else {
+    // Mid-flow question/assay state is not persisted in M1 — pre-protocol projects
+    // re-enter through the normal input screen.
+    routeIntoScreen(p);
+  }
+  const h = $("#project-header"); if (h) h.focus();
+}
+
+// Local-only update after the run engine renders a protocol (§6.5). No network call —
+// the backend already persisted the version via _finish().
+function onProtocolRendered(r) {
+  PROJECT.latest_result = r;
+  PROJECT.version = (r.protocol_version_id != null) ? (PROJECT.version || 0) + 1 : (PROJECT.version || 0);
+  PROJECT.lifecycle_status = "protocol_ready";
+  PROJECT.title = (r.protocol && r.protocol.title) || PROJECT.title;
+  PROJECT.session_live = true;
+  READONLY = false; setControlsDisabled(false);   // a fresh render means the session is live again
+  renderProjectHeader(PROJECT);
+}
+
+// Optional convenience (§6.7): if the confirmed project already carries seed text in the
+// input, kick off the existing analyze/discover handler so the user isn't asked to paste twice.
+function maybeAutoRun(p) {
+  const hasPdf = !!($("#pdf") && $("#pdf").files && $("#pdf").files.length);
+  if (!hasPdf && (!p.seed_input || !p.seed_input.text)) return;
+  if (p.entry_mode === "paper") {
+    if (hasPdf || $("#methods").value.trim().length >= 40) $("#analyze").click();
+  } else {
+    if ($("#disc-hyp").value.trim().length >= 12) $("#discover").click();
+  }
+}
+
+/* ---------- boot: restore ?project= on load ---------- */
+async function boot() {
+  const pid = projectIdFromUrl();
+  if (pid) {
+    try {
+      const p = await getJSON("/api/project/" + encodeURIComponent(pid));
+      adoptProject(p);
+      restoreProjectView(p);
+      return;
+    } catch (e) {
+      clearProjectUrl();
+      showHome();
+      setToast("Couldn't open that project — it may have expired. Starting fresh.", true);
+      return;
+    }
+  }
+  showHome();
+}
+boot();
 </script>
 </body>
 </html>

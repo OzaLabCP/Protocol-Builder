@@ -142,12 +142,87 @@ def test_correctness_review_emits():
               "findings": [{"severity": "critical", "category": "ordering",
                             "problem": "enzyme before buffer", "fix": "add buffer first"}],
               "strengths": []}
-    session = Session(messages=[{"role": "user", "content": "seed"}], pending_tool_use_id="e1")
+    session = Session(messages=[{"role": "user", "content": "seed"}], pending_tool_use_id="e1",
+                      protocol=dict(PROTO))
     agent = make_agent([tool_msg(("emit_correctness_review", review, "cr1"))])
     out = agent.correctness_review(session)
     assert out["verdict"] == "issues_found"
     assert out["findings"][0]["category"] == "ordering"
-    assert session.pending_tool_use_id == "cr1"
+    # Fresh context leaves the protocol-emit pointer armed; the review terminal id ("cr1")
+    # lives only on the throwaway transcript, so the live session is unmutated.
+    assert session.pending_tool_use_id == "e1"
+
+
+def test_correctness_review_runs_from_fresh_history_without_transcript():
+    """Requirement (1): the review audits from a FRESH message history. Seed the live
+    session with authoring reasoning; the reviewer's transcript must NOT contain it, and
+    the live session must be left byte-identical (no scraping, no mutation)."""
+    secret = "AUTHORING_CHAIN_OF_THOUGHT_I_guessed_the_incubation_time"
+    review = {"verdict": "sound", "summary": "ok", "findings": [], "strengths": []}
+    session = Session(
+        messages=[{"role": "user", "content": "seed"},
+                  {"role": "assistant", "content": secret}],   # decoy self-justification
+        pending_tool_use_id="e1", protocol=dict(PROTO))
+    before = list(session.messages)
+    agent = make_agent([tool_msg(("emit_correctness_review", review, "cr1"))])
+    agent.correctness_review(session)
+    # exactly one model call, on a throwaway transcript that never carries the secret
+    assert len(agent.client.calls) == 1
+    sent = agent.client.calls[0]["messages"]
+    assert all(secret not in _text_of(m.get("content")) for m in sent)
+    # the live session is untouched: same messages, same armed emit pointer
+    assert session.messages == before
+    assert session.pending_tool_use_id == "e1"
+
+
+def test_correctness_review_does_not_mutate_session():
+    review = {"verdict": "issues_found", "summary": "s",
+              "findings": [{"severity": "minor", "category": "logic", "problem": "p", "fix": "f"}],
+              "strengths": []}
+    session = Session(messages=[{"role": "user", "content": "seed"}],
+                      pending_tool_use_id="e1", protocol=dict(PROTO))
+    n_before = len(session.messages)
+    agent = make_agent([tool_msg(("emit_correctness_review", review, "cr1"))])
+    agent.correctness_review(session)
+    assert len(session.messages) == n_before          # transcript length unchanged
+    assert session.pending_tool_use_id == "e1"         # emit pointer not repointed at the review
+
+
+def test_correctness_review_uses_review_model():
+    review = {"verdict": "sound", "summary": "ok", "findings": [], "strengths": []}
+    session = Session(messages=[{"role": "user", "content": "seed"}],
+                      pending_tool_use_id="e1", protocol=dict(PROTO))
+    agent = make_agent([tool_msg(("emit_correctness_review", review, "cr1"))])
+    agent.review_model = "reviewer-sentinel-model"     # independent second-opinion tier
+    agent.correctness_review(session)
+    assert agent.client.calls[-1]["model"] == "reviewer-sentinel-model"
+
+
+def test_correctness_review_quality_gate_fallback():
+    """When no quality_gate is passed, it is pulled from the protocol's own
+    validation_report and rendered into the reviewer payload as ground truth."""
+    marker = "QG_FALLBACK_MARKER_42"
+    proto = dict(PROTO, validation_report={"quality_gate": {"status": "warnings",
+                                                            "note": marker}})
+    session = Session(messages=[{"role": "user", "content": "seed"}],
+                      pending_tool_use_id="e1", protocol=proto)
+    review = {"verdict": "sound", "summary": "ok", "findings": [], "strengths": []}
+    agent = make_agent([tool_msg(("emit_correctness_review", review, "cr1"))])
+    agent.correctness_review(session, quality_gate=None)
+    sent = agent.client.calls[0]["messages"]
+    assert any(marker in _text_of(m.get("content")) for m in sent)
+
+
+def test_correctness_review_raises_when_no_protocol():
+    session = Session(messages=[{"role": "user", "content": "seed"}], pending_tool_use_id="e1")
+    session.protocol = None
+    agent = make_agent([])  # empty queue: raising before any model call proves no spend
+    try:
+        agent.correctness_review(session)
+        assert False, "expected AgentError when there is no protocol to review"
+    except AgentError:
+        pass
+    assert agent.client.calls == []
 
 
 def test_apply_correctness_fixes_reemits():
@@ -349,7 +424,7 @@ def test_truncation_raises_actionable_error_at_cap():
         agent.analyze("A methods section describing a reaction incubated at 30 C for 4 h.")
         assert False, "expected AgentError when truncation persists to the cap"
     except AgentError as e:
-        assert "MAX_TOKENS" in str(e)
+        assert "too large" in str(e).lower()  # user-actionable, no env-var leak
 
 
 def test_followup_restores_session_on_failure():
@@ -474,6 +549,69 @@ def test_parallel_grounding_answers_all_calls_in_one_turn():
     answered = {m["tool_call_id"] for m in session.messages if m.get("role") == "tool"}
     assert {"s1", "s2"} <= answered
     assert set(session.grounding_call_ids) == {"s1", "s2"}
+
+
+# --- Epic 2 §I.5: emit-boundary bounded repair (one re-emit, then hard fail) ----
+
+# A structurally UNUSABLE (FATAL-class) emit payload: empty title.
+_FATAL_EMIT = {"title": "", "summary": "s", "steps": [{"instruction": "x"}]}
+
+
+def test_emit_boundary_reemits_once_then_recovers():
+    # FATAL -> GOOD: a single bounded re-emit recovers, no partial render.
+    session = Session(messages=[{"role": "user", "content": "seed"}], request_tool_use_id="c1")
+    queue = [
+        tool_msg(("emit_protocol", _FATAL_EMIT, "e1")),   # structurally unusable
+        tool_msg(("emit_protocol", PROTO, "e2")),          # valid on the forced re-emit
+    ]
+    agent = make_agent(queue)
+    out = agent.continue_with_answers(session, answers=[])
+    assert out["title"] == "P"                              # recovered payload returned
+    assert session.pending_tool_use_id == "e2"              # armed on the good emit
+    assert len(agent.client.calls) == 2                     # exactly one re-emit
+    # the re-emit turn quoted the structural error back to the model.
+    assert any(m["role"] == "user" and isinstance(m["content"], str)
+               and "structurally unusable" in m["content"] for m in session.messages)
+
+
+def test_emit_boundary_bounded_repair_raises_actionable_failure():
+    # FATAL -> FATAL: after the single re-emit the payload is still unusable, so the
+    # agent raises an actionable AgentError (never a partial protocol), and the
+    # transactional rollback leaves the session retryable.
+    session = Session(messages=[{"role": "user", "content": "seed"}], request_tool_use_id="c1")
+    before_len = len(session.messages)
+    queue = [
+        tool_msg(("emit_protocol", _FATAL_EMIT, "e1")),
+        tool_msg(("emit_protocol", dict(_FATAL_EMIT), "e2")),  # still unusable
+    ]
+    agent = make_agent(queue)
+    try:
+        agent.continue_with_answers(session, answers=[])
+        assert False, "expected AgentError on a still-unusable re-emit"
+    except AgentError as e:
+        assert "structurally unusable" in str(e)           # actionable, names the failure
+    # rolled back: pending clarification re-armed, appended turns dropped.
+    assert session.request_tool_use_id == "c1"
+    assert session.pending_tool_use_id is None
+    assert len(session.messages) == before_len
+    # ...and a retry now succeeds on the restored session (it wasn't bricked).
+    agent2 = make_agent([tool_msg(("emit_protocol", PROTO, "e9"))])
+    out = agent2.continue_with_answers(session, answers=[])
+    assert out["title"] == "P"
+
+
+def test_emit_boundary_reemit_on_revise_path():
+    # the same bounded-repair gate guards the revise/_followup emit terminal.
+    session = Session(messages=[{"role": "user", "content": "seed"}], pending_tool_use_id="e0")
+    queue = [
+        tool_msg(("emit_protocol", _FATAL_EMIT, "e1")),        # unusable revise output
+        tool_msg(("emit_protocol", dict(PROTO, title="P2"), "e2")),
+    ]
+    agent = make_agent(queue)
+    out = agent.revise(session, "use 150 uL wells")
+    assert out["title"] == "P2"
+    assert session.pending_tool_use_id == "e2"
+    assert len(agent.client.calls) == 2
 
 
 if __name__ == "__main__":

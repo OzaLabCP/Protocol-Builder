@@ -64,6 +64,21 @@ MODEL_FAST = _first(
     default=(_defaults.get("model_fast", "") if not _model_env else ""),
 )
 
+# --- Reviewer model & failure policy (Epic-3) ------------------------------
+# The adversarial correctness_review AND post-fix verify_fixes run on this tier.
+# Defaults to MODEL (already provider-resolved above), so it behaves byte-identically
+# on openrouter and anthropic-direct with no extra config. Set GAPFILLER_REVIEW_MODEL
+# to a provider-appropriate slug for an independent second-opinion model. Resolved via
+# the same _first(..., default=MODEL) path as MODEL/MODEL_FAST — never a hard-coded slug.
+REVIEW_MODEL = _first(os.environ.get("GAPFILLER_REVIEW_MODEL", ""), default=MODEL)
+
+# When true, a review that cannot run BLOCKS delivery (HTTP 424) instead of degrading to
+# review_status="unavailable". Default false so local dev and the best-effort pipeline are
+# unchanged. Repo truthiness idiom (default "0" -> False).
+# Unlike the older `!= "0"` flags, an explicitly-empty value is treated as unset (off): this
+# gate can BLOCK delivery, so an accidentally-empty env var must not silently force it on.
+REVIEW_REQUIRED = os.environ.get("GAPFILLER_REVIEW_REQUIRED", "0").strip() not in ("", "0")
+
 # Optional attribution headers OpenRouter surfaces on your dashboard (OpenRouter only).
 OPENROUTER_REFERER = os.environ.get("OPENROUTER_REFERER", "")
 OPENROUTER_TITLE = os.environ.get("OPENROUTER_TITLE", "Methods Gap-Filler")
@@ -129,6 +144,10 @@ ENABLE_PROTOCOLS_IO = (
 # spending its whole tool-round allowance on searches before it converges to the emit. Raise
 # GAPFILLER_PUBMED_BUDGET for deeper grounding at the cost of speed.
 PUBMED_BUDGET = int(os.environ.get("GAPFILLER_PUBMED_BUDGET", "6"))
+# The analyze phase only SCOPES gaps (grounding happens later at emit), so it gets a small,
+# separate search budget — the full budget here let it grind for minutes on a large or
+# off-topic document (e.g. a non-Methods PDF) and blow the browser's fetch timeout.
+ANALYZE_PUBMED_BUDGET = int(os.environ.get("GAPFILLER_ANALYZE_PUBMED_BUDGET", "2"))
 PUBMED_RETMAX_CAP = int(os.environ.get("GAPFILLER_PUBMED_RETMAX", "8"))
 # The model is prompted to batch its searches into one turn; they run concurrently. Cap the
 # concurrency to what NCBI's rate limit tolerates (~3 req/s without an API key, ~10 with one)
