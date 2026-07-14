@@ -96,6 +96,19 @@
   details.evidence { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
   details.evidence summary { cursor: pointer; color: var(--lit); font-weight: 600; }
   details.evidence blockquote { margin: 6px 0 0; padding-left: 10px; border-left: 2px solid var(--line); }
+  /* Collapsible sections — keep the initial protocol view a lean walkthrough. */
+  details.collapse { margin: 8px 0; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.02); }
+  details.collapse > summary { cursor: pointer; padding: 8px 12px; font-weight: 600; color: var(--text); list-style: none; user-select: none; }
+  details.collapse > summary::-webkit-details-marker { display: none; }
+  details.collapse > summary::before { content: "▸ "; color: var(--muted); }
+  details.collapse[open] > summary::before { content: "▾ "; }
+  details.collapse > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .collapse-body { padding: 4px 12px 12px; }
+  /* the per-step "Details" expander is lighter — it nests inside a .step */
+  .step details.collapse { border: none; background: none; margin: 4px 0 0; }
+  .step details.collapse > summary { padding: 2px 0; font-weight: 500; font-size: 12.5px; color: var(--lit); }
+  .step .collapse-body { padding: 4px 0 0 10px; }
+  @media print { details.collapse > summary::before { content: ""; } .collapse-body { padding-left: 0; } }
   .cp { font-size: 13px; color: var(--muted); margin-top: 4px; }
   .warn { color: var(--verify); font-size: 13px; margin-top: 4px; }
   .pnote { color: var(--muted); font-size: 12.5px; font-family: ui-monospace, monospace; }
@@ -1264,11 +1277,41 @@ function _entityLink(_id) {
   a.setAttribute("aria-label","Scroll to the flagged value");
   a.addEventListener("click",(ev)=>{ ev.preventDefault();
     const t = document.getElementById(_domId(_id)); if(!t) return;   // inert if no target
+    _openAncestors(t);   // reveal it if it lives inside a collapsed section
     t.scrollIntoView({behavior:"smooth",block:"center"});
     t.classList.add("flash"); setTimeout(()=>t.classList.remove("flash"),1600);
   });
   return a;
 }
+
+// Open every <details> ancestor of a node so a jump/anchor target inside a collapsed
+// section actually becomes visible.
+function _openAncestors(node){ let n = node; while(n){ if(n.tagName === "DETAILS") n.open = true; n = n.parentElement; } }
+
+// A collapsed section: a <details class="collapse"> whose body is built lazily by `build`.
+// Keeps the initial protocol view lean; the user expands what they want.
+function collapsible(title, build, open){
+  const d = el("details","collapse");
+  if (open) d.open = true;
+  d.appendChild(el("summary", null, esc(title)));
+  const body = el("div","collapse-body");
+  try { build(body); } catch (_e) { /* a malformed section never blanks the panel */ }
+  d.appendChild(body);
+  return d;
+}
+
+// Printing must show the whole protocol, not just section headers: open collapsibles for
+// the print, then restore whatever the user had expanded.
+window.addEventListener("beforeprint", () => {
+  document.querySelectorAll("#result-panel details.collapse").forEach((d) => {
+    if (!d.open) { d.open = true; d.dataset.wasClosed = "1"; }
+  });
+});
+window.addEventListener("afterprint", () => {
+  document.querySelectorAll('#result-panel details.collapse[data-was-closed="1"]').forEach((d) => {
+    d.open = false; delete d.dataset.wasClosed;
+  });
+});
 
 function renderReadiness(r) {
   const s = _readinessSignals(r);
@@ -1450,8 +1493,7 @@ async function submitValueEdit(entity, kind, field, newValue, newUnit, formEl) {
 function renderProtocol(p) {
   const P = $("#result-panel"); P.innerHTML = "";
   P.appendChild(el("h2", null, esc(p.title || "Protocol")));
-  if (p.summary) P.appendChild(el("p", "muted", esc(p.summary)));
-  if (p.estimated_duration) P.appendChild(el("p", "muted", "Estimated duration: " + esc(p.estimated_duration)));
+  if (p.estimated_duration) P.appendChild(el("p", "muted small", "⏱ Estimated duration: " + esc(p.estimated_duration)));
 
   P.appendChild(viewToggle());
   P.appendChild(toolbar());
@@ -1461,116 +1503,135 @@ function renderProtocol(p) {
   P.appendChild(el("div", null, "")).id = "verify-anchor";
   const changes = protocolDiff(PREV_PROTOCOL, p);
   if (changes.length) P.appendChild(diffBox(changes));
-  P.appendChild(validationSummary(p.validation_report));
-  P.appendChild(legend());
 
-  // Materials
-  if ((p.materials || []).length) {
-    P.appendChild(el("h3", null, "Materials"));
-    const tbl = el("table", "materials");
-    tbl.innerHTML = "<tr><th>Reagent</th><th>Amount</th><th>Grade/vendor</th><th>Provenance</th></tr>";
-    (p.materials).forEach((m) => {
-      const tr = el("tr");
-      if (m._id) tr.id = _domId(m._id);
-      const amt = [m.amount, m.unit].filter((x) => x != null && x !== "").join(" ");
-      tr.appendChild(el("td", null, esc(m.name)));
-      const amtCell = el("td", null, esc(amt));
-      if (m._id) {
-        const eb = editButton((m.name || "material") + " amount");
-        eb.onclick = () => openInlineEdit(amtCell, m, "material", "amount");
-        amtCell.appendChild(eb);
-      }
-      if (m.material_id) amtCell.appendChild(lockToggle(m.material_id, m.name || "material"));
-      tr.appendChild(amtCell);
-      tr.appendChild(el("td", null, esc(m.vendor_or_grade || "—")));
-      tr.appendChild(provCell(m));
-      tbl.appendChild(tr);
-    });
-    P.appendChild(tableWrap(tbl, "Materials", "Materials"));
-  }
+  // Context / overview is collapsed so the step-by-step walkthrough leads, not a wall of preamble.
+  if (p.summary) P.appendChild(collapsible("Overview & context", (b) => {
+    b.appendChild(el("p", "muted", esc(p.summary)));
+  }, false));
 
-  if ((p.equipment || []).length) {
-    P.appendChild(el("h3", null, "Equipment"));
-    const ul = el("ul"); p.equipment.forEach((e) => ul.appendChild(el("li", null, esc(e)))); P.appendChild(ul);
-  }
-
-  // Steps
+  // PROCEDURE — the salient walkthrough. Each step shows its title, instruction, timing, and any
+  // safety warning up front; the denser per-step detail (parameters, sub-steps, provenance) tucks
+  // into a collapsed "Details" expander so the initial view stays scannable.
   P.appendChild(el("h3", null, "Procedure"));
   const steps = el("div");
   (p.steps || []).forEach((s) => {
     const d = el("div", "step");
     if (s._id) d.id = _domId(s._id);
-    d.appendChild(el("div", null, `<span class="num">${esc(s.number)}.</span> <b>${esc(s.title)}</b> ${tierPill(s.provenance)}${anchorInline(s)}`));
+    d.appendChild(el("div", null, `<span class="num">${esc(s.number)}.</span> <b>${esc(s.title)}</b>`));
     d.appendChild(el("div", null, esc(s.instruction)));
     const meta = [s.duration ? "⏱ " + esc(s.duration) : "", s.temperature ? "🌡 " + esc(s.temperature) : ""].filter(Boolean).join(" · ");
     if (meta) d.appendChild(el("div", "cp", meta));
-    (s.critical_parameters || []).forEach((cp) => {
-      const line = el("div", "cp", `${esc(cp.name)}: <b>${esc([cp.value, cp.unit].filter(Boolean).join(" "))}</b> ${tierPill(cp.provenance)} ${citeInline(cp)}${anchorInline(cp)}${flagInline(cp)}${evidenceInline(cp)}`);
-      if (cp._id) {
-        line.id = _domId(cp._id);
-        const eb = editButton(cp.name || "critical parameter");
-        eb.onclick = () => openInlineEdit(line, cp, "critical_parameter", "value");
-        line.appendChild(eb);
-      }
-      if (cp.parameter_id) line.appendChild(lockToggle(cp.parameter_id, cp.name || "critical parameter"));
-      if (cp.provenance_note) line.appendChild(el("div", "pnote", esc(cp.provenance_note)));
-      d.appendChild(line);
-    });
-    (s.substeps || []).forEach((ss) => { const sl = el("div", "cp", `${esc(ss.number)} ${esc(ss.instruction)} ${tierPill(ss.provenance)}${anchorInline(ss)}${flagInline(ss)}`); if (ss._id) sl.id = _domId(ss._id); d.appendChild(sl); });
-    (s.warnings || []).forEach((w) => d.appendChild(el("div", "warn", "⚠ " + esc(w))));
+    (s.warnings || []).forEach((w) => d.appendChild(el("div", "warn", "⚠ " + esc(w))));  // safety stays visible
+
+    const cps = s.critical_parameters || [];
+    const subs = s.substeps || [];
+    if (cps.length || subs.length) {
+      const n = cps.length + subs.length;
+      d.appendChild(collapsible(`Details — ${n} item${n === 1 ? "" : "s"}`, (body) => {
+        cps.forEach((cp) => {
+          const line = el("div", "cp", `${esc(cp.name)}: <b>${esc([cp.value, cp.unit].filter(Boolean).join(" "))}</b> ${tierPill(cp.provenance)} ${citeInline(cp)}${anchorInline(cp)}${flagInline(cp)}${evidenceInline(cp)}`);
+          if (cp._id) {
+            line.id = _domId(cp._id);
+            const eb = editButton(cp.name || "critical parameter");
+            eb.onclick = () => openInlineEdit(line, cp, "critical_parameter", "value");
+            line.appendChild(eb);
+          }
+          if (cp.parameter_id) line.appendChild(lockToggle(cp.parameter_id, cp.name || "critical parameter"));
+          if (cp.provenance_note) line.appendChild(el("div", "pnote", esc(cp.provenance_note)));
+          body.appendChild(line);
+        });
+        subs.forEach((ss) => { const sl = el("div", "cp", `${esc(ss.number)} ${esc(ss.instruction)} ${tierPill(ss.provenance)}${anchorInline(ss)}${flagInline(ss)}`); if (ss._id) sl.id = _domId(ss._id); body.appendChild(sl); });
+      }, false));
+    }
     steps.appendChild(d);
   });
   P.appendChild(steps);
 
-  // Titration series worklist (present for dilution/dose-response/screen protocols)
-  const ts = p.titration_series;
-  if (ts && (ts.points || []).length) {
-    const unit = ts.unit ? ` (${esc(ts.unit)})` : "";
-    P.appendChild(el("h3", null, `Titration series — ${esc(ts.variable || "condition")}${unit} ${tierPill(ts.provenance)}`));
-    const meta = [ts.spacing ? "spacing: " + esc(ts.spacing) : "", esc(ts.rationale || "")].filter(Boolean).join(" · ");
-    if (meta) P.appendChild(el("p", "muted small", meta));
-    const comp = [];
-    ts.points.forEach((pt) => (pt.components || []).forEach((c) => { if (c.name && !comp.includes(c.name)) comp.push(c.name); }));
-    const tt = el("table");
-    tt.innerHTML = "<tr><th>Condition</th><th>Target</th>" + comp.map((n) => `<th>${esc(n)}</th>`).join("") + "</tr>";
-    ts.points.forEach((pt) => {
-      const vols = {}; (pt.components || []).forEach((c) => (vols[c.name] = c.volume));
-      const tr = el("tr");
-      if (pt._id) tr.id = _domId(pt._id);
-      tr.appendChild(el("td", null, esc(pt.label || "")));
-      tr.appendChild(el("td", null, esc(pt.target_concentration || "—")));
-      comp.forEach((n) => tr.appendChild(el("td", null, esc(vols[n] != null ? vols[n] : "—"))));
-      tt.appendChild(tr);
-    });
-    P.appendChild(tableWrap(tt, "Titration series worklist", "Titration series worklist"));
+  // --- Everything below is collapsed by default: reference detail, not the walkthrough. ---
+
+  if ((p.materials || []).length) {
+    P.appendChild(collapsible(`Materials — ${p.materials.length}`, (b) => {
+      const tbl = el("table", "materials");
+      tbl.innerHTML = "<tr><th>Reagent</th><th>Amount</th><th>Grade/vendor</th><th>Provenance</th></tr>";
+      (p.materials).forEach((m) => {
+        const tr = el("tr");
+        if (m._id) tr.id = _domId(m._id);
+        const amt = [m.amount, m.unit].filter((x) => x != null && x !== "").join(" ");
+        tr.appendChild(el("td", null, esc(m.name)));
+        const amtCell = el("td", null, esc(amt));
+        if (m._id) { const eb = editButton((m.name || "material") + " amount"); eb.onclick = () => openInlineEdit(amtCell, m, "material", "amount"); amtCell.appendChild(eb); }
+        if (m.material_id) amtCell.appendChild(lockToggle(m.material_id, m.name || "material"));
+        tr.appendChild(amtCell);
+        tr.appendChild(el("td", null, esc(m.vendor_or_grade || "—")));
+        tr.appendChild(provCell(m));
+        tbl.appendChild(tr);
+      });
+      b.appendChild(tableWrap(tbl, "Materials", "Materials"));
+    }, false));
   }
 
-  // Assumptions log — the payoff panel
-  P.appendChild(el("h3", null, "Assumptions log — everything not stated in the source"));
-  const tbl = el("table");
-  tbl.innerHTML = "<tr><th>Parameter</th><th>Value</th><th>Provenance</th><th>Basis</th></tr>";
-  (p.assumptions_log || []).forEach((a) => {
-    const tr = el("tr");
-    tr.appendChild(el("td", null, esc(a.parameter)));
-    tr.appendChild(el("td", null, esc(a.value)));
-    tr.appendChild(provCell(a));
-    const basis = el("td"); basis.innerHTML = esc(a.basis || "") + (a.verify ? ' <span class="badge-warn">· verify</span>' : "");
-    tr.appendChild(basis);
-    tbl.appendChild(tr);
-  });
-  P.appendChild(tableWrap(tbl, "Assumptions log", "Assumptions log — values not stated in the source"));
+  if ((p.equipment || []).length) {
+    P.appendChild(collapsible(`Equipment — ${p.equipment.length}`, (b) => {
+      const ul = el("ul"); p.equipment.forEach((e) => ul.appendChild(el("li", null, esc(e)))); b.appendChild(ul);
+    }, false));
+  }
+
+  const ts = p.titration_series;
+  if (ts && (ts.points || []).length) {
+    P.appendChild(collapsible(`Titration series — ${esc(ts.variable || "condition")}${ts.unit ? " (" + esc(ts.unit) + ")" : ""}`, (b) => {
+      b.appendChild(el("div", "cp", tierPill(ts.provenance)));
+      const meta = [ts.spacing ? "spacing: " + esc(ts.spacing) : "", esc(ts.rationale || "")].filter(Boolean).join(" · ");
+      if (meta) b.appendChild(el("p", "muted small", meta));
+      const comp = [];
+      ts.points.forEach((pt) => (pt.components || []).forEach((c) => { if (c.name && !comp.includes(c.name)) comp.push(c.name); }));
+      const tt = el("table");
+      tt.innerHTML = "<tr><th>Condition</th><th>Target</th>" + comp.map((n) => `<th>${esc(n)}</th>`).join("") + "</tr>";
+      ts.points.forEach((pt) => {
+        const vols = {}; (pt.components || []).forEach((c) => (vols[c.name] = c.volume));
+        const tr = el("tr");
+        if (pt._id) tr.id = _domId(pt._id);
+        tr.appendChild(el("td", null, esc(pt.label || "")));
+        tr.appendChild(el("td", null, esc(pt.target_concentration || "—")));
+        comp.forEach((n) => tr.appendChild(el("td", null, esc(vols[n] != null ? vols[n] : "—"))));
+        tt.appendChild(tr);
+      });
+      b.appendChild(tableWrap(tt, "Titration series worklist", "Titration series worklist"));
+    }, false));
+  }
+
+  P.appendChild(collapsible(`Assumptions log${(p.assumptions_log || []).length ? " — " + p.assumptions_log.length : ""} (values not stated in the source)`, (b) => {
+    const tbl = el("table");
+    tbl.innerHTML = "<tr><th>Parameter</th><th>Value</th><th>Provenance</th><th>Basis</th></tr>";
+    (p.assumptions_log || []).forEach((a) => {
+      const tr = el("tr");
+      tr.appendChild(el("td", null, esc(a.parameter)));
+      tr.appendChild(el("td", null, esc(a.value)));
+      tr.appendChild(provCell(a));
+      const basis = el("td"); basis.innerHTML = esc(a.basis || "") + (a.verify ? ' <span class="badge-warn">· verify</span>' : "");
+      tr.appendChild(basis);
+      tbl.appendChild(tr);
+    });
+    b.appendChild(tableWrap(tbl, "Assumptions log", "Assumptions log — values not stated in the source"));
+  }, false));
 
   if ((p.open_questions || []).length) {
-    P.appendChild(el("h3", null, "Open questions"));
-    const ul = el("ul"); p.open_questions.forEach((q) => ul.appendChild(el("li", "muted", esc(q)))); P.appendChild(ul);
+    P.appendChild(collapsible(`Open questions — ${p.open_questions.length}`, (b) => {
+      const ul = el("ul"); p.open_questions.forEach((q) => ul.appendChild(el("li", "muted", esc(q)))); b.appendChild(ul);
+    }, false));
   }
 
   if (GLOG.length) {
-    P.appendChild(el("h3", "noprint gnd", "How values were grounded"));
-    const ul = el("ul", "noprint gnd");
-    GLOG.forEach((g) => ul.appendChild(el("li", "muted", esc(g))));
-    P.appendChild(ul);
+    P.appendChild(collapsible("How values were grounded", (b) => {
+      const ul = el("ul", "gnd"); GLOG.forEach((g) => ul.appendChild(el("li", "muted", esc(g)))); b.appendChild(ul);
+    }, false)).classList.add("noprint");
   }
+
+  // The concise, honest verdict is the readiness card above; the full validation breakdown and
+  // the provenance legend are reference detail — collapsed.
+  P.appendChild(collapsible("Validation details & provenance legend", (b) => {
+    b.appendChild(validationSummary(p.validation_report));
+    b.appendChild(legend());
+  }, false));
 
   P.appendChild(refineBox());
 
