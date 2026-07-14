@@ -303,7 +303,7 @@ def test_ddl_migration_sets_user_version():
         raw = sqlite3.connect(db_path)
         try:
             uv = raw.execute("PRAGMA user_version").fetchone()[0]
-            assert uv == CURRENT_USER_VERSION == 1
+            assert uv == CURRENT_USER_VERSION == 2
             names = {row[0] for row in raw.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
             assert {"projects", "protocol_versions"} <= names

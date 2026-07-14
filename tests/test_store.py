@@ -231,6 +231,122 @@ def test_restart_survival():
     print("PASS test_restart_survival")
 
 
+def test_concurrent_version_allocation_same_project():
+    """BLOCKER-5: two near-simultaneous saves on ONE project each get a DISTINCT,
+    sequential version_number allocated by the store (never a collision or a lost
+    write), both rows survive, and the UNIQUE(project_id, version_number) index holds.
+
+    Each worker passes version_number=0 (a placeholder) — the store is the sole
+    authority for the number, so a caller can no longer race the count."""
+    import threading
+
+    store = SQLiteProjectStore(":memory:")
+    p = store.create_project(_mk_project())
+
+    barrier = threading.Barrier(2)
+    results: dict[str, int] = {}
+    errors: list[Exception] = []
+    lock = threading.Lock()
+
+    def worker():
+        try:
+            v = _mk_version(p.project_id, version_number=0)
+            barrier.wait()  # maximize the overlap of the two saves
+            saved = store.save_protocol_version(v)
+            with lock:
+                results[saved.version_id] = saved.version_number
+        except Exception as e:  # noqa: BLE001
+            with lock:
+                errors.append(e)
+
+    t1 = threading.Thread(target=worker)
+    t2 = threading.Thread(target=worker)
+    t1.start(); t2.start()
+    t1.join(); t2.join()
+
+    assert not errors, f"unexpected save error(s): {errors!r}"
+    # Two distinct rows, numbered 1 and 2 — no collision, no lost write.
+    assert len(results) == 2
+    assert sorted(results.values()) == [1, 2]
+    # Both rows are durable and the numbers reconcile with what the store lists back.
+    lst = store.list_protocol_versions(p.project_id)
+    assert len(lst) == 2
+    assert {r.version_number for r in lst} == {1, 2}
+    store.close()
+    print("PASS test_concurrent_version_allocation_same_project")
+
+
+def test_delete_project_removes_project_and_versions():
+    """BLOCKER-4 (store happy path): delete drops the project row AND its versions;
+    a subsequent read raises ProjectNotFound and the version list is empty."""
+    store = SQLiteProjectStore(":memory:")
+    p = store.create_project(_mk_project())
+    v1 = store.save_protocol_version(_mk_version(p.project_id, version_number=0))
+    v2 = store.save_protocol_version(_mk_version(p.project_id, version_number=0))
+    assert len(store.list_protocol_versions(p.project_id)) == 2
+    assert {v1.version_number, v2.version_number} == {1, 2}
+
+    store.delete_project(p.project_id)
+
+    raised = None
+    try:
+        store.get_project(p.project_id)
+    except ProjectNotFound as e:
+        raised = e
+    assert raised is not None
+    assert store.list_protocol_versions(p.project_id) == []
+    # The version rows themselves are gone (not merely unlinked).
+    for vid in (v1.version_id, v2.version_id):
+        try:
+            store.get_protocol_version(vid)
+            raise AssertionError("expected ProjectNotFound for deleted version")
+        except ProjectNotFound:
+            pass
+    store.close()
+    print("PASS test_delete_project_removes_project_and_versions")
+
+
+def test_delete_unknown_project_raises_not_found():
+    """BLOCKER-4 (store 404 path): deleting an absent project raises ProjectNotFound
+    (the deterministic signal the endpoint maps to HTTP 404)."""
+    store = SQLiteProjectStore(":memory:")
+    raised = None
+    try:
+        store.delete_project("proj_does_not_exist")
+    except ProjectNotFound as e:
+        raised = e
+    assert raised is not None
+    store.close()
+    print("PASS test_delete_unknown_project_raises_not_found")
+
+
+def test_delete_project_retains_other_projects():
+    """BLOCKER-4 (correct-retention): deleting one project leaves every OTHER project
+    and its versions fully intact."""
+    store = SQLiteProjectStore(":memory:")
+    a = store.create_project(_mk_project(title="Keep me"))
+    b = store.create_project(_mk_project(title="Delete me"))
+    va = store.save_protocol_version(_mk_version(a.project_id, version_number=0))
+    store.save_protocol_version(_mk_version(b.project_id, version_number=0))
+
+    store.delete_project(b.project_id)
+
+    # A untouched: project readable, its one version survives with its number.
+    kept = store.get_project(a.project_id)
+    assert kept.title == "Keep me"
+    lst = store.list_protocol_versions(a.project_id)
+    assert len(lst) == 1 and lst[0].version_id == va.version_id
+    # B gone.
+    try:
+        store.get_project(b.project_id)
+        raise AssertionError("expected ProjectNotFound for deleted project B")
+    except ProjectNotFound:
+        pass
+    assert store.list_protocol_versions(b.project_id) == []
+    store.close()
+    print("PASS test_delete_project_retains_other_projects")
+
+
 def main():
     test_create_get()
     test_update()
@@ -239,6 +355,10 @@ def main():
     test_invalid_id_returns_none()
     test_optimistic_concurrency_conflict()
     test_restart_survival()
+    test_concurrent_version_allocation_same_project()
+    test_delete_project_removes_project_and_versions()
+    test_delete_unknown_project_raises_not_found()
+    test_delete_project_retains_other_projects()
     print("\nAll store tests passed.")
 
 

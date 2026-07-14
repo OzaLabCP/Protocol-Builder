@@ -26,7 +26,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
@@ -653,14 +653,14 @@ def critique(req: CritiqueRequest) -> dict:
                 raise HTTPException(500, _explain(exc))
             restored = _enforce_locks(store.op_base, protocol, req.locked_ids)  # may raise 409
             # Independent, fresh-context re-review of the corrected protocol against the
-            # ORIGINAL findings. Computed BEFORE _finish so the review gate feeds the
-            # persisted ProtocolVersion.result and the project's validation_summary.
-            fixv = _verify_fixes(store, findings)
+            # ORIGINAL findings. Deferred to _finish so it judges the finalized artifact,
+            # then feeds the persisted ProtocolVersion.result and validation_summary.
             result = _finish(req.session_id, store, protocol,
-                             source_op="critique_apply", fix_verification=fixv,
+                             source_op="critique_apply",
+                             verify=lambda: _verify_fixes(store, findings),
                              restored_locked_ids=restored)
             store.correctness_review = None  # stale as an actionable to-apply list
-            store.fix_verification = fixv    # retain the verification outcome
+            store.fix_verification = result.get("fix_verification")  # retain the verification outcome
             # result already carries fix_verification + review_status via _finish.
             applied_result = {**result,
                               "correctness_review": review, "review_validation_report": report,
@@ -702,13 +702,14 @@ def apply_fixes(req: DesignRequest) -> dict:
             raise HTTPException(500, _explain(exc))
         restored = _enforce_locks(store.op_base, protocol, req.locked_ids)  # may raise 409
         # Independent re-review of the corrected protocol against the ORIGINAL findings,
-        # computed BEFORE _finish so the review gate feeds the persisted version/summary.
-        fixv = _verify_fixes(store, findings)
+        # deferred to _finish so it judges the finalized artifact that feeds the
+        # persisted version/summary.
         result = _finish(req.session_id, store, protocol,
-                         source_op="apply_fixes", fix_verification=fixv,
+                         source_op="apply_fixes",
+                         verify=lambda: _verify_fixes(store, findings),
                          restored_locked_ids=restored)
         store.correctness_review = None  # stale as an actionable to-apply list
-        store.fix_verification = fixv    # retain the verification outcome
+        store.fix_verification = result.get("fix_verification")  # retain the verification outcome
         if ik:
             store.idem_put(ik, result)
         return result  # already carries fix_verification + review_status
@@ -1016,13 +1017,11 @@ def _auto_review(session_id: str, store: Store, result: dict) -> dict:
             return {**result, "correctness_review": review,
                     "auto_review": True, "fixes_applied": 0}
         # Independent, fresh-context re-verify of the corrected protocol against the ORIGINAL
-        # findings, so the re-stamp yields passed_with_findings_fixed / failed. Point the
-        # store at the corrected protocol so the verifier audits what we ship.
-        store.protocol = fixed
-        fixv = _verify_fixes(store, findings)
+        # findings, so the re-stamp yields passed_with_findings_fixed / failed. Deferred to
+        # _finish so the verifier audits the finalized artifact we ship and persist.
         result = _finish(session_id, store, fixed, source_op="auto_review",
-                         fix_verification=fixv)  # re-validate + replace + re-stamp
-        store.fix_verification = fixv
+                         verify=lambda: _verify_fixes(store, findings))  # re-validate + replace + re-stamp
+        store.fix_verification = result.get("fix_verification")
         applied = len(fixable)
         store.correctness_review = None  # applied — stale against the corrected protocol
     else:
@@ -1063,7 +1062,7 @@ def _finish(
     store: Store,
     protocol: dict,
     source_op: str = "resolve",
-    fix_verification: dict | None = None,
+    verify: "Callable[[], dict] | None" = None,
     review_attempted: bool = True,
     audit_status: str | None = None,
     restored_locked_ids: list | None = None,
@@ -1076,6 +1075,9 @@ def _finish(
     )
     store.protocol = protocol
     store.session.protocol = protocol  # feed the fresh-context correctness review its input
+    # BLOCKER-2 ORDER: candidate is finalized AND is the store/session current protocol,
+    # so verify() judges the EXACT finalized artifact persisted below.
+    fix_verification = verify() if verify is not None else None
     # The complete, opaque payload. Persisted verbatim as ProtocolVersion.result so a
     # restore rehydrates renderResult unchanged. The two projects-layer keys are always
     # present (null when this session isn't linked to a durable project).
@@ -1438,12 +1440,11 @@ def _persist_protocol_version(
     current_protocol_version_id, refresh validation_summary/title, advance lifecycle to
     protocol_ready). One _finish == one version; current always points at the newest."""
     project, _rv = _STORE.get_project_versioned(store.project_id)
-    version_number = len(project.protocol_versions) + 1
     provenance = _PROVENANCE_BY_OP.get(source_op, source_op)
     ver = ProtocolVersion(
         version_id=version_id,
         project_id=store.project_id,
-        version_number=version_number,
+        version_number=0,  # placeholder — the store transactionally allocates the number
         provenance=provenance,
         source_op=source_op,
         title=(protocol.get("title") or "protocol"),
@@ -1452,7 +1453,7 @@ def _persist_protocol_version(
         chosen_assay=store.chosen_assay,
         created_at=datetime.now(timezone.utc),
     )
-    _STORE.save_protocol_version(ver)
+    ver = _STORE.save_protocol_version(ver)
 
     summary = _validation_summary_from_report(report, fix_verification)
     title = (protocol.get("title") or "").strip()
@@ -1742,6 +1743,24 @@ def get_project(project_id: str) -> dict:
     except ProjectNotFound:
         raise HTTPException(404, _PROJECT_404)
     return _project_detail(project)
+
+
+@app.delete("/api/project/{project_id}", dependencies=_MUTATING)
+def delete_project_endpoint(project_id: str) -> dict:
+    """Permanently remove a project row and its protocol_versions (deterministic 404 on
+    unknown id). Also drops any live in-memory session bound to the project."""
+    try:
+        project = _STORE.get_project(project_id)
+    except ProjectNotFound:
+        raise HTTPException(404, _PROJECT_404)
+    try:
+        _STORE.delete_project(project_id)
+    except ProjectNotFound:
+        raise HTTPException(404, _PROJECT_404)
+    sid = getattr(project, "session_id", None)
+    if sid:
+        _SESSIONS.pop(sid, None)
+    return {"deleted": project_id}
 
 
 @app.post("/api/project/{project_id}/workflow", dependencies=_MUTATING)

@@ -531,6 +531,39 @@ def test_abstract_supported():
     assert "materials[0] 'Mg'" in report["support"]["supported"]
 
 
+def test_bare_number_excerpt_does_not_support_value_with_unit():
+    """BLOCKER-3: a scalar material value (10 mM MgCl2) is host-corroborated only when the
+    resolved excerpt carries ALL of identity + value + unit. The exact "10 participants"
+    excerpt shares the NUMBER 10 but neither the parameter identity (MgCl2) nor the unit
+    (mM), so it must NOT support the claim; a matching "10 mM MgCl2" excerpt DOES."""
+    resolver = _matched_resolver()
+
+    # NEGATIVE: number matches, but the excerpt is about a participant count — no MgCl2,
+    # no mM. Bare-token presence used to "support" this; the strict rule downgrades it.
+    c_neg = cite("12345678")
+    c_neg["evidence"] = {"excerpt": "In total the trial enrolled 10 participants across three sites.",
+                         "section": "Abstract", "evidence_type": "abstract",
+                         "source_type": "peer_reviewed"}
+    mat_neg = _lit_material(c_neg, value="10", unit="mM", name="MgCl2")
+    p_neg = base_protocol(materials=[mat_neg])
+    report_neg = validate_and_finalize(p_neg, resolver)
+    assert mat_neg["claim_support_status"] != "supported"
+    assert mat_neg["claim_support_status"] == "evidence_unavailable"
+    assert mat_neg["identifier_verified"] is True and mat_neg["metadata_matched"] is True
+    assert "materials[0] 'MgCl2'" not in report_neg["support"]["supported"]
+
+    # POSITIVE control: identity + value + unit all present -> supported.
+    c_pos = cite("12345678")
+    c_pos["evidence"] = {"excerpt": "The reaction buffer contained 10 mM MgCl2 and 50 mM NaCl.",
+                         "section": "Methods", "evidence_type": "methods",
+                         "source_type": "peer_reviewed"}
+    mat_pos = _lit_material(c_pos, value="10", unit="mM", name="MgCl2")
+    p_pos = base_protocol(materials=[mat_pos])
+    report_pos = validate_and_finalize(p_pos, resolver)
+    assert mat_pos["claim_support_status"] == "supported"
+    assert "materials[0] 'MgCl2'" in report_pos["support"]["supported"]
+
+
 def test_unresolved_identifier_fields():
     c = cite("99999999")
     c["evidence"] = None

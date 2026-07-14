@@ -101,12 +101,47 @@ def _quote_supports(entry: dict, quote: str) -> bool:
     return _value_tokens_present(entry, _normalize_source(quote))
 
 
+def _param_identity_present(entry: dict, excerpt: str) -> bool:
+    """True iff this entry's PARAMETER IDENTITY appears in the (already-normalized)
+    `excerpt`: some name token equals an excerpt token, or (for name tokens of length ≥2)
+    prefixes one — so `mg`⊑`mg2+` and `mgcl2`==`mgcl2` corroborate, while a 1-char token
+    like `k` must match a whole token and can never latch onto `kept`. Name text is pulled
+    from every field an entry uses for its label (`name`/`parameter`/`material`/`variable`).
+    An entry with no name tokens cannot demonstrate identity -> False (never vacuous)."""
+    name_text = " ".join(str(entry.get(k) or "") for k in
+                         ("name", "parameter", "material", "variable"))
+    name_tokens = _WORD_RE.findall(name_text.lower())
+    if not name_tokens:
+        return False
+    excerpt_tokens = _WORD_RE.findall(excerpt)
+    for nt in name_tokens:
+        for et in excerpt_tokens:
+            if nt == et or (len(nt) >= 2 and et.startswith(nt)):
+                return True
+    return False
+
+
+def _unit_compatible_present(entry: dict, excerpt: str) -> bool:
+    """True iff the `excerpt` carries a COMPATIBLE UNIT for this scalar value. A unitless
+    entry has no dimension to corroborate, so it passes vacuously. Otherwise the entry's
+    unit is normalized the same way as the excerpt and required to occur as a WHOLE token
+    (`mM`->`mm` must match `… 2 mm …`, not the `mm` embedded in another word)."""
+    unit = entry.get("unit")
+    if unit in (None, ""):
+        return True
+    u = _normalize_source(str(unit))
+    if not u:
+        return True
+    return bool(re.search(r"(?<!\w)" + re.escape(u) + r"(?!\w)", excerpt))
+
+
 def _evidence_relevant(entry: dict, evidence) -> bool:
     """True iff the model-attached `evidence` excerpt actually addresses THIS value —
     the gate that separates a resolvable-but-unrelated citation (metadata_matched) from
     genuine excerpt support (claim_support_status == "supported"). Metadata-only evidence
-    can never support a claim; a scalar value's number must appear in the excerpt; a prose
-    value needs one of its significant name words to appear."""
+    can never support a claim; a scalar value's number must appear in the excerpt AND be
+    accompanied by this parameter's identity and a compatible unit; a prose value needs one
+    of its significant name words to appear."""
     if not isinstance(evidence, dict):
         return False
     if evidence.get("evidence_type") == "metadata_only":
@@ -115,7 +150,12 @@ def _evidence_relevant(entry: dict, evidence) -> bool:
     if len(excerpt) < 8:
         return False
     if any(entry.get(k) not in (None, "") for k in ("value", "amount")):
-        return _value_tokens_present(entry, excerpt)
+        # BLOCKER-3: scalar value host-corroborated only if excerpt carries ALL of
+        # (a) this parameter's identity, (b) the normalized value, (c) a compatible unit.
+        # A bare number, a wrong/absent unit, or an unrelated parameter -> NOT supported.
+        return (_value_tokens_present(entry, excerpt)
+                and _param_identity_present(entry, excerpt)
+                and _unit_compatible_present(entry, excerpt))
     # Prose entry: require a significant DESCRIPTIVE word to appear in the excerpt. Pull the
     # text from every field an entry type uses for its label — steps/substeps hold theirs in
     # title/instruction, not name; omitting those made this return True vacuously and let an

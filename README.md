@@ -28,11 +28,15 @@ DOI/PMID** against PubMed (Crossref for DOIs), confirms the retrieved title/year
 the cited ones, and downgrades anything that doesn't resolve — or resolves to a clearly
 different work — to `default_verify`. A resolved identifier with matching metadata earns
 a `✓ citation metadata verified` badge; this attests the reference is real and points to
-the cited work, **not** that the source's text supports the specific value. When the
-retrieved source exposes an abstract/description whose text actually contains that value,
-the host attaches it as a supporting excerpt and adds `✓ supporting excerpt attached`;
-otherwise the value stays grounded but is flagged `⚠ evidence unavailable`. Citations
-that don't resolve or point to a different work are flagged and downgraded.
+the cited work, **not** that the source's text supports the specific value. Claim support
+is deliberately **strict**: a scalar value earns `✓ supporting excerpt attached` only when
+the retrieved, host-owned excerpt carries **all three** of the parameter's identity, the
+value itself, and a compatible unit — as whole tokens. A bare number that happens to appear
+for an unrelated reason does **not** support the claim: an excerpt reading "…enrolled 10
+participants…" cannot support a `10 mM MgCl2` value (no `MgCl2`, no `mM`), whereas
+"…10 mM MgCl2…" does. When any of the three is missing the value stays grounded but is
+flagged `⚠ evidence unavailable` (never a false "supported"). Citations that don't resolve
+or point to a different work are flagged and downgraded.
 
 ## How it works
 
@@ -213,6 +217,12 @@ fresh-context re-review** of the *corrected* artifact against the original findi
 is a hostile auditor: it runs on a **from-scratch transcript** that never shows the "I just applied
 these fixes" turn, so it can't rubber-stamp — it judges only the protocol in front of it and must
 quote positive evidence to call a defect fixed.
+
+The order is load-bearing and identical on every apply path (including the DEFAULT auto-review
+pipeline): the corrected candidate is **finalized first** (validated, ids stamped, made the
+store/session-current protocol), the verifier then judges **that exact finalized artifact**, and
+only then is it **persisted** — so the `ProtocolVersion` written to the store embeds precisely the
+candidate that was verified, and its stored `fix_verification` is the outcome for that same bytes.
 
 - **Per-finding verdicts.** Each original finding is judged into one of five outcomes —
   `confirmed_fixed`, `not_applicable`, `still_present`, `partially_addressed`, or `regressed`.
@@ -396,7 +406,15 @@ session, a project **survives an application restart** and can be reopened by UR
   `GET /api/project/{id}/protocol.md` / `…/materials.csv` serve restart-safe downloads.
 - **Isolation & concurrency.** Projects never share transcript or protocol state. Writes use
   **optimistic concurrency** (a per-row `row_version`): a stale write loses the race and the
-  API returns **409**; an unknown project id returns **404**.
+  API returns **409**; an unknown project id returns **404**. Each protocol version's
+  `version_number` is allocated by the **store** inside the write transaction (not by the
+  caller), so two near-simultaneous persists on one project always get **distinct** sequential
+  numbers — a `UNIQUE(project_id, version_number)` index is the backstop.
+- **Deletion — `DELETE /api/project/{id}`.** Permanently removes the project row **and every
+  one of its `protocol_versions` rows** (both deleted explicitly for a deterministic result),
+  and evicts any live in-memory session bound to the project. Returns `{"deleted": id}`, or
+  **404** on an unknown id. Other projects and their versions are untouched. This is the only
+  way stored project data leaves the database.
 - **Migrations.** Two orthogonal layers, both fail-closed: a DDL layer keyed on
   `PRAGMA user_version` and an app-data layer keyed on each project's JSON `schema_version`.
   A database or payload stamped newer than the running code supports is rejected rather than
@@ -405,6 +423,22 @@ session, a project **survives an application restart** and can be reopened by UR
 The classic session endpoints still work standalone — `analyze`/`discover` transparently
 attach-or-create a project behind the scenes, and a stale project id never blocks a
 generation.
+
+### Data retention
+
+- **Raw PDF bytes are never persisted.** An uploaded PDF is read host-side to extract its
+  text and is then discarded — the file itself is not written to disk or the database.
+- **Saved projects.** When intake creates a durable project, the **extracted Methods text**
+  (or the pasted free text) is stored as part of the project's inputs, and every generated
+  **protocol version** is stored verbatim, in the local SQLite database at `GAPFILLER_DB_PATH`
+  (default `./projects.db`; tables `projects` and `protocol_versions`). This is what lets a
+  project reopen by URL and survive a restart.
+- **Non-project pastes are transient.** Text pasted into a standalone session that was never
+  attached to a project lives only in the in-memory session and is evicted when the session
+  expires (`GAPFILLER_SESSION_TTL`, default 3600 s ≈ 1 hour) — it is never written to the DB.
+- **Removal is explicit.** `DELETE /api/project/{id}` (the **Delete project** button)
+  permanently removes a project's stored Methods text and all of its protocol versions. There
+  is no other path by which stored project data is purged.
 
 ### Deploy (Docker)
 
@@ -545,6 +579,7 @@ Dockerfile        # single-worker container; /healthz healthcheck
 | `GET` | `/api/projects` | list recent projects (most-recently-updated first) |
 | `GET` | `/api/project/{id}` | restore a project (survives restart) — latest result, versions, lifecycle |
 | `POST` | `/api/project/{id}/workflow` | confirm/override the workflow (preserves all inputs) |
+| `DELETE` | `/api/project/{id}` | permanently delete a project + all its protocol versions (`404` on unknown id) |
 | `GET` | `/api/project/{id}/protocol.md` | restart-safe protocol download for the project's current version |
 | `GET` | `/api/project/{id}/materials.csv` | restart-safe materials CSV for the project's current version |
 

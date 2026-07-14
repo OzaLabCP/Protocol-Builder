@@ -309,10 +309,12 @@
   <div class="ph-actions noprint">
     <button type="button" class="secondary" id="ph-copy">Copy link</button>
     <button type="button" class="secondary" id="ph-new">New project</button>
+    <button type="button" class="secondary" id="ph-delete">Delete project</button>
   </div>
+  <p id="ph-retention" class="muted small noprint">Saved locally: this project's Methods text and protocol versions live in the app's SQLite database until you delete the project.</p>
   <div id="ph-stale" class="hidden noprint">
-    <span class="muted small">This project's editing session has expired.</span>
-    <button type="button" id="ph-resume">Resume editing</button>
+    <span class="pill ph-badge">Read-only</span>
+    <span class="muted small">This is a saved snapshot — the editing session has expired, so editing controls are disabled. Start a new project to make changes.</span>
   </div>
 </header>
 
@@ -377,7 +379,7 @@
       <input type="file" id="pdf" accept="application/pdf,.pdf" />
       <span id="pdf-label">Upload the paper as a PDF</span>
     </label>
-    <p class="muted small">If you choose a PDF, it's used instead of the pasted text — the tool finds the Methods section for you. Your file is sent to the model only to build this protocol and is held in memory for this session (about an hour), not stored permanently.</p>
+    <p class="muted small">If you choose a PDF, it's used instead of the pasted text — the tool finds the Methods section for you. The raw PDF bytes are never stored: they're used only to build this protocol. For a saved project, the extracted Methods text is stored in the app's local SQLite project database so the project can be reopened; you can remove it any time with <b>Delete project</b>. A one-off paste that isn't saved as a project stays in memory only (about an hour).</p>
     <section id="pdf-preview" class="panel hidden" role="region" aria-label="Extracted Methods preview">
       <p id="pdf-report" class="muted small" aria-live="polite"></p>
       <div id="pdf-image-only" class="notice hidden" role="status"></div>
@@ -1367,7 +1369,7 @@ function viewToggle() {
 
 /* ----- inline value editing ----- */
 function editButton(labelText) {
-  const b = el("button","btn-inline noprint","✎");
+  const b = el("button","btn-inline noprint op-control","✎");
   b.type = "button";
   b.setAttribute("aria-label","Edit "+labelText);
   b.title = "Edit this value";
@@ -2529,13 +2531,15 @@ function setStatus(msg, isErr) {
    success and failure paths, so controls can never get stuck disabled. Degrades
    gracefully: if nothing carries the class, the querySelectorAll is a harmless no-op. */
 let operationActive = false;
+let READONLY = false;   // sticky: a session-less restored project is a read-only snapshot
 function setControlsDisabled(on) {
+  const off = on || READONLY;   // READONLY keeps controls disabled through endOp()/stopProgress()
   document.querySelectorAll(".op-control").forEach((elm) => {
     const native = ("disabled" in elm);                    // <button>/<input> leave tab order natively
-    if (native) elm.disabled = on;
-    elm.setAttribute("aria-disabled", on ? "true" : "false");
-    elm.classList.toggle("op-locked", on);                 // pointer-events:none for non-button controls
-    if (on) {
+    if (native) elm.disabled = off;
+    elm.setAttribute("aria-disabled", off ? "true" : "false");
+    elm.classList.toggle("op-locked", off);                // pointer-events:none for non-button controls
+    if (off) {
       elm.setAttribute("title", "Another operation is in progress…");
       if (!native) { elm.setAttribute("data-op-tab", elm.getAttribute("tabindex") || ""); elm.setAttribute("tabindex", "-1"); }
     } else {
@@ -2607,6 +2611,15 @@ async function getJSON(url) {
   return data;
 }
 
+/* ---------- DELETE twin of getJSON (auth header + 401 bar) ---------- */
+async function delJSON(url) {
+  const res = await fetch(url, { method: "DELETE", headers: authHeaders({}) });
+  const data = await res.json().catch(() => ({}));
+  _handleAuth(res, data);
+  if (!res.ok) { const err = new Error(data.detail || `Request failed (${res.status})`); err.status = res.status; throw err; }
+  return data;
+}
+
 /* ---------- URL <-> project id (survives refresh) ---------- */
 function projectIdFromUrl() {
   try { return new URLSearchParams(location.search).get("project"); } catch (e) { return null; }
@@ -2621,6 +2634,7 @@ function clearProjectUrl() {
 /* ---------- home screen + recent list ---------- */
 function showHome() {
   PROJECT = null;
+  READONLY = false;
   hide("#project-header"); hide("#detect-panel");
   ["#input-panel", "#discovery-panel", "#questions-panel", "#assays-panel", "#result-panel"].forEach(hide);
   hide(".modebar");
@@ -2803,17 +2817,19 @@ $("#ph-copy").onclick = async () => {
   try { await navigator.clipboard.writeText(location.href); setToast("Link copied.", false); setTimeout(() => setToast("", false), 1500); }
   catch (e) { setToast("Copy failed — copy the URL from the address bar.", true); }
 };
-$("#ph-resume").onclick = async () => {
+$("#ph-delete").onclick = async () => {
   if (!PROJECT) return;
-  $("#ph-resume").disabled = true;
-  setToast("Resuming editing session…", false);
+  if (!confirm("Delete this project permanently? Its stored Methods text and all protocol versions will be removed. This cannot be undone.")) return;
+  const btn = $("#ph-delete"); btn.disabled = true;
+  setToast("Deleting project…", false);
   try {
-    const p = await postJSON("/api/project/" + encodeURIComponent(PROJECT.id) + "/resume", {});
-    setToast("", false);
-    adoptProject(p);
-    restoreProjectView(p);
-  } catch (e) { setToast(e.message, true); }
-  $("#ph-resume").disabled = false;
+    await delJSON("/api/project/" + encodeURIComponent(PROJECT.id));
+    clearProjectUrl(); showHome();
+    setToast("Project deleted.", false);
+  } catch (e) {
+    setToast(e.message, true);
+    btn.disabled = false;
+  }
 };
 
 /* ---------- routing / restore ---------- */
@@ -2844,24 +2860,17 @@ function restoreProjectView(p) {
     renderResult(p.latest_result);
     PROJECT.version = authVersion;
     renderProjectHeader(PROJECT);
-    if (p.session_live === false) disableMutations();
+    // A saved project reopened with no live session is a READ-ONLY snapshot: gate every
+    // session-mutating control. setControlsDisabled honors the sticky READONLY flag, so the
+    // lock survives later endOp()/stopProgress() calls.
+    READONLY = (p.session_live === false);
+    setControlsDisabled(false);
   } else {
     // Mid-flow question/assay state is not persisted in M1 — pre-protocol projects
     // re-enter through the normal input screen.
     routeIntoScreen(p);
   }
   const h = $("#project-header"); if (h) h.focus();
-}
-
-// Disable every model-driving button in the result panel (keep downloads/print) when the
-// editing session is gone and the user hasn't resumed yet.
-function disableMutations() {
-  const panel = $("#result-panel");
-  if (!panel) return;
-  panel.querySelectorAll("button").forEach((b) => {
-    if (/download|\.md|\.csv|print|save pdf/i.test(b.textContent || "")) return;
-    b.disabled = true;
-  });
 }
 
 // Local-only update after the run engine renders a protocol (§6.5). No network call —
@@ -2872,6 +2881,7 @@ function onProtocolRendered(r) {
   PROJECT.lifecycle_status = "protocol_ready";
   PROJECT.title = (r.protocol && r.protocol.title) || PROJECT.title;
   PROJECT.session_live = true;
+  READONLY = false; setControlsDisabled(false);   // a fresh render means the session is live again
   renderProjectHeader(PROJECT);
 }
 

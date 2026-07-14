@@ -39,7 +39,8 @@ import app.server as srv  # noqa: E402
 from app.agent import GapFillerAgent, Session  # noqa: E402
 from app.checks import finding_key  # noqa: E402
 from app.server import _validation_summary_from_report, app  # noqa: E402
-from app.projects import ValidationSummary  # noqa: E402
+from app.projects import ValidationSummary, make_project  # noqa: E402
+from app.store import SQLiteProjectStore  # noqa: E402
 from app.validation import assign_finding_keys, build_review_status  # noqa: E402
 
 client = TestClient(app)
@@ -463,6 +464,86 @@ def test_critique_apply_verifier_failure_is_not_reviewed_and_still_returns():
         assert body["protocol"]["title"] == "Fixed"
     finally:
         srv._SESSIONS.pop(sid, None); srv._agent = None
+
+
+def test_auto_review_verifies_and_persists_the_finalized_candidate():
+    """BLOCKER-2: the DEFAULT auto-review path finalizes the fixed candidate, makes it the
+    store/session-current protocol, THEN verifies THAT exact candidate, and persists it — in
+    that order. The verifier must see the FINALIZED artifact (validation_report / schema_version
+    / stamped material _id), and the persisted ProtocolVersion must embed precisely the verified,
+    finalized candidate (same fix_verification status, same protocol)."""
+    import os as _os
+    import tempfile as _tempfile
+
+    finding = _finding(sev="major")
+    review = {"verdict": "issues_found", "summary": "s", "findings": [finding]}
+    key = finding_key(finding)
+    verify = {"verdict": "sound", "summary": "landed",
+              "checks": [_check(key, "confirmed_fixed", "step 1 now says 20 uL")]}
+    fixed = {"title": "Fixed", "summary": "s", "estimated_duration": "1 h",
+             "materials": [{"name": "MgCl2", "amount": "10", "unit": "mM",
+                            "provenance": "default_verify"}],
+             "steps": [], "assumptions_log": []}
+    # Tape: correctness_review -> apply (emit_protocol) -> verify_fixes (emit_fix_verification).
+    _install_agent([_tool_msg("emit_correctness_review", review, "cr1"),
+                    _tool_msg("emit_protocol", fixed, "e2"),
+                    _tool_msg("emit_fix_verification", verify, "fv1")])
+
+    tmpdir = _tempfile.mkdtemp(prefix="rg_autorev_")
+    old_store = srv._STORE
+    store_db = SQLiteProjectStore(_os.path.join(tmpdir, "projects.db"))
+    srv._STORE = store_db
+    project = store_db.create_project(make_project(
+        title="P", workflow="reproduce", detected_workflow="reproduce"))
+
+    sid = "rg_autorev"
+    st = srv.Store(
+        session=Session(source_kind="paper", pending_tool_use_id="e1",
+                        messages=[{"role": "user", "content": "seed"}]),
+        created=_time.time(),
+        protocol={"title": "Old", "summary": "s", "estimated_duration": "1 h",
+                  "materials": [], "steps": [], "assumptions_log": []},
+        project_id=project.project_id)
+    st.session.protocol = st.protocol
+    srv._SESSIONS[sid] = st
+
+    # Spy: snapshot the store/session-current protocol at the INSTANT verification runs, to
+    # prove finalize (report + ids stamped) happened BEFORE the verifier judged the candidate.
+    seen: dict = {}
+    real_verify = srv._verify_fixes
+
+    def spy_verify(store, findings):
+        p = store.session.protocol
+        seen["finalized_at_verify"] = bool(
+            p and p.get("validation_report") and p.get("schema_version")
+            and any(m.get("_id") for m in (p.get("materials") or [])))
+        seen["title_at_verify"] = (p or {}).get("title")
+        return real_verify(store, findings)
+
+    srv._verify_fixes = spy_verify
+    try:
+        result = srv._auto_review(sid, st, {"session_id": sid, "phase": "complete",
+                                            "protocol": st.protocol})
+        # finalize-before-verify: the verifier saw the finalized, store-current candidate.
+        assert seen["finalized_at_verify"] is True
+        assert seen["title_at_verify"] == "Fixed"
+        # the verified outcome is the one that flows into the response.
+        assert result["fix_verification"]["status"] == "verified_clean"
+        assert result["review_status"] == "passed_with_findings_fixed"
+        vid = result["protocol_version_id"]
+        assert vid is not None
+        # the PERSISTED version is exactly the verified, finalized candidate.
+        ver = srv._STORE.get_protocol_version(vid)
+        assert (ver.result["fix_verification"]["status"]
+                == result["fix_verification"]["status"] == "verified_clean")
+        assert ver.result["protocol"]["title"] == "Fixed"
+        assert ver.result["protocol"].get("validation_report")
+    finally:
+        srv._SESSIONS.pop(sid, None)
+        srv._agent = None
+        srv._verify_fixes = real_verify
+        srv._STORE = old_store
+        store_db.close()
 
 
 def test_apply_fixes_two_step_verifies_and_retains_outcome():

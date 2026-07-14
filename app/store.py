@@ -33,7 +33,7 @@ from app.projects import (
 DB_PATH = os.environ.get("GAPFILLER_DB_PATH", "").strip() or "./projects.db"
 
 # DDL migration layer (§4.6.1)
-CURRENT_USER_VERSION: int = 1
+CURRENT_USER_VERSION: int = 2
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +139,10 @@ class ProjectStore(ABC):
     def list_protocol_versions(self, project_id: str) -> list[ProtocolVersion]:
         ...
 
+    @abstractmethod
+    def delete_project(self, project_id: str) -> None:
+        ...
+
 
 # ---------------------------------------------------------------------------
 # App-data (JSON payload) migration chain (§4.6.2)
@@ -210,7 +214,18 @@ def _migrate_to_v1(conn: sqlite3.Connection) -> None:
     conn.executescript(_DDL_V1)
 
 
-_MIGRATIONS = {1: _migrate_to_v1}
+_DDL_V2 = """
+DROP INDEX IF EXISTS idx_pv_project;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pv_project_version
+  ON protocol_versions(project_id, version_number);
+"""
+
+
+def _migrate_to_v2(conn: sqlite3.Connection) -> None:
+    conn.executescript(_DDL_V2)
+
+
+_MIGRATIONS = {1: _migrate_to_v1, 2: _migrate_to_v2}
 
 
 # ---------------------------------------------------------------------------
@@ -444,21 +459,37 @@ class SQLiteProjectStore(ProjectStore):
             conn = self._conn
             try:
                 conn.execute("BEGIN IMMEDIATE")
-                conn.execute(
-                    "INSERT OR IGNORE INTO protocol_versions (version_id, project_id, "
-                    "version_number, provenance, source_op, title, result, created_at) "
-                    "VALUES (?,?,?,?,?,?,?,?)",
-                    (
-                        version.version_id,
-                        version.project_id,
-                        version.version_number,
-                        version.provenance.value,
-                        version.source_op,
-                        version.title,
-                        json.dumps(version.result, separators=(",", ":")),
-                        version.created_at.isoformat(),
-                    ),
-                )
+                existing = conn.execute(
+                    "SELECT 1 FROM protocol_versions WHERE version_id=?",
+                    (version.version_id,),
+                ).fetchone()
+                if existing is None:
+                    # Store is the authority for version_number: allocate the next
+                    # sequential value for this project transactionally, so concurrent
+                    # writers can never collide or lose a write.
+                    row = conn.execute(
+                        "SELECT COALESCE(MAX(version_number), 0) + 1 AS n "
+                        "FROM protocol_versions WHERE project_id=?",
+                        (version.project_id,),
+                    ).fetchone()
+                    version.version_number = int(row["n"])
+                    # Plain INSERT (not OR IGNORE): a true (project_id, version_number)
+                    # duplicate must RAISE against the UNIQUE index.
+                    conn.execute(
+                        "INSERT INTO protocol_versions (version_id, project_id, "
+                        "version_number, provenance, source_op, title, result, created_at) "
+                        "VALUES (?,?,?,?,?,?,?,?)",
+                        (
+                            version.version_id,
+                            version.project_id,
+                            version.version_number,
+                            version.provenance.value,
+                            version.source_op,
+                            version.title,
+                            json.dumps(version.result, separators=(",", ":")),
+                            version.created_at.isoformat(),
+                        ),
+                    )
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -482,6 +513,29 @@ class SQLiteProjectStore(ProjectStore):
                 (project_id,),
             ).fetchall()
             return [self._row_to_version(r) for r in rows]
+
+    def delete_project(self, project_id: str) -> None:
+        with self._lock:
+            conn = self._conn
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                # Delete both rows explicitly (FK is ON DELETE CASCADE, but this
+                # keeps the 404 deterministic) — versions first, then the project.
+                conn.execute(
+                    "DELETE FROM protocol_versions WHERE project_id=?", (project_id,)
+                )
+                cur = conn.execute(
+                    "DELETE FROM projects WHERE project_id=?", (project_id,)
+                )
+                if cur.rowcount == 0:
+                    conn.rollback()
+                    raise ProjectNotFound(project_id)
+                conn.commit()
+            except ProjectNotFound:
+                raise
+            except Exception:
+                conn.rollback()
+                raise
 
     @staticmethod
     def _row_to_version(row: sqlite3.Row) -> ProtocolVersion:
