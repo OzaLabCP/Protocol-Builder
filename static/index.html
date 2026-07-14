@@ -471,6 +471,7 @@ let GLOG = [];
 let HYP = "";
 let PDF_PREVIEWED = false;      // Bucket-1: a server-side /api/extract_pdf preview is showing
 let PDF_FILENAME = "";          // echoed filename for the reviewed-text analyze path
+let INTAKE_FILE = null;         // PDF uploaded on the universal landing page, carried into the paper panel
 let _preflightPrevFocus = null; // element to restore focus to when the preflight dialog closes
 
 /* ---------- Bucket 2: value-lock state (persisted, keyed by stable id) ---------- */
@@ -2635,6 +2636,7 @@ function clearProjectUrl() {
 function showHome() {
   PROJECT = null;
   READONLY = false;
+  INTAKE_FILE = null;  // don't leak a cancelled upload into a later flow
   hide("#project-header"); hide("#detect-panel");
   ["#input-panel", "#discovery-panel", "#questions-panel", "#assays-panel", "#result-panel"].forEach(hide);
   hide(".modebar");
@@ -2741,6 +2743,7 @@ $("#universal-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const file = $("#u-file").files[0];
   const text = $("#u-input").value.trim();
+  INTAKE_FILE = file || null;   // carry the uploaded PDF into the chosen workflow's panel (below)
   if (!file && !text) { uStatus("Describe what you want to build, paste a protocol, give an identifier, or upload a PDF.", true); return; }
   $("#u-go").disabled = true;
   uStatus("Detecting the best workflow…");
@@ -2839,13 +2842,26 @@ function routeIntoScreen(p) {
   applyMode(p.entry_mode);
   const seed = (p.seed_input && p.seed_input.text) || "";
   if (p.entry_mode === "paper") {
-    if (seed) $("#methods").value = seed;
+    // Carry a PDF uploaded on the landing page into the paper panel so its content isn't
+    // lost on the way here (the intake only detected the workflow; analyze still needs the file).
+    if (INTAKE_FILE && $("#pdf")) {
+      try {
+        const dt = new DataTransfer();
+        dt.items.add(INTAKE_FILE);
+        $("#pdf").files = dt.files;
+        $("#pdf-label").textContent = INTAKE_FILE.name;
+        $("#pdf").closest(".filebtn").classList.toggle("has-file", true);
+        $("#clear-pdf").classList.remove("hidden");
+      } catch (_e) { /* DataTransfer unsupported — fall back to the text seed below */ }
+    }
+    if (seed && !INTAKE_FILE) $("#methods").value = seed;
     if (p.hypothesis) $("#hypothesis").value = p.hypothesis;
-    $("#methods").focus();
+    ($("#pdf").files.length ? $("#analyze") : $("#methods")).focus();
   } else {
     if (p.hypothesis || seed) $("#disc-hyp").value = p.hypothesis || seed;
     $("#disc-hyp").focus();
   }
+  INTAKE_FILE = null;  // consumed
 }
 
 function restoreProjectView(p) {
@@ -2888,9 +2904,13 @@ function onProtocolRendered(r) {
 // Optional convenience (§6.7): if the confirmed project already carries seed text in the
 // input, kick off the existing analyze/discover handler so the user isn't asked to paste twice.
 function maybeAutoRun(p) {
-  if (!p.seed_input || !p.seed_input.text) return;
-  if (p.entry_mode === "paper") { if ($("#methods").value.trim().length >= 40) $("#analyze").click(); }
-  else { if ($("#disc-hyp").value.trim().length >= 12) $("#discover").click(); }
+  const hasPdf = !!($("#pdf") && $("#pdf").files && $("#pdf").files.length);
+  if (!hasPdf && (!p.seed_input || !p.seed_input.text)) return;
+  if (p.entry_mode === "paper") {
+    if (hasPdf || $("#methods").value.trim().length >= 40) $("#analyze").click();
+  } else {
+    if ($("#disc-hyp").value.trim().length >= 12) $("#discover").click();
+  }
 }
 
 /* ---------- boot: restore ?project= on load ---------- */
